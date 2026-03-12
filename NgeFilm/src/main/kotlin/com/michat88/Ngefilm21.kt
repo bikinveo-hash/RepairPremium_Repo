@@ -11,7 +11,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class Ngefilm21 : MainAPI() {
-    override var mainUrl = "https://new31.ngefilm.site"
+    // UPDATE DOMAIN KE NEW32
+    override var mainUrl = "https://new32.ngefilm.site"
     override var name = "Ngefilm21"
     override val hasMainPage = true
     override var lang = "id"
@@ -139,20 +140,20 @@ class Ngefilm21 : MainAPI() {
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
-                        // println("NGEFILM CHECK: $fixedUrl")
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
                         // [SERVER 1] RPM LIVE
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN
-                        val vibuxerRegex = Regex("""(?i)(?:src|href)\s*=\s*["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net))/e/[a-zA-Z0-9]+)["']""")
+                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN / CYBERVYNX
+                        val vibuxerRegex = Regex("""(?i)(?:src|href)\s*=\s*["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net)|cybervynx\.(?:com|net|to))/e/[a-zA-Z0-9]+)["']""")
                         vibuxerRegex.findAll(pageContent).forEach { 
                             val rawUrl = it.groupValues[1]
                             val targetUrl = rawUrl.replace("hglink.to", "masukestin.com")
                                                   .replace("hglink.net", "masukestin.com")
                                                   .replace("vibuxer.com", "masukestin.com")
+                                                  .replace("cybervynx.com", "masukestin.com")
                             extractMasukestin(targetUrl, callback) 
                         }
 
@@ -161,17 +162,19 @@ class Ngefilm21 : MainAPI() {
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [SERVER 2 & 5] GENERIC & XSHOTCOK FIX
-                        // Regex diperbaiki: Case Insensitive (?i) agar menangkap SRC= (huruf besar)
-                        Regex("""(?i)src=["'](https://[^"']*(?:short\.icu|mixdrop|xshotcok|hxfile)[^"']*)["']""").findAll(pageContent).forEach { 
+                        // [SERVER 2 & 5 & SERVER BARU] GENERIC, XSHOTCOK, ABYSS
+                        Regex("""(?i)src=["'](https://[^"']*(?:short\.icu|mixdrop|xshotcok|hxfile|newer\.stream|smoothpre)[^"']*)["']""").findAll(pageContent).forEach { 
                             val url = it.groupValues[1]
                             
                             if (url.contains("xshotcok") || url.contains("hxfile")) {
-                                // Panggil fungsi khusus Xshotcok yang baru
                                 extractXshotcok(url, callback)
                             } else if (url.contains("short.icu")) {
                                 val finalUrl = app.get(url, headers = mapOf("Referer" to fixedUrl)).url
-                                if (finalUrl.contains("abyss")) loadExtractor(finalUrl, subtitleCallback, callback)
+                                if (finalUrl.contains("abyss")) {
+                                    // BONGKAR RAHASIA ABYSS: Ubah domain agar dikenali Extractor Cloudstream!
+                                    val abyssUrl = finalUrl.replace("abysscdn.com", "abyss.to")
+                                    loadExtractor(abyssUrl, subtitleCallback, callback)
+                                }
                             } else {
                                 loadExtractor(url, subtitleCallback, callback)
                             }
@@ -183,32 +186,24 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- XSHOTCOK / SERVER 5 BYPASS (NEW) ---
+    // --- XSHOTCOK / SERVER 5 BYPASS ---
     private suspend fun extractXshotcok(url: String, callback: (ExtractorLink) -> Unit) {
         try {
-            // 1. Request dengan Header Browser agar tidak kena 'Embeds disabled'
             val response = app.get(url, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
-                "Referer" to mainUrl // Kunci: Referer dari website utama
+                "Referer" to mainUrl 
             )).text
 
-            // 2. Cari Kode Packed JS
             val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
             val packedCode = packedRegex.find(response)?.value
 
             if (packedCode != null) {
-                // 3. Unpack JS
                 val unpackedJs = Unpacker.unpack(packedCode)
-                
-                // 4. Cari Link M3U8 di dalam hasil unpack
-                // Regex ini mencari URL .m3u8 yang diapit kutip (seperti yang kita temukan di Python)
                 val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
                 val match = m3u8Regex.find(unpackedJs)
 
                 match?.groupValues?.get(1)?.let { rawLink ->
-                    // Bersihkan escaping slash
                     val cleanLink = rawLink.replace("\\/", "/")
-
                     callback.invoke(
                         newExtractorLink(
                             "Xshotcok",
@@ -216,7 +211,6 @@ class Ngefilm21 : MainAPI() {
                             cleanLink,
                             ExtractorLinkType.M3U8
                         ) {
-                            // Referer saat memutar video harus dari domain embed
                             this.headers = mapOf(
                                 "User-Agent" to UA_BROWSER,
                                 "Referer" to url,
@@ -237,7 +231,7 @@ class Ngefilm21 : MainAPI() {
             val domain = "masukestin.com" 
             val response = app.get(url, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
-                "Referer" to "https://new31.ngefilm.site/", 
+                "Referer" to mainUrl, 
                 "Origin" to "https://hglink.to",
                 "Upgrade-Insecure-Requests" to "1"
             ))
@@ -328,6 +322,7 @@ class Ngefilm21 : MainAPI() {
                 val radix = parts[parts.size - 3].toInt()
                 val payloadRaw = coreData.substring(0, coreData.lastIndexOf("," + radix))
                 val payload = payloadRaw.trim('\'', '"')
+               
                 var decoded = payload
                 fun encodeBase(n: Int, radix: Int): String {
                     val chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
