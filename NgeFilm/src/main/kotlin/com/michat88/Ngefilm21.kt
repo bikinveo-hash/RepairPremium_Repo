@@ -109,15 +109,21 @@ class Ngefilm21 : MainAPI() {
                 }
             }
             return newTvSeriesLoadResponse(title, url, type, episodes) { 
-                this.posterUrl = poster; this.plot = plotText; this.year = yearText
-                this.score = Score.from10(ratingText); this.tags = tagsList
+                this.posterUrl = poster
+                this.plot = plotText
+                this.year = yearText
+                this.score = Score.from10(ratingText)
+                this.tags = tagsList
                 this.actors = actorsList.map { ActorData(Actor(it)) }
                 if (!trailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(trailerUrl, null, false))
             }
         } else {
             return newMovieLoadResponse(title, url, type, url) { 
-                this.posterUrl = poster; this.plot = plotText; this.year = yearText
-                this.score = Score.from10(ratingText); this.tags = tagsList
+                this.posterUrl = poster
+                this.plot = plotText
+                this.year = yearText
+                this.score = Score.from10(ratingText)
+                this.tags = tagsList
                 this.actors = actorsList.map { ActorData(Actor(it)) }
                 if (!trailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(trailerUrl, null, false))
             }
@@ -135,51 +141,58 @@ class Ngefilm21 : MainAPI() {
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
         coroutineScope {
-            playerLinks.distinct().map { playerUrl ->
+            playerLinks.distinct().mapIndexed { index, playerUrl ->
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
+                        var handled = false
 
                         // [1] UNIVERSAL RPM LIVE & P2PPLAY (SERVER 1 & 5)
-                        // Regex diperluas untuk menangkap format /v/ID atau ?id=ID
                         Regex("""(?i)src=["'](https?://([^/]+(?:rpmlive\.online|p2pplay\.pro)).*?(?:id=|/v/|/e/|#)([a-zA-Z0-9_-]+)[^"']*)["']""").findAll(pageContent).forEach {
+                            handled = true
                             extractRpm(it.groupValues[3], it.groupValues[2], callback)
                         }
 
-                        // [2] UNIVERSAL XVIDEOSHARING (SERVER 3 & 4)
+                        // [2] UNIVERSAL XVIDEOSHARING / CLONE IMAXSTREAMS (SERVER 3 & 4)
                         Regex("""(?i)(?:src|href)\s*=\s*["'](https://[^"']*/(?:e|embed)/[a-zA-Z0-9_-]+)["']""").findAll(pageContent).forEach {
                             val targetUrl = it.groupValues[1]
-                            if (targetUrl.contains(Regex("""(?i)hglink|vibuxer|masukestin|cybervynx|niramirus|smoothpre"""))) {
-                                // Potong kompas! Bypass JS Redirect dengan merakit URL mentah secara paksa
+                            // Ditambahkan deteksi "hgcloud" dan domain dinamis
+                            if (targetUrl.contains(Regex("""(?i)hglink|vibuxer|masukestin|cybervynx|niramirus|smoothpre|hgcloud"""))) {
+                                handled = true
                                 val isEmbed = targetUrl.contains("/embed/")
-                                val videoId = targetUrl.split("/e/", "/embed/").last().substringBefore("?").substringBefore("\"").substringBefore("'").trim('/')
-                                val domain = if (isEmbed) "smoothpre.com" else "niramirus.com"
+                                val videoId = targetUrl.split("/e/", "/embed/").last().substringBefore("?").trim('/')
+                                val domain = java.net.URI(targetUrl).host
                                 val directUrl = "https://$domain/${if (isEmbed) "embed" else "e"}/$videoId"
                                 
-                                extractMasukestin(directUrl, domain, callback)
+                                extractXVideoSharing(directUrl, domain, videoId, callback)
                             }
                         }
 
                         // [3] KRAKENFILES
                         Regex("""(?i)src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { 
+                            handled = true
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [4] XSHOTCOK / HXFILE
-                        Regex("""(?i)src=["'](https://[^"']*(?:xshotcok|hxfile)[^"']*)["']""").findAll(pageContent).forEach { 
-                            extractXshotcok(it.groupValues[1], callback)
-                        }
-
-                        // [5] GENERIC & ABYSS CDN BYPASS (SERVER 2)
-                        Regex("""(?i)src=["'](https://[^"']*(?:short\.icu|mixdrop|newer\.stream)[^"']*)["']""").findAll(pageContent).forEach { 
+                        // [4] XSHOTCOK / HXFILE / SHORT.ICU
+                        Regex("""(?i)src=["'](https://[^"']*(?:xshotcok|hxfile|short\.icu|mixdrop|newer\.stream)[^"']*)["']""").findAll(pageContent).forEach { 
+                            handled = true
                             val url = it.groupValues[1]
                             if (url.contains("short.icu")) {
-                                // Bypass JS Redirect short.icu: Ambil ID-nya langsung dan lempar ke Abyss
                                 val id = url.substringAfterLast("/").substringBefore("?")
                                 loadExtractor("https://abyss.to/?v=$id", subtitleCallback, callback)
                             } else {
+                                // Ekstraktor Xshotcok diserahkan ke sistem universal Cloudstream
                                 loadExtractor(url, subtitleCallback, callback)
+                            }
+                        }
+
+                        // [5] FALLBACK JIKA TIDAK ADA YANG COCOK
+                        if (!handled) {
+                            val iframeMatch = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(pageContent)
+                            if (iframeMatch != null) {
+                                loadExtractor(iframeMatch.groupValues[1], subtitleCallback, callback)
                             }
                         }
                     } catch (e: Exception) { e.printStackTrace() }
@@ -189,8 +202,8 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- UNIVERSAL XVIDEOSHARING LOGIC (Masukestin, Smoothpre, Niramirus) ---
-    private suspend fun extractMasukestin(url: String, domain: String, callback: (ExtractorLink) -> Unit) {
+    // --- UNIVERSAL XVIDEOSHARING LOGIC (API AJAX BYPASS) ---
+    private suspend fun extractXVideoSharing(url: String, domain: String, videoId: String, callback: (ExtractorLink) -> Unit) {
         try {
             val response = app.get(url, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
@@ -198,77 +211,46 @@ class Ngefilm21 : MainAPI() {
                 "Origin" to "https://$domain",
                 "Upgrade-Insecure-Requests" to "1"
             ))
-            
             val doc = response.text
             val cookies = response.cookies
-            val videoId = url.split("/e/", "/embed/").last().substringBefore("?").substringBefore("\"").substringBefore("'")
             
-            val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
-            val packedCode = packedRegex.find(doc)?.value
+            val unpackedJs = multiUnpack(doc)
+            var linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
 
-            if (packedCode != null) {
-                val unpackedJs = Unpacker.unpack(packedCode)
-                var linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
-
-                if (linkM3u8 == null) {
-                    val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
-                    val hash = hashMatch?.groupValues?.get(1)
-
-                    if (hash != null) {
-                        val apiUrl = "https://$domain/dl?op=view&file_code=$videoId&hash=$hash&embed=1&referer=$domain"
-                        val apiRes = app.get(apiUrl, headers = mapOf(
-                            "User-Agent" to UA_BROWSER,
-                            "Referer" to url,
-                            "X-Requested-With" to "XMLHttpRequest"
-                        ), cookies = cookies).text 
-                        
-                        linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
-                    }
-                }
-
-                if (linkM3u8 != null) {
-                    linkM3u8 = linkM3u8!!.replace("\\/", "/")
-                    if (linkM3u8!!.startsWith("/")) {
-                        linkM3u8 = "https://$domain$linkM3u8"
-                    }
-                    val serverName = domain.split(".").first().replaceFirstChar { it.uppercase() }
-                    callback.invoke(
-                        newExtractorLink(
-                            serverName,
-                            "$serverName (Server)",
-                            linkM3u8!!,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.headers = mapOf(
-                                "User-Agent" to UA_BROWSER,
-                                "Referer" to "https://$domain/",
-                                "Origin" to "https://$domain"
-                            )
-                        }
-                    )
-                }
-            } else {
-                var directM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
-                if (directM3u8 != null) {
-                     directM3u8 = directM3u8!!.replace("\\/", "/")
-                     if (directM3u8!!.startsWith("/")) directM3u8 = "https://$domain$directM3u8"
-                     val serverName = domain.split(".").first().replaceFirstChar { it.uppercase() }
-                     
-                     callback.invoke(
-                        newExtractorLink(
-                            serverName,
-                            "$serverName (Direct)",
-                            directM3u8!!,
-                            ExtractorLinkType.M3U8
-                        ) {
-                            this.headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to "https://$domain/")
-                        }
-                    )
+            if (linkM3u8 == null) {
+                val hashStr = Regex("""(?:hash|'hash'|"hash"|name="hash")\s*[:=]\s*["']([^"']+)["']""").find(unpackedJs)?.groupValues?.get(1)
+                if (hashStr != null) {
+                    val apiUrl = "https://$domain/dl?op=view&file_code=$videoId&hash=$hashStr&embed=1&referer=$domain"
+                    val apiRes = app.get(apiUrl, headers = mapOf(
+                        "User-Agent" to UA_BROWSER,
+                        "Referer" to url,
+                        "X-Requested-With" to "XMLHttpRequest"
+                    ), cookies = cookies).text 
+                    linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
                 }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace()
-        }
+
+            if (linkM3u8 != null) {
+                var m3u8Asli = linkM3u8.replace("\\/", "/")
+                if (m3u8Asli.startsWith("/")) m3u8Asli = "https://$domain$m3u8Asli"
+                
+                val serverName = domain.split(".").first().replaceFirstChar { it.uppercase() }
+                callback.invoke(
+                    newExtractorLink(
+                        serverName,
+                        "$serverName (Server)",
+                        m3u8Asli,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.headers = mapOf(
+                            "User-Agent" to UA_BROWSER,
+                            "Referer" to "https://$domain/",
+                            "Origin" to "https://$domain"
+                        )
+                    }
+                )
+            }
+        } catch (e: Exception) {}
     }
 
     // --- UNIVERSAL RPM & P2PPLAY (AES DECRYPTION) ---
@@ -279,7 +261,7 @@ class Ngefilm21 : MainAPI() {
             val videoApi = "https://$host/api/v1/video?id=$id&w=1920&h=1080&r=$refDomain"
             
             val encryptedRes = app.get(videoApi, headers = h).text
-            val jsonStr = if (encryptedRes.trim().startsWith("{")) encryptedRes else decryptAES(encryptedRes)
+            val jsonStr = decryptAES(encryptedRes)
             
             val serverName = if (host.contains("p2pplay")) "P2PPlay" else "RPM Live"
             
@@ -290,30 +272,6 @@ class Ngefilm21 : MainAPI() {
                 callback.invoke(newExtractorLink("$serverName (Backup)", "$serverName (Backup)", "https://$host" + link.replace("\\/", "/"), ExtractorLinkType.M3U8) { this.referer = "https://$host/" })
             }
         } catch (e: Exception) {}
-    }
-
-    // --- XSHOTCOK / SERVER 5 BYPASS ---
-    private suspend fun extractXshotcok(url: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            val response = app.get(url, headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to mainUrl)).text
-            val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
-            val packedCode = packedRegex.find(response)?.value
-
-            if (packedCode != null) {
-                val unpackedJs = Unpacker.unpack(packedCode)
-                val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-                val match = m3u8Regex.find(unpackedJs)
-
-                match?.groupValues?.get(1)?.let { rawLink ->
-                    val cleanLink = rawLink.replace("\\/", "/")
-                    callback.invoke(
-                        newExtractorLink("Xshotcok", "Xshotcok (Server)", cleanLink, ExtractorLinkType.M3U8) {
-                            this.headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to url, "Origin" to "https://xshotcok.com")
-                        }
-                    )
-                }
-            }
-        } catch (e: Exception) { e.printStackTrace() }
     }
 
     // --- KRAKENFILES ---
@@ -328,60 +286,52 @@ class Ngefilm21 : MainAPI() {
     }
 
     // --- AES DECRYPTION ENGINE ---
-    private fun decryptAES(text: String): String {
-        if (text.isEmpty()) return ""
+    private fun decryptAES(hexText: String): String {
+        if (hexText.isEmpty() || hexText.startsWith("{")) return hexText
         return try {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(hexToBytes(RPM_KEY), "AES"), IvParameterSpec(hexToBytes(RPM_IV)))
-            String(cipher.doFinal(hexToBytes(text.replace(Regex("[^0-9a-fA-F]"), ""))))
+            val keyBytes = hexToBytes(RPM_KEY)
+            val ivBytes = hexToBytes(RPM_IV)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
+            
+            val decodedHex = hexToBytes(hexText.replace(Regex("[^0-9a-fA-F]"), ""))
+            String(cipher.doFinal(decodedHex), Charsets.UTF_8)
         } catch (e: Exception) { "" }
     }
     
     private fun hexToBytes(s: String): ByteArray {
         val len = s.length
         val data = ByteArray(len / 2)
-        for (i in 0 until len step 2) data[i / 2] = ((Character.digit(s[i], 16) shl 4) + Character.digit(s[i + 1], 16)).toByte()
+        for (i in 0 until len step 2) {
+            data[i / 2] = ((Character.digit(s[i], 16) shl 4) + Character.digit(s[i + 1], 16)).toByte()
+        }
         return data
     }
 
-    // --- JAVASCRIPT UNPACKER ENGINE ---
-    object Unpacker {
-        fun unpack(packedJS: String): String {
-            try {
-                val startIdx = packedJS.indexOf("}('") 
-                if (startIdx == -1) return packedJS
-                val argsString = packedJS.substring(startIdx + 3)
-                val splitIdx = argsString.lastIndexOf("'.split('|')")
-                if (splitIdx == -1) return packedJS
-                val coreData = argsString.substring(0, splitIdx)
-                val parts = coreData.split(",")
-                if (parts.size < 4) return packedJS 
-                val dictRaw = parts.last().trim('\'', '"')
-                val dictionary = dictRaw.split("|")
-                val count = parts[parts.size - 2].toInt()
-                val radix = parts[parts.size - 3].toInt()
-                val payloadRaw = coreData.substring(0, coreData.lastIndexOf("," + radix))
-                val payload = payloadRaw.trim('\'', '"')
-               
-                var decoded = payload
-                fun encodeBase(n: Int, radix: Int): String {
+    // --- MULTI JAVASCRIPT UNPACKER ---
+    private fun multiUnpack(html: String): String {
+        var unpacked = html
+        try {
+            val packRegex = Regex("""\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']+)'\.split\('\|'\)""", RegexOption.DOT_MATCHES_ALL)
+            packRegex.findAll(html).forEach { match ->
+                var p = match.groupValues[1]
+                val a = match.groupValues[2].toInt()
+                val c = match.groupValues[3].toInt()
+                val k = match.groupValues[4].split("|")
+                fun toBase(num: Int, base: Int): String {
                     val chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                    var num = n
-                    if (num == 0) return "0"
-                    val sb = StringBuilder()
-                    while (num > 0) {
-                        sb.append(chars[num % radix])
-                        num /= radix
+                    var res = ""; var n = num; if (n == 0) return "0"
+                    while (n > 0) { res = chars[n % base] + res; n /= base }
+                    return res
+                }
+                for (i in c - 1 downTo 0) {
+                    if (k.getOrNull(i)?.isNotEmpty() == true) {
+                        p = p.replace(Regex("""\b${toBase(i, a)}\b"""), k[i])
                     }
-                    return sb.reverse().toString()
                 }
-                for (i in count - 1 downTo 0) {
-                    val token = encodeBase(i, radix)
-                    val word = if (i < dictionary.size && dictionary[i].isNotEmpty()) dictionary[i] else token
-                    decoded = decoded.replace(Regex("""\b$token\b"""), word)
-                }
-                return decoded.replace("\\", "")
-            } catch (e: Exception) { return packedJS }
-        }
+                unpacked += "\n" + p
+            }
+        } catch (e: Exception) {}
+        return unpacked
     }
 }
