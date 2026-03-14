@@ -117,7 +117,8 @@ class HomeCookingRocks : MainAPI() {
 
         // Proses Paralel Asinkronus Kecepatan Tinggi!
         coroutineScope {
-            sortedUrls.forEach { serverUrl ->
+            // 👇 PERBAIKAN: Gunakan forEachIndexed untuk mendapatkan nomor urut server
+            sortedUrls.forEachIndexed { index, serverUrl ->
                 launch(Dispatchers.IO) {
                     try {
                         // 1. Ambil HTML (Sertakan referer agar aman dari block server)
@@ -131,15 +132,24 @@ class HomeCookingRocks : MainAPI() {
                         val allIframes = iframeRegex.findAll(serverHtml).map { it.groupValues[1] }.toList()
 
                         // 3. Filter pintar: Prioritaskan iframe yang mengandung kata kunci server kita
-                        val iframeSrc = allIframes.firstOrNull { src ->
+                        var iframeSrc = allIframes.firstOrNull { src ->
                             src.contains("pyrox", ignoreCase = true) || 
                             src.contains("4meplayer", ignoreCase = true) || 
                             src.contains("imaxstreams", ignoreCase = true)
                         } ?: allIframes.firstOrNull()
 
                         if (iframeSrc != null) {
+                            
+                            // 👇 PERBAIKAN: Pastikan link iframe menggunakan protokol lengkap (https:)
+                            if (iframeSrc.startsWith("//")) {
+                                iframeSrc = "https:$iframeSrc"
+                            }
+                            
+                            // Penamaan dinamis untuk ExtractorLink
+                            val serverName = "Server ${index + 1}"
+
                             // ==========================================
-                            // SERVER 1: Pyrox
+                            // SERVER: Pyrox
                             // ==========================================
                             if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
                                 val iframeId = iframeSrc.substringAfterLast("/")
@@ -159,7 +169,7 @@ class HomeCookingRocks : MainAPI() {
                                     callback.invoke(
                                         newExtractorLink(
                                             source = name,
-                                            name = "Server 1 (Pyrox)",
+                                            name = "$serverName (Pyrox)",
                                             url = m3u8Url,
                                             type = ExtractorLinkType.M3U8
                                         ) {
@@ -174,81 +184,82 @@ class HomeCookingRocks : MainAPI() {
                                 }
                             } 
                             // ==========================================
-                            // SERVER 2: 4MePlayer (Bypass AES)
+                            // SERVER: 4MePlayer (Bypass AES Terupdate)
                             // ==========================================
                             else if (iframeSrc.contains("4meplayer")) {
                                 val videoId = iframeSrc.substringAfterLast("#")
                                 if (videoId.isNotEmpty() && videoId != iframeSrc) {
                                     val host = java.net.URI(iframeSrc).host
                                     
-                                    val endpoints = listOf(
-                                        "https://$host/api/v1/video?id=$videoId",
-                                        "https://$host/api/v1/info?id=$videoId"
-                                    )
-                                    
-                                    var foundM3u8 = false
-                                    for (apiUrl in endpoints) {
-                                        if (foundM3u8) break 
+                                    // 👇 PERBAIKAN: Parameter API baru dengan referer dan resolusi
+                                    val apiUrl = "https://$host/api/v1/video?id=$videoId&w=360&h=800&r=$serverUrl"
                                         
-                                        try {
-                                            val hexResponse = app.get(apiUrl, referer = iframeSrc).text.trim()
+                                    try {
+                                        // 👇 PERBAIKAN: Menyisipkan User-Agent Android
+                                        val hexResponse = app.get(
+                                            apiUrl, 
+                                            referer = iframeSrc,
+                                            headers = mapOf(
+                                                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                                            )
+                                        ).text.trim()
+                                        
+                                        if (hexResponse.isNotEmpty() && hexResponse.matches(Regex("^[0-9a-fA-F]+$"))) {
+                                            val secretKey = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
+                                            val ivBytes = ByteArray(16)
+                                            for (i in 0..8) ivBytes[i] = i.toByte() 
+                                            for (i in 9..15) ivBytes[i] = 32.toByte() 
                                             
-                                            if (hexResponse.isNotEmpty() && hexResponse.matches(Regex("^[0-9a-fA-F]+$"))) {
-                                                val secretKey = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
-                                                val ivBytes = ByteArray(16)
-                                                for (i in 0..8) ivBytes[i] = i.toByte() 
-                                                for (i in 9..15) ivBytes[i] = 32.toByte() 
-                                                
-                                                val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-                                                val secretKeySpec = SecretKeySpec(secretKey, "AES")
-                                                val ivParameterSpec = IvParameterSpec(ivBytes)
-                                                
-                                                cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
-                                                
-                                                val decodedHex = hexResponse.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                                                val decryptedBytes = cipher.doFinal(decodedHex)
-                                                val decryptedText = String(decryptedBytes, Charsets.UTF_8)
-                                                
-                                                val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
-                                                val match = m3u8Regex.find(decryptedText)
-                                                
-                                                if (match != null) {
-                                                    var m3u8Url = match.groupValues[1].replace("\\/", "/")
-                                                    if (m3u8Url.startsWith("/")) {
-                                                        m3u8Url = "https://$host$m3u8Url"
-                                                    }
-                                                    
-                                                    callback.invoke(
-                                                        newExtractorLink(
-                                                            source = name,
-                                                            name = "Server 2 (4MePlayer)",
-                                                            url = m3u8Url,
-                                                            type = ExtractorLinkType.M3U8
-                                                        ) {
-                                                            this.referer = iframeSrc
-                                                            this.quality = Qualities.Unknown.value
-                                                        }
-                                                    )
-                                                    foundM3u8 = true
+                                            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                                            val secretKeySpec = SecretKeySpec(secretKey, "AES")
+                                            val ivParameterSpec = IvParameterSpec(ivBytes)
+                                            
+                                            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
+                                            
+                                            val decodedHex = hexResponse.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                            val decryptedBytes = cipher.doFinal(decodedHex)
+                                            val decryptedText = String(decryptedBytes, Charsets.UTF_8)
+                                            
+                                            // 👇 PERBAIKAN: Regex baru agar dapat menagkap single & double quote
+                                            val m3u8Regex = """["']([^"']+\.m3u8[^"']*)["']""".toRegex()
+                                            val match = m3u8Regex.find(decryptedText)
+                                            
+                                            if (match != null) {
+                                                var m3u8Url = match.groupValues[1].replace("\\/", "/")
+                                                if (m3u8Url.startsWith("/")) {
+                                                    m3u8Url = "https://$host$m3u8Url"
                                                 }
+                                                
+                                                callback.invoke(
+                                                    newExtractorLink(
+                                                        source = name,
+                                                        name = "$serverName (4MePlayer)",
+                                                        url = m3u8Url,
+                                                        type = ExtractorLinkType.M3U8
+                                                    ) {
+                                                        this.referer = iframeSrc
+                                                        this.quality = Qualities.Unknown.value
+                                                    }
+                                                )
                                             }
-                                        } catch (e: Exception) {
-                                            // Abaikan error pada endpoint ini
                                         }
+                                    } catch (e: Exception) {
+                                        // Abaikan error pada endpoint ini
                                     }
                                 }
                             }
                             // ==========================================
-                            // SERVER 3/4: ImaxStreams (Bypass Packed JS)
+                            // SERVER: ImaxStreams (Bypass Packed JS Terupdate)
                             // ==========================================
-                            else if (iframeSrc.contains("imaxstreams")) {
+                            else if (iframeSrc.contains("imaxstreams", ignoreCase = true)) {
                                 // Tambahkan Referer agar tidak di-block oleh server
                                 val iframeHtml = app.get(iframeSrc, referer = serverUrl).text
                                 
                                 // Bongkar JS Packer (eval(function...))
                                 val unpackedText = getAndUnpack(iframeHtml)
                                 
-                                val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
+                                // 👇 PERBAIKAN: Regex baru yang mewajibkan struktur URL lengkap (http/https)
+                                val m3u8Regex = """["'](https?://[^"']+\.m3u8[^"']*)["']""".toRegex()
                                 val match = m3u8Regex.find(unpackedText) ?: m3u8Regex.find(iframeHtml)
                                 
                                 if (match != null) {
@@ -257,7 +268,7 @@ class HomeCookingRocks : MainAPI() {
                                     callback.invoke(
                                         newExtractorLink(
                                             source = name,
-                                            name = "Server 3/4 (ImaxStreams)",
+                                            name = "$serverName (ImaxStreams)",
                                             url = m3u8Url,
                                             type = ExtractorLinkType.M3U8
                                         ) {
