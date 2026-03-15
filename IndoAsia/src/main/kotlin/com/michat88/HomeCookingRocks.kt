@@ -12,7 +12,7 @@ import javax.crypto.spec.SecretKeySpec
 class HomeCookingRocks : MainAPI() {
     
     override var name = "Home Cooking Rocks"
-    override var mainUrl = "https://homecookingrocks.com"
+    override var mainUrl = "https://stspirit.com"
     override var supportedTypes = setOf(TvType.NSFW) 
     override var lang = "id"
     override val hasMainPage = true
