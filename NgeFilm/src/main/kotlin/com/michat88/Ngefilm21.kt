@@ -3,9 +3,6 @@ package com.michat88
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -17,10 +14,8 @@ class Ngefilm21 : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // --- CONFIG & SECRET KEYS ---
+    // --- CONFIG ---
     private val UA_BROWSER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-    private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
-    private val RPM_IV = "313233343536373839306f6975797472"
 
     private fun Element.getImageAttr(): String? {
         var url = this.attr("data-src").ifEmpty { this.attr("src") }
@@ -140,33 +135,31 @@ class Ngefilm21 : MainAPI() {
         val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
-        // EKSEKUSI BERURUTAN (Sequential: Tanpa coroutineScope & async)
+        // HANYA FOKUS KE SERVER HANERIX / VIBUXER / HGCLOUD
         for (playerUrl in playerLinks.distinct()) {
             try {
                 val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
                 val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
                 var handled = false
 
-                // [1] PRIORITAS UTAMA: DETEKSI LANGSUNG IFRAME HANERIX / HGCLOUD / VIBUXER
-                val hanerixMatch = Regex("""(?i)<iframe[^>]+src=["'](https://[^"']+(?:hglink|vibuxer|masukestin|cybervynx|niramirus|smoothpre|hgcloud|hanerix)[^"']*)["']""").find(pageContent)?.groupValues?.get(1)
+                // 1. Cek di dalam Iframe
+                val hanerixIframe = Regex("""(?i)<iframe[^>]+src=["'](https://[^"']+(?:hglink|vibuxer|masukestin|cybervynx|niramirus|smoothpre|hgcloud|hanerix)[^"']*)["']""").find(pageContent)?.groupValues?.get(1)
                 
-                if (hanerixMatch != null) {
+                if (hanerixIframe != null) {
                     handled = true
-                    val targetUrl = hanerixMatch
-                    val isEmbed = targetUrl.contains("/embed/")
-                    val videoId = targetUrl.split("/e/", "/embed/").last().substringBefore("?").trim('/')
-                    val domain = java.net.URI(targetUrl).host
+                    val isEmbed = hanerixIframe.contains("/embed/")
+                    val videoId = hanerixIframe.split("/e/", "/embed/").last().substringBefore("?").trim('/')
+                    val domain = java.net.URI(hanerixIframe).host
                     val directUrl = "https://$domain/${if (isEmbed) "embed" else "e"}/$videoId"
                     
                     extractXVideoSharing(directUrl, domain, videoId, callback)
                 }
 
-                // [2] PENCARIAN REGEX XVIDEOSHARING LAINNYA JIKA BELUM KETEMU
+                // 2. Cek di src/href biasa (Jika tidak pakai Iframe)
                 if (!handled) {
                     Regex("""(?i)(?:src|href)\s*=\s*["'](https://[^"']*/(?:e|embed)/[a-zA-Z0-9_-]+)["']""").findAll(pageContent).forEach {
                         val targetUrl = it.groupValues[1]
                         if (targetUrl.contains(Regex("""(?i)hglink|vibuxer|masukestin|cybervynx|niramirus|smoothpre|hgcloud|hanerix"""))) {
-                            handled = true
                             val isEmbed = targetUrl.contains("/embed/")
                             val videoId = targetUrl.split("/e/", "/embed/").last().substringBefore("?").trim('/')
                             val domain = java.net.URI(targetUrl).host
@@ -176,44 +169,6 @@ class Ngefilm21 : MainAPI() {
                         }
                     }
                 }
-
-                // [3] UNIVERSAL RPM LIVE & P2PPLAY
-                if (!handled) {
-                    Regex("""(?i)src=["'](https?://([^/]+(?:rpmlive\.online|p2pplay\.pro)).*?(?:id=|/v/|/e/|#)([a-zA-Z0-9_-]+)[^"']*)["']""").findAll(pageContent).forEach {
-                        handled = true
-                        extractRpm(it.groupValues[3], it.groupValues[2], callback)
-                    }
-                }
-
-                // [4] KRAKENFILES
-                if (!handled) {
-                    Regex("""(?i)src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { 
-                        handled = true
-                        extractKrakenManual(it.groupValues[1], callback) 
-                    }
-                }
-
-                // [5] XSHOTCOK / HXFILE / SHORT.ICU
-                if (!handled) {
-                    Regex("""(?i)src=["'](https://[^"']*(?:xshotcok|hxfile|short\.icu|mixdrop|newer\.stream)[^"']*)["']""").findAll(pageContent).forEach { 
-                        handled = true
-                        val url = it.groupValues[1]
-                        if (url.contains("short.icu")) {
-                            val id = url.substringAfterLast("/").substringBefore("?")
-                            loadExtractor("https://abyss.to/?v=$id", subtitleCallback, callback)
-                        } else {
-                            loadExtractor(url, subtitleCallback, callback)
-                        }
-                    }
-                }
-
-                // [6] FALLBACK JIKA TIDAK ADA YANG COCOK
-                if (!handled) {
-                    val iframeMatch = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(pageContent)
-                    if (iframeMatch != null) {
-                        loadExtractor(iframeMatch.groupValues[1], subtitleCallback, callback)
-                    }
-                }
             } catch (e: Exception) { 
                 e.printStackTrace() 
             }
@@ -221,13 +176,13 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- UNIVERSAL XVIDEOSHARING LOGIC (UPDATED & SIMPLIFIED) ---
+    // --- LOGIKA EKSTRAKSI HANERIX (FINAL) ---
     private suspend fun extractXVideoSharing(url: String, domain: String, videoId: String, callback: (ExtractorLink) -> Unit) {
         try {
             var currentUrl = url
             var currentDomain = domain
             
-            // 1. Kunjungi URL Awal (Contoh: hgcloud.to)
+            // 1. Kunjungi URL target
             var response = app.get(currentUrl, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
                 "Referer" to mainUrl, 
@@ -236,13 +191,12 @@ class Ngefilm21 : MainAPI() {
             ))
             var doc = response.text
             
-            // 2. Cek Iframe Redirect (Jika bersembunyi di balik cangkang seperti vibuxer / hanerix)
+            // 2. Cek Iframe Redirect (Bypass hgcloud -> hanerix)
             val hiddenIframe = Regex("""(?i)<iframe[^>]+src=["']([^"']+(?:vibuxer|hanerix|hgcloud)[^"']+)["']""").find(doc)?.groupValues?.get(1)
             if (hiddenIframe != null) {
                 currentUrl = hiddenIframe
                 currentDomain = java.net.URI(currentUrl).host
                 
-                // Kunjungi Iframe Aslinya
                 response = app.get(currentUrl, headers = mapOf(
                     "User-Agent" to UA_BROWSER,
                     "Referer" to url
@@ -250,30 +204,30 @@ class Ngefilm21 : MainAPI() {
                 doc = response.text
             }
 
-            // 3. Bongkar JavaScript yang diacak
+            // 3. Bongkar JavaScript
             val unpackedJs = multiUnpack(doc)
             var linkM3u8: String? = null
 
-            // 4. PANEN M3U8! Langsung dari objek "links" (Mencari hls4, hls3, atau hls2)
+            // 4. PANEN M3U8 (hls4, hls3, hls2)
             val hlsMatch = Regex("""["'](?:hls[234])["']\s*:\s*["']([^"']+)["']""").find(unpackedJs)
             if (hlsMatch != null) {
                 linkM3u8 = hlsMatch.groupValues[1].replace("\\/", "/")
             }
 
-            // Fallback (Jika M3U8 ditulis langsung tanpa objek links)
+            // Fallback M3U8
             if (linkM3u8 == null) {
                 linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
             }
 
-            // 5. Eksekusi Callback untuk diserahkan ke Cloudstream
+            // 5. Kirim Link ke Cloudstream
             if (linkM3u8 != null) {
                 if (linkM3u8.startsWith("/")) linkM3u8 = "https://$currentDomain$linkM3u8"
                  
-                val serverName = currentDomain.split(".").first().replaceFirstChar { it.uppercase() }
+                val serverName = "Hanerix Server"
                 callback.invoke(
                     newExtractorLink(
                         serverName,
-                        "$serverName (Server)",
+                        serverName,
                         linkM3u8,
                         ExtractorLinkType.M3U8
                     ) {
@@ -288,64 +242,6 @@ class Ngefilm21 : MainAPI() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-    }
-
-    // --- UNIVERSAL RPM & P2PPLAY (AES DECRYPTION) ---
-    private suspend fun extractRpm(id: String, host: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            val h = mapOf("Host" to host, "User-Agent" to UA_BROWSER, "Referer" to "https://$host/", "Origin" to "https://$host", "X-Requested-With" to "XMLHttpRequest")
-            val refDomain = mainUrl.removePrefix("https://").removePrefix("http://").removeSuffix("/")
-            val videoApi = "https://$host/api/v1/video?id=$id&w=1920&h=1080&r=$refDomain"
-            
-            val encryptedRes = app.get(videoApi, headers = h).text
-            val jsonStr = decryptAES(encryptedRes)
-            
-            val serverName = if (host.contains("p2pplay")) "P2PPlay" else "RPM Live"
-            
-            Regex(""""source"\s*:\s*"([^"]+)"""").find(jsonStr)?.groupValues?.get(1)?.let { link ->
-                callback.invoke(newExtractorLink(serverName, serverName, link.replace("\\/", "/"), ExtractorLinkType.M3U8) { this.referer = "https://$host/" })
-            }
-            Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(jsonStr)?.groupValues?.get(1)?.let { link ->
-                callback.invoke(newExtractorLink("$serverName (Backup)", "$serverName (Backup)", "https://$host" + link.replace("\\/", "/"), ExtractorLinkType.M3U8) { this.referer = "https://$host/" })
-            }
-        } catch (e: Exception) {}
-    }
-
-    // --- KRAKENFILES ---
-    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            val text = app.get(url, headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to mainUrl)).text
-            val videoUrl = Regex("""<source[^>]+src=["'](https:[^"']+)["']""").find(text)?.groupValues?.get(1) ?: Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""").find(text)?.groupValues?.get(1)
-            videoUrl?.let { clean ->
-                callback.invoke(newExtractorLink("Krakenfiles", "Krakenfiles", clean.replace("&amp;", "&").replace("\\", ""), ExtractorLinkType.VIDEO) { 
-                    this.referer = url
-                    this.headers = mapOf("User-Agent" to UA_BROWSER) 
-                })
-            }
-        } catch (e: Exception) {}
-    }
-
-    // --- AES DECRYPTION ENGINE ---
-    private fun decryptAES(hexText: String): String {
-        if (hexText.isEmpty() || hexText.startsWith("{")) return hexText
-        return try {
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            val keyBytes = hexToBytes(RPM_KEY)
-            val ivBytes = hexToBytes(RPM_IV)
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
-            
-            val decodedHex = hexToBytes(hexText.replace(Regex("[^0-9a-fA-F]"), ""))
-            String(cipher.doFinal(decodedHex), Charsets.UTF_8)
-        } catch (e: Exception) { "" }
-    }
-    
-    private fun hexToBytes(s: String): ByteArray {
-        val len = s.length
-        val data = ByteArray(len / 2)
-        for (i in 0 until len step 2) {
-            data[i / 2] = ((Character.digit(s[i], 16) shl 4) + Character.digit(s[i + 1], 16)).toByte()
-        }
-        return data
     }
 
     // --- MULTI JAVASCRIPT UNPACKER ---
