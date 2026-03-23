@@ -1,155 +1,104 @@
 package com.michat88
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.get
 
-class AdiTV : MainAPI() {
-    override var name = "AdiTV" 
-    override var mainUrl = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_aktif.m3u" 
+class AdiTVProvider : MainAPI() {
+    // Nama plugin yang akan muncul di aplikasi
+    override var name = "AdiTV"
     
+    // URL mentah (raw) file M3U kamu di Github
+    override var mainUrl = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_aktif.m3u"
+    
+    // Memberitahu Cloudstream bahwa plugin ini punya halaman utama (Home)
     override val hasMainPage = true
-    override val hasChromecastSupport = true
+    
+    // Fokus pada tipe Live TV
     override val supportedTypes = setOf(TvType.Live)
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val m3uData = app.get(mainUrl).text
-        val lines = m3uData.lines()
+    /**
+     * Langkah 1: Memuat daftar channel di halaman utama aplikasi
+     */
+    override suspend fun getMainPage(page: Int, requestPath: String?): HomePageResponse? {
+        // Mengunduh isi teks dari file M3U di Github
+        val m3uText = app.get(mainUrl).text
+        val channels = mutableListOf<LiveSearchResponse>()
         
-        val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
-        
-        var currentName = "Channel Tanpa Nama"
+        // Variabel untuk menyimpan data sementara saat membaca baris
+        var currentName = ""
         var currentLogo = ""
-        var currentGroup = "Lain-lain"
-        val currentHeaders = mutableMapOf<String, String>()
-        
+
+        // Membaca file baris demi baris
+        val lines = m3uText.split("\n")
         for (line in lines) {
             val trimmedLine = line.trim()
             
+            // Jika baris berisi informasi channel (dimulai dengan #EXTINF)
             if (trimmedLine.startsWith("#EXTINF")) {
-                currentName = trimmedLine.substringAfterLast(",").trim()
-                
-                val logoRegex = """tvg-logo="(.*?)"""".toRegex()
+                // Mencari URL logo channel (tvg-logo) menggunakan Regex
+                val logoRegex = """tvg-logo="([^"]+)"""".toRegex()
                 currentLogo = logoRegex.find(trimmedLine)?.groupValues?.get(1) ?: ""
-                
-                val groupRegex = """group-title="(.*?)"""".toRegex()
-                currentGroup = groupRegex.find(trimmedLine)?.groupValues?.get(1) ?: "Lain-lain"
-                
-                currentHeaders.clear() 
-                
-            } else if (trimmedLine.startsWith("#EXTVLCOPT:")) {
-                if (trimmedLine.contains("http-referrer=")) {
-                    val referer = trimmedLine.substringAfter("http-referrer=")
-                    currentHeaders["Referer"] = referer
-                    currentHeaders["Origin"] = referer
-                }
-                if (trimmedLine.contains("http-user-agent=")) {
-                    val ua = trimmedLine.substringAfter("http-user-agent=")
-                    currentHeaders["User-Agent"] = ua
-                }
-                
-            } else if (trimmedLine.isNotBlank() && !trimmedLine.startsWith("#")) {
-                var cleanUrl = trimmedLine
 
-                if (cleanUrl.contains("|")) {
-                    val parts = cleanUrl.split("|")
-                    cleanUrl = parts[0]
-                    
-                    val headerPart = parts.getOrNull(1) ?: ""
-                    headerPart.split("&").forEach { pair ->
-                        val kv = pair.split("=")
-                        if (kv.size == 2) {
-                            currentHeaders[kv[0]] = kv[1]
-                        }
-                    }
-                }
-
-                // DIHAPUS: Logika pemaksaan HTTPS (cleanUrl.replace) agar IP Address bisa diputar
-
-                val finalUrlToPass = if (currentHeaders.isNotEmpty()) {
-                    cleanUrl + "|" + currentHeaders.map { "${it.key}=${it.value}" }.joinToString("&")
-                } else {
-                    cleanUrl
-                }
-
-                if (!groupedChannels.containsKey(currentGroup)) {
-                    groupedChannels[currentGroup] = mutableListOf()
-                }
-                
-                groupedChannels[currentGroup]?.add(
-                    newLiveSearchResponse(
+                // Mengambil nama channel (biasanya teks setelah tanda koma terakhir)
+                currentName = trimmedLine.substringAfterLast(",").trim()
+            } 
+            // Jika baris bukan kosong dan bukan komentar (biasanya ini adalah link streaming/video)
+            else if (trimmedLine.isNotEmpty() && !trimmedLine.startsWith("#")) {
+                // Menyimpan channel ke dalam daftar
+                channels.add(
+                    LiveSearchResponse(
                         name = currentName,
-                        url = finalUrlToPass,
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = currentLogo
-                        this.lang = "id"
-                        
-                        this.posterHeaders = mapOf(
-                            "Cloudstream-Poster-Shape" to "Landscape",
-                            "Cloudstream-Poster-Fit" to "FitCenter"
-                        )
-                    }
+                        url = trimmedLine, // URL video
+                        apiName = this@AdiTVProvider.name,
+                        type = TvType.Live,
+                        posterUrl = currentLogo // Logo channel
+                    )
                 )
+                // Mengosongkan nama untuk baris selanjutnya
+                currentName = ""
             }
         }
 
-        val homePageLists = groupedChannels.map { (groupName, channels) ->
-            HomePageList(groupName, channels)
-        }
+        // Mengelompokkan semua channel dalam satu kategori bernama "Playlist Aktif"
+        val homeList = HomePageList(
+            name = "Playlist Aktif",
+            list = channels
+        )
 
-        return newHomePageResponse(homePageLists)
+        return HomePageResponse(listOf(homeList))
     }
 
+    /**
+     * Langkah 2: Mengatur halaman detail saat sebuah channel diklik
+     */
     override suspend fun load(url: String): LoadResponse {
-        return newLiveStreamLoadResponse(
-            name = "Live TV",
+        return LiveStreamLoadResponse(
+            name = "Live Stream", // Nama standar
             url = url,
+            apiName = this.name,
             dataUrl = url
-        ) {}
+        )
     }
 
+    /**
+     * Langkah 3: Memberikan link video ke pemutar video (Player)
+     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        
-        var cleanUrl = data
-        val mapHeaders = mutableMapOf<String, String>()
-        
-        if (cleanUrl.contains("|")) {
-            val parts = cleanUrl.split("|")
-            cleanUrl = parts[0]
-            val headerPart = parts.getOrNull(1) ?: ""
-            headerPart.split("&").forEach {
-                val kv = it.split("=")
-                if (kv.size == 2) {
-                    mapHeaders[kv[0]] = kv[1]
-                }
-            }
-        }
-
-        if (!mapHeaders.containsKey("User-Agent")) {
-            mapHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
-        }
-
-        val linkType = when {
-            cleanUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
-            cleanUrl.contains(".m3u", ignoreCase = true) -> ExtractorLinkType.M3U8
-            else -> ExtractorLinkType.VIDEO
-        }
-
+        // Memasukkan URL video langsung ke Extractor
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
                 source = this.name,
                 name = this.name,
-                url = cleanUrl,
-                type = linkType
-            ) {
-                this.quality = Qualities.Unknown.value
-                this.headers = mapHeaders 
-            }
+                url = data, // URL streaming dari M3U
+                referer = "",
+                quality = Qualities.Unknown.value,
+                isM3u8 = data.contains(".m3u8") // Cek otomatis jika formatnya m3u8
+            )
         )
         return true
     }
