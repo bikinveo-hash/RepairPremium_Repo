@@ -149,6 +149,7 @@ class AdiTVProvider : MainAPI() {
                         )
                         reset()
                     }
+                    // URL kedua (fallback) diabaikan — reset sudah membuat pName=null
                 }
 
                 // ── Baris lain (komentar, KODIPROP, separator) — skip ─────────
@@ -181,11 +182,18 @@ class AdiTVProvider : MainAPI() {
         val items = filtered.subList(from, to).amap { ch ->
             newLiveSearchResponse(ch.name, ch.streamUrl, TvType.Live) {
                 posterUrl = ch.logo
-                posterHeaders = mapOf("AspectRatio" to "landscape") // <-- SATU-SATUNYA KODE TAMBAHAN
             }
         }
 
-        return newHomePageResponse(request.name, items, hasNext = to < filtered.size)
+        // PERUBAHAN HANYA DI BLOK INI: Menggunakan HomePageList persis seperti KisskhProvider
+        return newHomePageResponse(
+            list = HomePageList(
+                name = request.name,
+                list = items,
+                isHorizontalImages = true
+            ),
+            hasNext = to < filtered.size
+        )
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -203,7 +211,6 @@ class AdiTVProvider : MainAPI() {
             .amap { ch ->
                 newLiveSearchResponse(ch.name, ch.streamUrl, TvType.Live) {
                     posterUrl = ch.logo
-                    posterHeaders = mapOf("AspectRatio" to "landscape") // <-- SATU-SATUNYA KODE TAMBAHAN
                 }
             }
     }
@@ -225,7 +232,11 @@ class AdiTVProvider : MainAPI() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // loadLinks
+    // loadLinks — kirim link ke player
+    // Referensi CS3IPlayer.kt:
+    //   • DASH (.mpd) → ExoPlayer DashMediaSource
+    //   • HLS (.m3u8) → DefaultMediaSourceFactory (AES-128 auto)
+    //   • header dikirim via createVideoSource → setDefaultRequestProperties()
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun loadLinks(
         data: String,
