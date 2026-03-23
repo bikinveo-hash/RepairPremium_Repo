@@ -1,6 +1,8 @@
 package com.michat88
 
 import com.lagradost.cloudstream3.*
+// Tambahan import yang kurang ada di bawah ini:
+import com.lagradost.cloudstream3.utils.ExtractorLink 
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -51,25 +53,22 @@ class AdiTV : MainAPI() {
             // Kelompokkan berdasarkan grup
             val groupedChannels = channels.groupBy { it.group }
 
-            // STANDAR PARCOLLECTIONS.KT: Gunakan amap untuk memproses list secara concurrent/async
+            // Gunakan amap untuk memproses list secara concurrent/async
             val homePageLists = groupedChannels.toList().amap { (groupName, channelList) ->
                 
-                // STANDAR MAINAPI.KT: Gunakan amap lagi untuk item di dalamnya
                 val searchResponses = channelList.amap { ch ->
-                    // STANDAR MAINAPI.KT: Gunakan fungsi newLiveSearchResponse, JANGAN panggil constructor LiveSearchResponse langsung
                     newLiveSearchResponse(
                         name = ch.name,
                         url = ch.streamUrl,
                         type = TvType.Live
                     ) {
-                        this.posterUrl = ch.logo // Menggunakan initializer block
+                        this.posterUrl = ch.logo
                     }
                 }
                 
                 HomePageList(name = groupName, list = searchResponses)
             }
 
-            // STANDAR MAINAPI.KT: Gunakan newHomePageResponse
             return newHomePageResponse(homePageLists)
 
         } catch (e: Exception) {
@@ -79,7 +78,6 @@ class AdiTV : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // STANDAR MAINAPI.KT: Gunakan fungsi newLiveStreamLoadResponse
         return newLiveStreamLoadResponse(
             name = "Live Stream",
             url = url,
@@ -102,7 +100,6 @@ class AdiTV : MainAPI() {
             else -> ExtractorLinkType.VIDEO
         }
 
-        // STANDAR EXTRACTORAPI.KT: Gunakan fungsi newExtractorLink, jangan pakai ExtractorLink constructor
         val extractor = newExtractorLink(
             source = this.name,
             name = this.name,
@@ -110,7 +107,7 @@ class AdiTV : MainAPI() {
             type = linkType
         ) {
             this.quality = Qualities.Unknown.value
-            this.referer = "" // Kosongkan atau isi dengan header m3u jika diperlukan
+            this.referer = "" 
         }
         
         callback.invoke(extractor)
