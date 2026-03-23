@@ -155,18 +155,29 @@ class AdiTVProvider : MainAPI() {
                         .removePrefix("#KODIPROP:inputstream.adaptive.license_key=")
                         .trim()
                     when {
+                        // Widevine: license URL
                         kv.startsWith("http") -> pDrmLic = kv
+
+                        // ClearKey: format KID:KEY — keduanya hex 32 karakter
                         kv.contains(":") -> {
-                            val p = kv.split(":")
+                            // limit=2 agar tidak salah split jika ada karakter ':' lain
+                            val p = kv.split(":", limit = 2)
                             if (p.size == 2) {
-                                pDrmKid = p[0].trim()
-                                pDrmKey = p[1].trim()
+                                val kid = p[0].trim()
+                                val key = p[1].trim()
+                                // Validasi: keduanya harus hex string (hanya 0-9, a-f, A-F)
+                                val hexRegex = Regex("^[0-9a-fA-F]+$")
+                                if (kid.matches(hexRegex) && key.matches(hexRegex)) {
+                                    pDrmKid = kid
+                                    pDrmKey = key
+                                }
                             }
                         }
                     }
                 }
 
                 // --- URL stream ditemukan: simpan channel lalu reset ---
+                // Hanya proses URL pertama per blok (pName null = sudah di-reset = skip)
                 line.startsWith("http") -> {
                     val grp = pGroup ?: ""
                     if (grp !in skippedGroups && pName != null) {
@@ -184,8 +195,10 @@ class AdiTVProvider : MainAPI() {
                                 drmLicenseUrl = pDrmLic,
                             )
                         )
+                        // Reset setelah URL pertama — URL fallback berikutnya diabaikan
+                        reset()
                     }
-                    reset()
+                    // Jika pName sudah null: ini URL fallback, skip saja
                 }
 
                 // --- Baris komentar/separator/kosong: abaikan ---
@@ -273,7 +286,11 @@ class AdiTVProvider : MainAPI() {
         if (data.isBlank()) return false
 
         val url = data.trim()
-        val ch  = fetchChannels().firstOrNull { it.streamUrl == url }
+
+        // Lookup robust: coba exact match dulu, fallback ke contains
+        val allChannels = fetchChannels()
+        val ch = allChannels.firstOrNull { it.streamUrl == url }
+            ?: allChannels.firstOrNull { it.streamUrl.trimEnd() == url.trimEnd() }
 
         val linkType = when {
             url.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
@@ -281,78 +298,103 @@ class AdiTVProvider : MainAPI() {
             else                                     -> ExtractorLinkType.M3U8
         }
 
-        val headers = buildMap<String, String> {
+        val referer = ch?.referer?.takeIf { it.isNotBlank() } ?: ""
+
+        val baseHeaders = buildMap<String, String> {
             put("User-Agent", ch?.userAgent ?: USER_AGENT)
-            ch?.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            if (referer.isNotBlank()) put("Referer", referer)
         }
 
-        val referer = ch?.referer ?: ""
+        val channelName = ch?.name ?: name
 
         when (ch?.drmType?.lowercase()) {
 
+            // ------------------------------------------------------------------
+            // ClearKey DRM
+            // ------------------------------------------------------------------
             "clearkey", "org.w3.clearkey" -> {
                 if (ch.drmKid != null && ch.drmKey != null) {
                     callback(
                         newDrmExtractorLink(
                             source = name,
-                            name   = ch.name,
+                            name   = channelName,
                             url    = url,
                             uuid   = CLEARKEY_UUID,
                             type   = linkType,
                         ) {
                             this.referer = referer
                             this.quality = Qualities.Unknown.value
-                            this.headers = headers
+                            this.headers = baseHeaders
                             this.kid     = ch.drmKid
                             this.key     = ch.drmKey
                             this.kty     = "oct"
                         }
                     )
                 } else {
-                    // ClearKey tanpa kid/key — coba plain
+                    // ClearKey tanpa kid/key — putar sebagai plain stream
                     callback(
-                        newExtractorLink(source = name, name = ch.name, url = url, type = linkType) {
+                        newExtractorLink(
+                            source = name,
+                            name   = channelName,
+                            url    = url,
+                            type   = linkType,
+                        ) {
                             this.referer = referer
                             this.quality = Qualities.Unknown.value
-                            this.headers = headers
+                            this.headers = baseHeaders
                         }
                     )
                 }
             }
 
+            // ------------------------------------------------------------------
+            // Widevine DRM (Transvision, HBO, dll)
+            // dt-custom-data harus ada di KEDUA tempat:
+            //   1. headers         → untuk HTTP request ke license server
+            //   2. keyRequestParameters → untuk ExoPlayer DRM session
+            // ------------------------------------------------------------------
             "com.widevine.alpha", "widevine" -> {
                 val licUrl = ch.drmLicenseUrl ?: transvisionLicenseUrl
+
+                // Header untuk license request — wajib include dt-custom-data
+                val wvHeaders = baseHeaders + mapOf(
+                    "dt-custom-data" to transvisionDtCustomData,
+                    "Content-Type"   to "application/octet-stream",
+                )
+
                 callback(
                     newDrmExtractorLink(
                         source = name,
-                        name   = ch.name,
+                        name   = channelName,
                         url    = url,
                         uuid   = WIDEVINE_UUID,
                         type   = linkType,
                     ) {
                         this.referer              = referer
                         this.quality              = Qualities.Unknown.value
-                        this.headers              = headers
+                        this.headers              = wvHeaders
                         this.licenseUrl           = licUrl
                         this.keyRequestParameters = hashMapOf(
-                            "dt-custom-data" to transvisionDtCustomData
+                            "dt-custom-data" to transvisionDtCustomData,
                         )
                     }
                 )
             }
 
+            // ------------------------------------------------------------------
+            // Plain stream — HLS atau DASH tanpa DRM
+            // ------------------------------------------------------------------
             else -> {
-                // Plain stream tanpa DRM
                 callback(
                     newExtractorLink(
                         source = name,
-                        name   = ch?.name ?: name,
+                        name   = channelName,
                         url    = url,
                         type   = linkType,
                     ) {
                         this.referer = referer
                         this.quality = Qualities.Unknown.value
-                        this.headers = headers
+                        this.headers = baseHeaders
                     }
                 )
             }
