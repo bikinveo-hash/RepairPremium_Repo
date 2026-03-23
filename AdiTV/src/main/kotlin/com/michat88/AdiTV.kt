@@ -79,7 +79,7 @@ class AdiTVProvider : MainAPI() {
     ): Boolean {
         
         if (data.contains(".m3u8")) {
-            // M3u8Helper akan otomatis membedah resolusi video di dalam file .m3u8
+            // M3u8Helper sudah otomatis menghasilkan ExtractorLink yang valid
             M3u8Helper.generateM3u8(
                 source = this.name,
                 streamUrl = data,
@@ -87,9 +87,9 @@ class AdiTVProvider : MainAPI() {
             ).forEach(callback)
             
         } else {
-            // Untuk link DASH (.mpd) atau format video langsung lainnya
+            // PERBAIKAN: Menggunakan newExtractorLink sesuai permintaan Cloudstream terbaru
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = data,
