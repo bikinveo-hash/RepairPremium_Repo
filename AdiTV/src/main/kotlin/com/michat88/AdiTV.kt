@@ -4,8 +4,12 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 class AdiTVProvider : MainAPI() {
+    // Nama plugin yang akan muncul di aplikasi
     override var name = "AdiTV"
+    
+    // URL mentah (raw) file M3U kamu di Github
     override var mainUrl = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_aktif.m3u"
+    
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
 
@@ -69,7 +73,7 @@ class AdiTVProvider : MainAPI() {
     }
 
     /**
-     * Langkah 3: Memberikan link ke Player
+     * Langkah 3: Memberikan link ke Player beserta Headers (User-Agent) penyamaran
      */
     override suspend fun loadLinks(
         data: String,
@@ -78,16 +82,25 @@ class AdiTVProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
+        // Menyiapkan identitas palsu (User-Agent) persis seperti skrip Termux kita
+        // Ini berfungsi untuk mencegah server menolak koneksi (Error 404 / 2004)
+        val customHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+            "Accept" to "*/*",
+            "Connection" to "keep-alive"
+        )
+
         if (data.contains(".m3u8")) {
-            // M3u8Helper sudah lolos dan berfungsi dengan sempurna
+            // M3u8Helper dibekali dengan 'customHeaders' agar server mengira ini browser asli
             M3u8Helper.generateM3u8(
                 source = this.name,
                 streamUrl = data,
-                referer = ""
+                referer = "",
+                headers = customHeaders
             ).forEach(callback)
             
         } else {
-            // Cukup berikan informasi intinya saja! Cloudstream akan mengurus sisanya.
+            // Untuk link format lain (seperti DASH .mpd)
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
