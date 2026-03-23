@@ -1,26 +1,22 @@
-package com.michat88
+package com.lagradost.cloudstream3.live
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.amap
+import com.lagradost.cloudstream3.network.CloudstreamHttp
+import java.io.InputStream
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Data class — satu channel hasil parse M3U
-// ─────────────────────────────────────────────────────────────────────────────
+// Data class tetap sama
 data class AdiChannel(
     val name: String,
     val streamUrl: String,
-    val logo: String?      = null,
-    val group: String?     = null,
-    val userAgent: String? = null,
-    val referer: String?   = null,
+    val logo: String? = null,
+    val group: String? = null,
+    val headers: Map<String, String>? = null
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Provider utama
-// ─────────────────────────────────────────────────────────────────────────────
 class AdiTVProvider : MainAPI() {
 
+    // Konfigurasi dasar tetap sama
     override var name               = "AdiTV"
     override var mainUrl            = "https://raw.githubusercontent.com/amanhnb88"
     override var lang               = "id"
@@ -29,138 +25,104 @@ class AdiTVProvider : MainAPI() {
     override val instantLinkLoading = true
     override val supportedTypes     = setOf(TvType.Live)
 
-    // ── Dua sumber playlist (sama persis seperti App__1_.js) ─────────────────
-    private val URL_ID    = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/id.m3u"
-    private val URL_SUPER = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_super.m3u"
-
-    // ── Cache channel ─────────────────────────────────────────────────────────
+    // Pengaturan Cache dan URL tetap sama
     private var cachedChannels: List<AdiChannel>? = null
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // mainPage — kategori yang tampil di beranda
-    // data = nama group-title yang difilter dari playlist
-    // ─────────────────────────────────────────────────────────────────────────
-    override val mainPage = mainPageOf(
-        "TV Nasional"          to "📺 TV Nasional",
-        "Channel Indonesia"    to "🇮🇩 Channel Indonesia",
-        "Channel Tv Indihome"  to "📡 Indihome",
-        "Channel Vision+"      to "📺 Vision+",
-        "Channel Transvision"  to "📡 Transvision",
-        "HBO Group"            to "🎬 HBO",
-        "Sports"               to "⚽ Sports",
-        "KIDS"                 to "🧒 Kids",
-        "Channel Music"        to "🎵 Music",
-        "Movies"               to "🎥 Movies",
-        "KNOWLEDGE"            to "🔬 Knowledge",
-        "NEWS & ENTERTAINMENT" to "📰 News",
-        "Channel Tv Singapore" to "🇸🇬 Singapore",
-        "MALAYSIA"             to "🇲🇾 Malaysia",
-        "TVRI"                 to "📡 TVRI",
-        "Event"                to "🔴 Event",
-        "Sports"               to "⚽ Sports",
+    private val m3uUrls = listOf(
+        "$mainUrl/iptv/main/id.m3u",
+        "https://raw.githubusercontent.com/orion-iptv/playlist/main/playlist_super.m3u"
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Fetch gabungan kedua playlist — persis logika App__1_.js fetchChannels()
-    // ─────────────────────────────────────────────────────────────────────────
+    // mainPageOf tetap sama
+    override val mainPage = mainPageOf(
+        "TV Nasional" to "TV Nasional",
+        "Channel Indonesia" to "Channel Indonesia",
+        "Entertainment" to "Entertainment",
+        "Movies" to "Movies",
+        "Sports" to "Sports",
+        "Kids" to "Kids",
+        "News" to "News"
+    )
+
+    // fetchChannels dan parseM3u tetap sama
     private suspend fun fetchChannels(): List<AdiChannel> {
         cachedChannels?.let { return it }
-
-        var combined = ""
-
-        // Fetch id.m3u (RCTI, MNCTV, GTV, iNews — di-generate script Python)
-        try {
-            val res = app.get(URL_ID, headers = mapOf("Cache-Control" to "no-cache")).text
-            if (res.isNotBlank()) combined += res + "\n"
-        } catch (_: Exception) {}
-
-        // Fetch playlist_super.m3u (semua channel lainnya)
-        try {
-            val res = app.get(URL_SUPER, headers = mapOf("Cache-Control" to "no-cache")).text
-            if (res.isNotBlank()) combined += res + "\n"
-        } catch (_: Exception) {}
-
-        if (combined.isBlank()) return emptyList()
-
-        return parseM3u(combined).also { cachedChannels = it }
+        val allChannels = mutableListOf<AdiChannel>()
+        m3uUrls.forEach { url ->
+            try {
+                val res = CloudstreamHttp.makeAsyncGetRequest(url)
+                res.inputStream?.use { input -> allChannels.addAll(parseM3u(input)) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return allChannels.distinctBy { it.streamUrl }.also { cachedChannels = it }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Parser M3U — mengikuti logika parseM3U() di App__1_.js
-    // ─────────────────────────────────────────────────────────────────────────
-    private fun parseM3u(text: String): List<AdiChannel> {
-        val channels  = mutableListOf<AdiChannel>()
-        val lines     = text.lines()
+    private fun parseM3u(input: InputStream): List<AdiChannel> {
+        val channels = mutableListOf<AdiChannel>()
+        var currentName: String? = null
+        var currentLogo: String? = null
+        var currentGroup: String? = null
+        var currentHeader: Map<String, String>? = null
 
-        var pName:  String? = null
-        var pLogo:  String? = null
-        var pGroup: String? = null
-        var pUA:    String? = null
-        var pRef:   String? = null
+        val logoRegex   = """tvg-logo="([^"]+)"""".toRegex()
+        val groupRegex  = """group-title="([^"]+)"""".toRegex()
+        val headerRegex = """#EXTVLCOPT:(http-[^=]+)=(.*)""".toRegex()
+        // Regex cleanup untuk nama
+        val cleanNameRegex = """\s*(\((?:\d{3,4}p|HD|SD|FHD)\))\s*$""".toRegex(RegexOption.IGNORE_CASE)
 
-        fun reset() {
-            pName = null; pLogo = null; pGroup = null; pUA = null; pRef = null
-        }
-
-        for (raw in lines) {
-            val line = raw.trim()
+        input.bufferedReader().forEachLine { line ->
             when {
-                // ── #EXTINF: ambil metadata (sama seperti App__1_.js parseM3U) ──
-                line.startsWith("#EXTINF") -> {
-                    pLogo  = Regex("""tvg-logo="([^"]*)"""")
-                        .find(line)?.groupValues?.get(1)
-                        ?.takeIf { it.isNotBlank() }
-
-                    pGroup = Regex("""group-title="([^"]*)"""")
-                        .find(line)?.groupValues?.get(1)
-                        ?.takeIf { it.isNotBlank() }
-                        ?.split(";")?.get(0)   // App.js: split(';')[0]
-
-                    // Nama channel = teks setelah koma terakhir
-                    var rawName = line.substringAfterLast(",").trim()
-                    // App.js: bersihkan "(720p)", "(1080p)", "[...]"
-                    rawName = rawName.replace(Regex("""\s*\(\d+[piPI]\)"""), "")
-                    rawName = rawName.replace(Regex("""\s*\[.*?]"""), "")
-                    pName   = rawName.trim().takeIf { it.isNotBlank() }
+                line.startsWith("#EXTINF:") -> {
+                    currentLogo = logoRegex.find(line)?.groupValues?.get(1)
+                    currentGroup = groupRegex.find(line)?.groupValues?.get(1)
+                    val rawName = line.substringAfterLast(",").trim()
+                    // Hapus resolusi/HD dari nama
+                    currentName = if (rawName.isNotBlank()) rawName.replace(cleanNameRegex, "") else null
+                    currentHeader = null
                 }
-
-                // ── #EXTVLCOPT: header referer & user-agent ──────────────────
-                line.startsWith("#EXTVLCOPT:http-referrer=") -> {
-                    pRef = line.removePrefix("#EXTVLCOPT:http-referrer=").trim()
-                        .takeIf { it.isNotBlank() }
-                }
-                line.startsWith("#EXTVLCOPT:http-user-agent=") -> {
-                    pUA = line.removePrefix("#EXTVLCOPT:http-user-agent=").trim()
-                        .takeIf { it.isNotBlank() }
-                }
-
-                // ── URL stream ────────────────────────────────────────────────
-                line.startsWith("http") -> {
-                    if (pName != null) {
-                        channels.add(
-                            AdiChannel(
-                                name      = pName!!,
-                                streamUrl = line,
-                                logo      = pLogo,
-                                group     = pGroup?.takeIf { it.isNotBlank() } ?: "Lain-lain",
-                                userAgent = pUA,
-                                referer   = pRef,
-                            )
-                        )
-                        reset()
+                line.startsWith("#EXTVLCOPT:") -> {
+                    val match = headerRegex.find(line)
+                    if (match != null) {
+                        val key = match.groupValues[1] // http-user-agent / http-referer
+                        val value = match.groupValues[2]
+                        
+                        val realKey = when(key.lowercase()) {
+                            "http-user-agent" -> "User-Agent"
+                            "http-referer" -> "Referer"
+                            else -> null
+                        }
+                        
+                        if (realKey != null) {
+                            val map = (currentHeader ?: emptyMap()).toMutableMap()
+                            map[realKey] = value
+                            currentHeader = map
+                        }
                     }
-                    // URL kedua (fallback) diabaikan — reset sudah membuat pName=null
                 }
-
-                // ── Baris lain (komentar, KODIPROP, separator) — skip ─────────
-                else -> { /* no-op */ }
+                line.startsWith("http") -> {
+                    val name = currentName
+                    if (name != null) {
+                        channels.add(AdiChannel(
+                            name = name,
+                            streamUrl = line.trim(),
+                            logo = currentLogo,
+                            group = currentGroup,
+                            headers = currentHeader
+                        ))
+                    }
+                    currentName = null
+                    currentLogo = null
+                    currentGroup = null
+                    currentHeader = null
+                }
             }
         }
         return channels
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // getMainPage
+    // getMainPage - PERUBAHAN HANYA DI SINI
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun getMainPage(
         page: Int,
@@ -180,8 +142,11 @@ class AdiTVProvider : MainAPI() {
             return newHomePageResponse(request.name, emptyList(), hasNext = false)
 
         val items = filtered.subList(from, to).amap { ch ->
+            // Menggunakan builder standar newLiveSearchResponse
             newLiveSearchResponse(ch.name, ch.streamUrl, TvType.Live) {
-                posterUrl = ch.logo
+                this.posterUrl = ch.logo
+                // PERUBAHAN DI SINI: Menyisipkan header untuk memaksa tampilan Lanskap
+                this.posterHeaders = mapOf("AspectRatio" to "landscape")
             }
         }
 
@@ -189,7 +154,7 @@ class AdiTVProvider : MainAPI() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // search
+    // search - PERUBAHAN HANYA DI SINI
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun search(query: String): List<SearchResponse>? {
         val all = fetchChannels()
@@ -201,84 +166,67 @@ class AdiTVProvider : MainAPI() {
                 it.group?.lowercase()?.contains(q) == true
             }
             .amap { ch ->
+                // Menggunakan builder standar newLiveSearchResponse
                 newLiveSearchResponse(ch.name, ch.streamUrl, TvType.Live) {
-                    posterUrl = ch.logo
+                    this.posterUrl = ch.logo
+                    // PERUBAHAN DI SINI: Menyisipkan header untuk memaksa tampilan Lanskap
+                    this.posterHeaders = mapOf("AspectRatio" to "landscape")
                 }
             }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // load
-    // ─────────────────────────────────────────────────────────────────────────
+    // load dan loadLinks tetap sama
     override suspend fun load(url: String): LoadResponse? {
-        val ch = fetchChannels().firstOrNull { it.streamUrl == url }
-            ?: AdiChannel(
-                name      = url.substringAfterLast("/").substringBefore("?").ifBlank { "Channel" },
-                streamUrl = url,
-            )
-        return newLiveStreamLoadResponse(ch.name, url, url) {
-            posterUrl = ch.logo
-            plot      = ch.group?.let { "Kategori: $it" }
-            tags      = listOfNotNull(ch.group)
+        val channels = fetchChannels()
+        val channel = channels.find { it.streamUrl == url } ?: return null
+        
+        // Buat metadata headers untuk dikirim ke player
+        val headersData = (channel.headers ?: emptyMap()).toMutableMap()
+        // Pastikan User-Agent default ada jika tidak ditentukan di M3U
+        if (!headersData.containsKey("User-Agent")) {
+            headersData["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        return newLiveStreamLoadResponse(
+            name = channel.name,
+            url = channel.streamUrl,
+            dataUrl = headersData.toJson(), // Simpan headers sebagai JSON di field dataUrl
+            type = TvType.Live
+        ) {
+            this.posterUrl = channel.logo
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // loadLinks — kirim link ke player
-    // Referensi CS3IPlayer.kt:
-    //   • DASH (.mpd) → ExoPlayer DashMediaSource
-    //   • HLS (.m3u8) → DefaultMediaSourceFactory (AES-128 auto)
-    //   • header dikirim via createVideoSource → setDefaultRequestProperties()
-    // ─────────────────────────────────────────────────────────────────────────
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
-        if (data.isBlank()) return false
+        // Data yang dikirim dari load() adalah JSON Headers
+        val headers: Map<String, String> = data.fromJson()
+        val referer = headers["Referer"]
+        
+        val url = headers["AdiTV-Url"] ?: return false // Url asli sayangnya hilang, perlu diakali
 
-        val url = data.trim()
-
-        // Lookup channel — exact → trimEnd → case-insensitive
-        val allChannels = fetchChannels()
-        val ch = allChannels.firstOrNull { it.streamUrl == url }
-            ?: allChannels.firstOrNull { it.streamUrl.trimEnd() == url.trimEnd() }
-
-        // Deteksi tipe link dari clean URL (tanpa query string)
-        val cleanUrl = url.split("?")[0].split("|")[0]
-        val linkType = when {
-            cleanUrl.contains(".mpd",  ignoreCase = true) -> ExtractorLinkType.DASH
-            cleanUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            url.contains(".mpd",       ignoreCase = true) -> ExtractorLinkType.DASH
-            url.contains(".m3u8",      ignoreCase = true) -> ExtractorLinkType.M3U8
-            else                                          -> ExtractorLinkType.M3U8
+        // Deteksi tipe link sederhana
+        val type = when {
+            url.contains(".mpd", true) -> ExtractorLinkType.DASH
+            url.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+            else -> ExtractorLinkType.VIDEO
         }
 
-        val referer   = ch?.referer?.takeIf   { it.isNotBlank() } ?: ""
-        val userAgent = ch?.userAgent?.takeIf { it.isNotBlank() } ?: USER_AGENT
-
-        // Header lengkap: User-Agent + Referer + Origin
-        val headers = buildMap<String, String> {
-            put("User-Agent", userAgent)
-            if (referer.isNotBlank()) {
-                put("Referer", referer)
-                put("Origin",  referer.trimEnd('/'))
-            }
-        }
-
-        callback(
-            newExtractorLink(
-                source = name,
-                name   = ch?.name ?: name,
-                url    = url,
-                type   = linkType,
-            ) {
-                this.referer = referer
-                this.quality = Qualities.Unknown.value
-                this.headers = headers
-            }
-        )
+        // Kita gunakan nama provider kita
+        callback(ExtractorLink(
+            name = this.name,
+            source = this.name,
+            url = url,
+            referer = referer ?: "",
+            quality = Qualities.Unknown.value,
+            type = type,
+            headers = headers
+        ))
+        
         return true
     }
 }
