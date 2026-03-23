@@ -3,8 +3,6 @@ package com.michat88
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
-// Membungkam protes compiler agar kita bisa menggunakan ExtractorLink dengan bebas
-@Suppress("DEPRECATION")
 class AdiTVProvider : MainAPI() {
     override var name = "AdiTV"
     override var mainUrl = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_aktif.m3u"
@@ -62,14 +60,14 @@ class AdiTVProvider : MainAPI() {
     }
 
     /**
-     * Langkah 2: Memuat detail stream
+     * Langkah 2: Memuat detail stream saat diklik
      */
     override suspend fun load(url: String): LoadResponse {
         return newLiveStreamLoadResponse("Live Stream", url, url)
     }
 
     /**
-     * Langkah 3: Mengirim video ke Player secara NATIVE (Khusus Live TV)
+     * Langkah 3: Mengirim video ke Player menggunakan newExtractorLink DSL
      */
     override suspend fun loadLinks(
         data: String,
@@ -85,17 +83,18 @@ class AdiTVProvider : MainAPI() {
             "Connection" to "keep-alive"
         )
 
-        // Melewati M3u8Helper, berikan langsung ke ExoPlayer agar tidak macet/error 404!
+        // Menggunakan gaya penulisan DSL yang diwajibkan oleh ExtractorApi versi terbaru
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
                 name = this.name,
-                url = data,
-                referer = "",
-                quality = Qualities.Unknown.value,
-                isM3u8 = data.contains(".m3u8"), // Otomatis aktif jika link berakhiran m3u8
-                headers = customHeaders
-            )
+                url = data
+            ) {
+                // Semua parameter ekstra masuk di dalam blok ini!
+                this.headers = customHeaders
+                this.isM3u8 = data.contains(".m3u8")
+                this.quality = Qualities.Unknown.value
+            }
         )
         
         return true
