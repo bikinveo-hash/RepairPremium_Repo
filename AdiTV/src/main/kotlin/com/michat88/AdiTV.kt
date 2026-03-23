@@ -2,9 +2,18 @@ package com.michat88
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+
+// Membuat Kapsul Data agar Logo, Nama, dan Kategori tidak hilang
+data class ChannelData(
+    val name: String,
+    val url: String,
+    val logo: String,
+    val group: String
+)
 
 class AdiTVProvider : MainAPI() {
-    // Penamaan dan pengaturan dasar sesuai MainAPI.kt
     override var name = "AdiTV"
     override var mainUrl = "https://raw.githubusercontent.com/amanhnb88/AdiTV/main/streams/playlist_aktif.m3u"
     override val hasMainPage = true
@@ -12,10 +21,8 @@ class AdiTVProvider : MainAPI() {
 
     /**
      * Langkah 1: Memuat dan mengelompokkan daftar channel
-     * Menggunakan MainPageRequest dan newHomePageResponse sesuai MainAPI.kt
      */
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Menggunakan variabel 'app' bawaan Cloudstream untuk HTTP request
         val m3uText = app.get(mainUrl).text
         val channelsByGroup = mutableMapOf<String, MutableList<SearchResponse>>()
         
@@ -41,8 +48,12 @@ class AdiTVProvider : MainAPI() {
                 currentName = trimmedLine.substringAfterLast(",").trim()
             } 
             else if (trimmedLine.isNotEmpty() && !trimmedLine.startsWith("#")) {
-                // Menggunakan builder Kotlin DSL: newLiveSearchResponse
-                val channel = newLiveSearchResponse(currentName, trimmedLine, TvType.Live) {
+                
+                // BUNGKUS DATA KE DALAM JSON
+                val channelDataJSON = ChannelData(currentName, trimmedLine, currentLogo, currentGroup).toJson()
+
+                // Kirim JSON sebagai "URL" ke fungsi selanjutnya
+                val channel = newLiveSearchResponse(currentName, channelDataJSON, TvType.Live) {
                     this.posterUrl = currentLogo
                 }
 
@@ -61,21 +72,30 @@ class AdiTVProvider : MainAPI() {
             HomePageList(groupName, list)
         }
 
-        // Wajib menggunakan builder newHomePageResponse
         return newHomePageResponse(homeLists)
     }
 
     /**
-     * Langkah 2: Memuat detail stream saat diklik
-     * Menggunakan newLiveStreamLoadResponse sesuai MainAPI.kt
+     * Langkah 2: Mengatur UI Halaman Pemutar (Memperbaiki "Plot Tidak Ditemukan")
      */
     override suspend fun load(url: String): LoadResponse {
-        return newLiveStreamLoadResponse("Live Stream", url, url) {}
+        // BUKA BUNGKUSAN JSON
+        val data = tryParseJson<ChannelData>(url)
+        
+        // Ambil data dari JSON, jika gagal (bukan JSON), gunakan URL mentahnya
+        val streamUrl = data?.url ?: url
+        val channelName = data?.name ?: "Live Stream"
+        val channelLogo = data?.logo
+        val channelGroup = data?.group ?: "Siaran Langsung"
+
+        return newLiveStreamLoadResponse(channelName, url, streamUrl) {
+            this.posterUrl = channelLogo // Memunculkan logo di player
+            this.plot = "📺 Menyiarkan: $channelName\n📂 Kategori: $channelGroup\n\nSelamat menonton dari ekstensi AdiTV!" // Memperbaiki plot
+        }
     }
 
     /**
-     * Langkah 3: Mengirim video ke Player menggunakan newExtractorLink
-     * Menerapkan ExtractorLinkType sesuai ExtractorApi.kt
+     * Langkah 3: Mengirim video ke Player menggunakan M3u8Helper (Anti 32x18 & Anti 404)
      */
     override suspend fun loadLinks(
         data: String,
@@ -84,34 +104,37 @@ class AdiTVProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // Identitas super untuk menembus blokir server (Error 404/2004)
+        // BUKA BUNGKUSAN JSON LAGI UNTUK MENDAPATKAN URL ASLI
+        val streamUrl = tryParseJson<ChannelData>(data)?.url ?: data
+
         val customHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             "Accept" to "*/*",
             "Connection" to "keep-alive"
         )
 
-        // Mendeteksi tipe streaming berdasarkan URL
-        val streamType = when {
-            data.contains(".m3u8") -> ExtractorLinkType.M3U8
-            data.contains(".mpd") -> ExtractorLinkType.DASH
-            else -> ExtractorLinkType.VIDEO
-        }
-
-        // Menggunakan gaya penulisan DSL newExtractorLink yang diwajibkan ExtractorApi.kt
-        callback.invoke(
-            newExtractorLink(
+        if (streamUrl.contains(".m3u8")) {
+            // M3u8Helper akan membuang track 32x18/TrickPlay dan Meneruskan Headers!
+            M3u8Helper.generateM3u8(
                 source = this.name,
-                name = this.name,
-                url = data,
-                type = streamType // Menentukan tipe link di sini (M3U8/DASH/VIDEO)
-            ) {
-                // Modifikasi parameter ekstra di dalam blok DSL
-                this.headers = customHeaders
-                this.quality = Qualities.Unknown.value
-                this.referer = ""
-            }
-        )
+                streamUrl = streamUrl,
+                referer = "",
+                headers = customHeaders
+            ).forEach(callback)
+            
+        } else {
+            // Untuk link DASH (.mpd)
+            callback.invoke(
+                newExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = streamUrl,
+                    type = if (streamUrl.contains(".mpd")) ExtractorLinkType.DASH else ExtractorLinkType.VIDEO
+                ) {
+                    this.headers = customHeaders
+                }
+            )
+        }
         
         return true
     }
