@@ -175,11 +175,11 @@ open class Adicinemax21 : TmdbProvider() {
         val type = getType(data.type)
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         
-        // REVISI 1: Menambahkan kembali filter bahasa yang tepat
+        // REVISI 1: Ditambahkan '&include_video_language=en,id' agar trailer berbahasa Inggris/Indonesia
         val resUrl = if (type == TvType.Movie) {
-            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id,ko,ja,zh"
+            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id"
         } else {
-            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id,ko,ja,zh"
+            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id"
         }
         val res = app.get(resUrl).parsedSafe<MediaDetail>()
             ?: throw ErrorLoadingException("Invalid Json Response")
@@ -212,7 +212,7 @@ open class Adicinemax21 : TmdbProvider() {
         val recommendations =
             res.recommendations?.results?.mapNotNull { media -> media.toSearchResponse() }
 
-        // REVISI 2: Memperbaiki format Link YouTube
+        // REVISI 2: Menggunakan firstOrNull() agar outputnya murni String
         val trailer = res.videos?.results
             ?.filter { it.site == "YouTube" && it.key?.isNotBlank() == true && it.type == "Trailer" }
             ?.sortedByDescending { it.type == "Trailer" }
