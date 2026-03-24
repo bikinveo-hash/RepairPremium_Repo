@@ -148,14 +148,14 @@ open class Adicinemax21 : TmdbProvider() {
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=en-US&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
+        // PERUBAHAN: Mengubah parameter language=en-US menjadi language=id-ID agar hasil pencarian berbahasa Indonesia
+        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
             }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // PERBAIKAN WARNING: Menghapus Elvis operator (?:) yang tidak berguna di akhir try-catch
         val data = try {
             if (url.startsWith("https://www.themoviedb.org/")) {
                 val segments = url.removeSuffix("/").split("/")
@@ -176,11 +176,11 @@ open class Adicinemax21 : TmdbProvider() {
         val type = getType(data.type)
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         
-        // PERBAIKAN TRAILER: Ditambahkan '&include_video_language=en,id' agar trailer berbahasa Inggris/Indonesia
+        // PERUBAHAN: Ditambahkan &language=id-ID agar sinopsis film/serial diterjemahkan ke bahasa Indonesia
         val resUrl = if (type == TvType.Movie) {
-            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id"
+            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         } else {
-            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id"
+            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         }
         val res = app.get(resUrl).parsedSafe<MediaDetail>()
             ?: throw ErrorLoadingException("Invalid Json Response")
@@ -222,7 +222,8 @@ open class Adicinemax21 : TmdbProvider() {
         return if (type == TvType.TvSeries) {
             val lastSeason = res.lastEpisodeToAir?.seasonNumber
             val episodes = res.seasons?.mapNotNull { season ->
-                app.get("$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey")
+                // PERUBAHAN: Ditambahkan &language=id-ID agar ringkasan cerita per episode juga menggunakan bahasa Indonesia
+                app.get("$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=id-ID")
                     .parsedSafe<MediaDetailEpisodes>()?.episodes?.map { eps ->
                         newEpisode(
                             data = LinkData(
