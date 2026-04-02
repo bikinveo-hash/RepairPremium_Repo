@@ -26,14 +26,12 @@ class IdlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // [JURUS 2] Ekstrak hash dengan lebih cerdas apapun format domainnya
         val hash = if (url.contains("data=")) {
             url.substringAfter("data=").substringBefore("&")
         } else {
             url.split("/").last()
         }
 
-        // Ambil domain asli dari iframe-nya secara dinamis
         val domain = if (url.startsWith("http")) url.substringBefore("/player").substringBefore("/v/") else mainUrl
 
         val originReferer = referer ?: "https://tv12.idlixku.com/"
@@ -55,7 +53,8 @@ class IdlixExtractor : ExtractorApi() {
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        val isM3u8Url = response.hls == true || finalUrl.contains(".m3u8")
+        // [DIPERBAIKI] Menambahkan tanda '?' karena response bersifat nullable
+        val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
 
         callback.invoke(
             newExtractorLink(
