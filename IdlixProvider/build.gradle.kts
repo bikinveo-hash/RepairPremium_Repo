@@ -1,4 +1,4 @@
-// use an integer for version numbers
+// use an integer for version number
 version = 2
 
 
