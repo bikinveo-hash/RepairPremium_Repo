@@ -22,20 +22,26 @@ class IdlixProvider : MainAPI() {
         TvType.Anime
     )
 
+    // [DIPERBAIKI] Posisi dibalik menjadi "URL" to "Nama Menu", sesuai standar fungsi mainPageOf di Cloudstream
     override val mainPage = mainPageOf(
-        "Featured" to "$mainUrl/",
-        "Film Terbaru" to "$mainUrl/movie/",
-        "Drama Korea" to "$mainUrl/genre/drama-korea/",
-        "Anime" to "$mainUrl/genre/anime/",
-        "Serial TV" to "$mainUrl/tvseries/"
+        "$mainUrl/" to "Featured",
+        "$mainUrl/movie/" to "Film Terbaru",
+        "$mainUrl/genre/drama-korea/" to "Drama Korea",
+        "$mainUrl/genre/anime/" to "Anime",
+        "$mainUrl/tvseries/" to "Serial TV"
     )
 
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt")
-        val href = this.selectFirst("a")?.attr("href")
         
-        // Memastikan data valid (Smart Cast menjadi non-null)
+        // Mengambil href, jika kosong kita set null dulu
+        var href = this.selectFirst("a")?.attr("href")
+        
+        // Memastikan data valid
         if (title.isNullOrBlank() || href.isNullOrBlank()) return null
+        
+        // Memastikan URL lengkap dengan https://
+        href = fixUrl(href)
         
         val posterUrl = this.selectFirst("img")?.attr("src")
         val qualityStr = this.selectFirst(".quality")?.text()
@@ -45,13 +51,11 @@ class IdlixProvider : MainAPI() {
         return if (isTvSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
-                // [DIPERBAIKI] Menggunakan ? let agar dipanggil hanya jika qualityStr tidak null
                 qualityStr?.let { addQuality(it) }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
-                // [DIPERBAIKI] Menggunakan ? let agar dipanggil hanya jika qualityStr tidak null
                 qualityStr?.let { addQuality(it) }
             }
         }
@@ -80,12 +84,14 @@ class IdlixProvider : MainAPI() {
 
         if (isTvSeries) {
             val episodes = mutableListOf<Episode>()
+            
             document.select(".se-c").forEach { seasonEl ->
                 val seasonNum = seasonEl.selectFirst(".se-q .se-t")?.text()?.toIntOrNull()
                 seasonEl.select(".episodios li").forEach { epEl ->
                     val epNum = epEl.selectFirst(".numerando")?.text()?.substringAfter("-")?.trim()?.toIntOrNull()
                     val epTitle = epEl.selectFirst(".episodiotitle a")?.text()
                     val epLink = epEl.selectFirst(".episodiotitle a")?.attr("href")
+                    
                     if (epLink != null) {
                         episodes.add(
                             newEpisode(epLink) {
@@ -97,6 +103,7 @@ class IdlixProvider : MainAPI() {
                     }
                 }
             }
+            
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
