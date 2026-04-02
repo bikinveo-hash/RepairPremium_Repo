@@ -2,11 +2,11 @@ package com.lagradost.cloudstream3.plugins // Sesuaikan nama package dengan stru
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
 class IdlixProviderPlugin : Plugin() {
-    override fun load(context: Context) {
+    // Tuliskan android.content.Context secara langsung di sini tanpa melakukan import di atas
+    override fun load(context: android.content.Context) {
         // Mendaftarkan API Website IDLIX
         registerMainAPI(IdlixProvider())
         
