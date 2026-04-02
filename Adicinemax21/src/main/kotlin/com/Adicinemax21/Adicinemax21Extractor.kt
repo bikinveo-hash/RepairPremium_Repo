@@ -564,10 +564,10 @@ object Adicinemax21Extractor : Adicinemax21() {
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
     ) {
-        [span_6](start_span)val apiUrl = "https://api3.aoneroom.com" //[span_6](end_span)
-        [span_7](start_span)val (brand, model) = Adimoviebox2Helper.randomBrandModel() //[span_7](end_span)
+        val apiUrl = "https://api3.aoneroom.com"
+        val (brand, model) = Adimoviebox2Helper.randomBrandModel()
 
-        [span_8](start_span)// 1. Search[span_8](end_span)
+        // 1. Search
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$title"}"""
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -583,7 +583,7 @@ object Adicinemax21Extractor : Adicinemax21() {
 
         val mainSubjectId = matchedSubject.subjectId ?: return
         
-        [span_9](start_span)// 2. Fetch Detail to get Languages/Dubs[span_9](end_span)
+        // 2. Fetch Detail to get Languages/Dubs
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
@@ -611,7 +611,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         val s = season ?: 0
         val e = episode ?: 0
 
-        [span_10](start_span)// 3. Loop through all language versions[span_10](end_span)
+        // 3. Loop through all language versions
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
             val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
@@ -631,7 +631,7 @@ object Adicinemax21Extractor : Adicinemax21() {
                 })
 
                 if (stream.id != null) {
-                    [span_11](start_span)// Internal Subtitles[span_11](end_span)
+                    // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -639,7 +639,7 @@ object Adicinemax21Extractor : Adicinemax21() {
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
-                    [span_12](start_span)// External Subtitles[span_12](end_span)
+                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -652,10 +652,10 @@ object Adicinemax21Extractor : Adicinemax21() {
     }
 
     private object Adimoviebox2Helper {
-        [span_13](start_span)private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==") //[span_13](end_span)
+        private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
         private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("") 
 
-        [span_14](start_span)fun randomBrandModel(): Pair<String, String> { //[span_14](end_span)
+        fun randomBrandModel(): Pair<String, String> {
             val brandModels = mapOf(
                 "Samsung" to listOf("SM-S918B", "SM-A528B", "SM-M336B"),
                 "Xiaomi" to listOf("2201117TI", "M2012K11AI", "Redmi Note 11"),
@@ -667,33 +667,33 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
 
         fun getHeaders(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
-            [span_15](start_span)val timestamp = System.currentTimeMillis() //[span_15](end_span)
+            val timestamp = System.currentTimeMillis()
             val xClientToken = generateXClientToken(timestamp)
             val xTrSignature = generateXTrSignature(method, "application/json", if(method=="POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
             return mapOf(
-                [span_16](start_span)"user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)", //[span_16](end_span)
+                "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
                 "accept" to "application/json", "content-type" to "application/json", "x-client-token" to xClientToken, "x-tr-signature" to xTrSignature,
                 "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
                 "x-client-status" to "0"
             )
         }
         
-        [span_17](start_span)private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } } //[span_17](end_span)
+        private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
         
-        [span_18](start_span)private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" } //[span_18](end_span)
+        private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" }
         
         @SuppressLint("UseKtx")
         private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
             val parsed = Uri.parse(url); val path = parsed.path ?: ""; 
             val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
-            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; [span_19](start_span)//[span_19](end_span)
+            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path;
             val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
-            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; [span_20](start_span)//[span_20](end_span)
+            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else "";
             val bodyLength = bodyBytes?.size?.toString() ?: ""
-            [span_21](start_span)val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl" //[span_21](end_span)
-            val secretBytes = base64DecodeArray(secretKeyDefault); [span_22](start_span)//[span_22](end_span)
+            val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
+            val secretBytes = base64DecodeArray(secretKeyDefault);
             val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
-            [span_23](start_span)val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8))) //[span_23](end_span)
+            val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
         private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
