@@ -161,7 +161,6 @@ class Adimoviebox2Provider : MainAPI() {
         return "$timestamp|2|$signatureB64"
     }
 
-    // Bagian kategori yang sudah diperbarui
     override val mainPage = mainPageOf(
         "872031290915189720" to "Tranding",
         "6528093688173053896" to "Tranding Indo",
@@ -203,7 +202,6 @@ class Adimoviebox2Provider : MainAPI() {
 
         val jsonBody = """{"page":$pg,"perPage":$perPage,"channelId":"$channelId","classify":"$classify","country":"$country","year":"$year","genre":"$genre","sort":"$sort"}"""
 
-        // Use current timestamps instead of hardcoded ones
         val xClientToken = generateXClientToken()
         val xTrSignature = generateXTrSignature("POST", "application/json", "application/json; charset=utf-8", url , jsonBody)
 
@@ -218,7 +216,7 @@ class Adimoviebox2Provider : MainAPI() {
             "x-tr-signature" to xTrSignature,
             "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"google","model":"${randomBrandModel()}","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
             "x-client-status" to "0",
-            "x-play-mode" to "2" // Optional, if needed for specific API behavior
+            "x-play-mode" to "2"
         )
 
         val getheaders = mapOf(
@@ -236,7 +234,6 @@ class Adimoviebox2Provider : MainAPI() {
         val response = if (request.data.contains("|")) app.post(url, headers = headers, requestBody = requestBody) else app.get(url, headers = getheaders)
 
         val responseBody = response.body.string()
-        // Use Jackson to parse the new API response structure
         val data = try {
             val mapper = jacksonObjectMapper()
             val root = mapper.readTree(responseBody)
@@ -428,11 +425,6 @@ class Adimoviebox2Provider : MainAPI() {
         val Description = meta?.get("overview")?.asText() ?: description
         val IMDBRating = meta?.get("imdbRating")?.asText()
 
-        // Menangkap data trailer dari Cinemeta yang baru ditambahkan
-        val trailerId = meta?.get("trailer")?.asText() 
-            ?: meta?.get("trailers")?.firstOrNull { it.get("type")?.asText() == "Trailer" }?.get("source")?.asText()
-        val extractedTrailerUrl = trailerId?.takeIf { it.isNotBlank() }?.let { "https://www.youtube.com/watch?v=$it" }
-
         if (type == TvType.TvSeries) {
             val allSubjectIds = mutableListOf<String>()
             allSubjectIds.add(id)
@@ -443,7 +435,7 @@ class Adimoviebox2Provider : MainAPI() {
                 }
             }
 
-            val episodeMap = mutableMapOf<Int, MutableSet<Int>>() // season -> episodes
+            val episodeMap = mutableMapOf<Int, MutableSet<Int>>()
 
             for (subjectId in allSubjectIds) {
                 val seasonUrl = "$mainUrl/wefeed-mobile-bff/subject-api/season-info?subjectId=$subjectId"
@@ -517,7 +509,6 @@ class Adimoviebox2Provider : MainAPI() {
                 }
             }
 
-            // fallback
             if (episodes.isEmpty()) {
                 episodes.add(
                     newEpisode("$id|1|1") {
@@ -539,7 +530,6 @@ class Adimoviebox2Provider : MainAPI() {
                 this.actors = actors
                 this.score = Score.from10(IMDBRating) ?: imdbRating?.let { Score.from10(it) }
                 this.duration = durationMinutes
-                this.trailerUrl = extractedTrailerUrl // Variabel trailer di sini
                 addImdbId(imdbId)
                 addTMDbId(tmdbId.toString())
             }
@@ -555,7 +545,6 @@ class Adimoviebox2Provider : MainAPI() {
             this.actors = actors
             this.score = Score.from10(IMDBRating) ?:imdbRating?.let { Score.from10(it) }
             this.duration = durationMinutes
-            this.trailerUrl = extractedTrailerUrl // Variabel trailer di sini juga
             addImdbId(imdbId)
             addTMDbId(tmdbId.toString())
         }
@@ -602,7 +591,7 @@ class Adimoviebox2Provider : MainAPI() {
 
             val subjectResponse = app.get(subjectUrl, headers = subjectHeaders)
             val mapper = jacksonObjectMapper()
-            val subjectIds = mutableListOf<Pair<String, String>>() // Pair of (subjectId, language)
+            val subjectIds = mutableListOf<Pair<String, String>>()
             var originalLanguageName = "Original"
             if (subjectResponse.code == 200) {
                 val subjectResponseBody = subjectResponse.body.string()
@@ -633,12 +622,8 @@ class Adimoviebox2Provider : MainAPI() {
                 token = xUserJson["token"]?.asText()
             }
 
-            // Always add the original subject ID first as the default source with proper language name
             subjectIds.add(0, Pair(originalSubjectId, originalLanguageName))
 
-            //var hasAnyLinks = false
-
-            // Process each subjectId (including dubs)
             for ((subjectId, language) in subjectIds) {
                 try {
                     val url = "$mainUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$subjectId&se=$season&ep=$episode"
@@ -662,17 +647,14 @@ class Adimoviebox2Provider : MainAPI() {
                         val responseBody = response.body.string()
                         val root = mapper.readTree(responseBody)
                         val playData = root["data"]
-                        // Handle the new API response format with streams
                         val streams = playData?.get("streams")
                         if (streams != null && streams.isArray) {
                             for (stream in streams) {
                                 val streamUrl = stream["url"]?.asText() ?: continue
                                 val format = stream["format"]?.asText() ?: ""
                                 val resolutions = stream["resolutions"]?.asText() ?: ""
-                                //val codecName = stream["codecName"]?.asText() ?: "h264"
                                 val signCookieRaw = stream["signCookie"]?.asText()
                                 val signCookie = if (signCookieRaw.isNullOrEmpty()) null else signCookieRaw
-                                //val duration = stream["duration"]?.asInt()
                                 val id = stream["id"]?.asText() ?: "$subjectId|$season|$episode"
                                 val quality = getHighestQuality(resolutions)
                                 callback.invoke(
@@ -762,11 +744,9 @@ class Adimoviebox2Provider : MainAPI() {
                                         )
                                     }
                                 }
-                                //hasAnyLinks = true
                             }
                         }
 
-                        //Ep Miss Match Fix (SplitsVilla used to test)
                         if (streams == null || !streams.isArray || streams.size() == 0) {
 
                             val fallbackUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$subjectId"
@@ -919,7 +899,6 @@ private suspend fun searchAndPick(
             val candYear = candDate.take(4).toIntOrNull()
             val candRating = o.optDouble("vote_average", Double.NaN)
 
-            // scoring
             var score = 0.0
             val normClean = cleanTitle(normTitle)
 
@@ -957,7 +936,6 @@ private suspend fun searchAndPick(
 
     if (bestId == null || bestScore < 40.0) return Pair(null, null)
 
-    // fetch details for external_ids
     val detailKind = if (bestIsTv) "tv" else "movie"
     val detailUrl = "https://api.themoviedb.org/3/$detailKind/$bestId?api_key=1865f43a0549ca50d341dd9ab8b29f49&append_to_response=external_ids"
     val detailText = app.get(detailUrl).text
@@ -1026,7 +1004,6 @@ suspend fun fetchTmdbLogoUrl(
     fun isSvg(o: JSONObject) = path(o).endsWith(".svg", true)
     fun urlOf(o: JSONObject) = "https://image.tmdb.org/t/p/w500${path(o)}"
 
-    // Language match
     var svgFallback: JSONObject? = null
 
     for (i in 0 until logos.length()) {
@@ -1042,7 +1019,6 @@ suspend fun fetchTmdbLogoUrl(
     }
     svgFallback?.let { return urlOf(it) }
 
-    // Highest voted fallback
     var best: JSONObject? = null
     var bestSvg: JSONObject? = null
 
@@ -1071,7 +1047,5 @@ suspend fun fetchTmdbLogoUrl(
     best?.let { return urlOf(it) }
     bestSvg?.let { return urlOf(it) }
 
-    // No language match & no voted logos
     return null
-}
 }
