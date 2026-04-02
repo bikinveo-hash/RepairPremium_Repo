@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.Score
@@ -45,10 +46,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.security.MessageDigest
+import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.max
-import java.security.SecureRandom
 
 class Adimoviebox2Provider : MainAPI() {
     override var mainUrl = "https://api3.aoneroom.com"
@@ -425,6 +426,11 @@ class Adimoviebox2Provider : MainAPI() {
         val Description = meta?.get("overview")?.asText() ?: description
         val IMDBRating = meta?.get("imdbRating")?.asText()
 
+        // Trailer fetching code
+        val trailerId = meta?.get("trailer")?.asText() 
+            ?: meta?.get("trailers")?.firstOrNull { it.get("type")?.asText() == "Trailer" }?.get("source")?.asText()
+        val extractedTrailerUrl = trailerId?.takeIf { it.isNotBlank() }?.let { "https://www.youtube.com/watch?v=$it" }
+
         if (type == TvType.TvSeries) {
             val allSubjectIds = mutableListOf<String>()
             allSubjectIds.add(id)
@@ -530,6 +536,7 @@ class Adimoviebox2Provider : MainAPI() {
                 this.actors = actors
                 this.score = Score.from10(IMDBRating) ?: imdbRating?.let { Score.from10(it) }
                 this.duration = durationMinutes
+                addTrailer(extractedTrailerUrl)
                 addImdbId(imdbId)
                 addTMDbId(tmdbId.toString())
             }
@@ -545,6 +552,7 @@ class Adimoviebox2Provider : MainAPI() {
             this.actors = actors
             this.score = Score.from10(IMDBRating) ?:imdbRating?.let { Score.from10(it) }
             this.duration = durationMinutes
+            addTrailer(extractedTrailerUrl)
             addImdbId(imdbId)
             addTMDbId(tmdbId.toString())
         }
@@ -796,7 +804,6 @@ class Adimoviebox2Provider : MainAPI() {
                     continue
                 }
             }
-            
             return true
               
         } catch (_: Exception) {
