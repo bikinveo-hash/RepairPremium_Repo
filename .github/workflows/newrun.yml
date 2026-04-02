@@ -1,3 +1,62 @@
+name: Build
+
+concurrency:
+  group: "build"
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths-ignore:
+      - '*.md'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout Source Code ke folder "src"
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          path: "src"
+
+      # 2. Checkout Branch "builds" ke folder "builds"
+      # INI KUNCINYA: Kita download branch yang sudah ada, jadi repo.json ikut terdownload
+      - name: Checkout Builds Branch
+        uses: actions/checkout@v4
+        with:
+          ref: "builds"
+          path: "builds"
+
+      # 3. Bersihkan plugin lama TAPI JANGAN HAPUS repo.json
+      - name: Clean old builds
+        run: |
+          # Hanya hapus file plugin dan jar lama agar tidak menumpuk
+          rm -f $GITHUB_WORKSPACE/builds/*.cs3
+          rm -f $GITHUB_WORKSPACE/builds/*.jar
+          # File repo.json TIDAK DIHAPUS di sini, jadi dia aman.
+          
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: adopt
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create local.properties
+        run: |
+          cd $GITHUB_WORKSPACE/src
+          touch local.properties
+          # Masukkan logic secret kamu disini jika perlu (seperti di kode sebelumnya)
+
       - name: Build Plugins
         run: |
           cd $GITHUB_WORKSPACE/src
@@ -21,3 +80,24 @@
           cp **/build/*.cs3 $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
           cp **/build/*.jar $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
           cp build/plugins.json $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
+
+      - name: Push builds
+        run: |
+          cd $GITHUB_WORKSPACE/builds
+          
+          # Cek apakah repo.json masih ada (Safety Check)
+          if [ ! -f "repo.json" ]; then
+             echo "BAHAYA: repo.json hilang! Membatalkan proses."
+             exit 1
+          fi
+
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          
+          # Tambahkan semua perubahan (plugin baru)
+          git add .
+          
+          # Commit dan Push
+          # Kita pakai --amend agar history git tidak membengkak (opsional, tapi bagus)
+          git commit --amend -m "Build update: $GITHUB_SHA" || git commit -m "Build update: $GITHUB_SHA"
+          git push --force
