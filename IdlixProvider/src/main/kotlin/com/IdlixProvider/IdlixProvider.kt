@@ -22,7 +22,6 @@ class IdlixProvider : MainAPI() {
         TvType.Anime
     )
 
-    // [DIPERBAIKI] Posisi dibalik menjadi "URL" to "Nama Menu", sesuai standar fungsi mainPageOf di Cloudstream
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Featured",
         "$mainUrl/movie/" to "Film Terbaru",
@@ -34,13 +33,10 @@ class IdlixProvider : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt")
         
-        // Mengambil href, jika kosong kita set null dulu
         var href = this.selectFirst("a")?.attr("href")
         
-        // Memastikan data valid
         if (title.isNullOrBlank() || href.isNullOrBlank()) return null
         
-        // Memastikan URL lengkap dengan https://
         href = fixUrl(href)
         
         val posterUrl = this.selectFirst("img")?.attr("src")
@@ -116,13 +112,11 @@ class IdlixProvider : MainAPI() {
         }
     }
 
-    // Data Class wadah JSON IDLIX
     data class DooPlayAjaxResponse(
         @JsonProperty("embed_url") val embed_url: String?,
         @JsonProperty("type") val type: String?
     )
 
-    // Fungsi pemecah gembok AES independen
     private fun decryptCryptoJS(encryptedJsonStr: String, passphrase: String): String {
         try {
             val ct = Regex(""""ct"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
@@ -204,7 +198,19 @@ class IdlixProvider : MainAPI() {
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
             if (iframeUrl.isNotBlank()) {
-                loadExtractor(iframeUrl, data, subtitleCallback, callback)
+                // [JURUS 1] Bypass loadExtractor bawaan agar tidak tertolak jika domain playernya beda
+                if (iframeUrl.contains("jenius", ignoreCase = true) || 
+                    iframeUrl.contains("player", ignoreCase = true) || 
+                    iframeUrl.contains("idlix", ignoreCase = true)) {
+                    try {
+                        IdlixExtractor().getUrl(iframeUrl, data, subtitleCallback, callback)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                } else {
+                    // Jika itu link umum (seperti YouTube, Doodstream, Mixdrop)
+                    loadExtractor(iframeUrl, data, subtitleCallback, callback)
+                }
             }
         }
         return true
