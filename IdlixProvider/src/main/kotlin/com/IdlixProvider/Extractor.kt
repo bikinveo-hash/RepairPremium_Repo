@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.plugins // Sesuaikan packagenya
+package com.lagradost.cloudstream3.plugins
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class IdlixExtractor : ExtractorApi() {
     override val name = "JeniusPlay"
@@ -45,19 +46,19 @@ class IdlixExtractor : ExtractorApi() {
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        // [DIPERBAIKI] Menggunakan pemanggilan aman (?.) 
         val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
 
-        // [DIPERBAIKI] Menggunakan parameter 'type' menggantikan 'isM3u8' yang deprecated
+        // [DIPERBAIKI] Menggunakan newExtractorLink yang merupakan standar terbaru Cloudstream
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
                 name = this.name,
                 url = finalUrl,
-                referer = "$mainUrl/",
-                quality = Qualities.Unknown.value,
                 type = if (isM3u8Url) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            )
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.Unknown.value
+            }
         )
     }
 }
