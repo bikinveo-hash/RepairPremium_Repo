@@ -162,12 +162,12 @@ class Adimoviebox2Provider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "4516404531735022304" to "Trending",
-        "5692654647815587592" to "Trending in Cinema",
-        "414907768299210008"  to "Bollywood",
-        "3859721901924910512" to "South Indian",
-        "8019599703232971616" to "Hollywood",
-        "4741626294545400336" to "Top Series This Week",
+        "872031290915189720" to "Trending",
+        "6528093688173053896" to "Trending in Indo",
+        "5283462032510044280"  to "Indo Drama",
+        "5848753831881965888" to "Indo Horror",
+        "4993310637209048808" to "Kehidupan Menyenangkan",
+        "3528002473103362040" to "Horror Lucu",
         "8434602210994128512" to "Anime",
         "1255898847918934600" to "Reality TV",
         "4903182713986896328" to "Indian Drama",
