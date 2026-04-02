@@ -1,4 +1,4 @@
-// use an integer for version number
+// use an integer for version numbers
 version = 2
 
 
@@ -23,5 +23,6 @@ cloudstream {
         "Anime",
         "AsianDrama",
     )
+    isCrossPlatform = false
     iconUrl = "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16"
 }
