@@ -29,6 +29,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import java.security.MessageDigest
 import android.net.Uri
+import android.annotation.SuppressLint
 
 object AdiFilmSemiExtractor : AdiFilmSemi() {
 
@@ -154,7 +155,8 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
                     if (el != null) {
                         val href = el.attr("href")
                         if (href.isNotEmpty() && !href.contains("javascript") && href != "#") {
-                            targetUrl = fixUrl(href, baseUrl); break
+                            targetUrl = fixUrl(href, baseUrl)
+                            break
                         }
                     }
                 }
@@ -388,6 +390,7 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
         val subRes = app.get("${AdiFilmSemi.mappleAPI}/api/subtitles?id=$tmdbId&mediaType=$mediaType${if (season == null) "" else "&season=1&episode=1"}", referer = "${AdiFilmSemi.mappleAPI}/").text
         tryParseJson<ArrayList<MappleSubtitle>>(subRes)?.map { subtitle -> subtitleCallback.invoke(newSubtitleFile(subtitle.display ?: "", fixUrl(subtitle.url ?: return@map, AdiFilmSemi.mappleAPI))) }
     }
+
     // ================== VIDLINK SOURCE ==================
     suspend fun invokeVidlink(
         tmdbId: Int?, season: Int?, episode: Int?, callback: (ExtractorLink) -> Unit,
@@ -470,22 +473,23 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
         val url = "${AdiFilmSemi.vidrockAPI}/$type/$tmdbId${if (type == "movie") "" else "/$season/$episode"}"
         val encryptData = VidrockHelper.encrypt(tmdbId, type, season, episode)
         app.get("${AdiFilmSemi.vidrockAPI}/api/$type/$encryptData", referer = url).parsedSafe<LinkedHashMap<String, HashMap<String, String>>>()?.map { source ->
-                if (source.key == "source2") {
-                    val json = app.get(source.value["url"] ?: return@map, referer = "${AdiFilmSemi.vidrockAPI}/").text
-                    tryParseJson<ArrayList<VidrockSource>>(json)?.reversed()?.map mirror@{ it ->
-                        callback.invoke(newExtractorLink("Vidrock", "Vidrock [Source2]", it.url ?: return@mirror, INFER_TYPE) { this.quality = it.resolution ?: Qualities.Unknown.value; this.headers = mapOf("Range" to "bytes=0-", "Referer" to "${AdiFilmSemi.vidrockAPI}/") })
-                    }
-                } else {
-                    callback.invoke(newExtractorLink("Vidrock", "Vidrock [${source.key.capitalize()}]", source.value["url"] ?: return@map, ExtractorLinkType.M3U8) { this.referer = "${AdiFilmSemi.vidrockAPI}/"; this.headers = mapOf("Origin" to AdiFilmSemi.vidrockAPI) })
+            if (source.key == "source2") {
+                val json = app.get(source.value["url"] ?: return@map, referer = "${AdiFilmSemi.vidrockAPI}/").text
+                tryParseJson<ArrayList<VidrockSource>>(json)?.reversed()?.map mirror@{ it ->
+                    callback.invoke(newExtractorLink("Vidrock", "Vidrock [Source2]", it.url ?: return@mirror, INFER_TYPE) { this.quality = it.resolution ?: Qualities.Unknown.value; this.headers = mapOf("Range" to "bytes=0-", "Referer" to "${AdiFilmSemi.vidrockAPI}/") })
                 }
+            } else {
+                callback.invoke(newExtractorLink("Vidrock", "Vidrock [${source.key.capitalize()}]", source.value["url"] ?: return@map, ExtractorLinkType.M3U8) { this.referer = "${AdiFilmSemi.vidrockAPI}/"; this.headers = mapOf("Origin" to AdiFilmSemi.vidrockAPI) })
             }
+        }
         val subUrl = "$subAPI/$type/$tmdbId${if (type == "movie") "" else "/$season/$episode"}"
         val res = app.get(subUrl).text
         tryParseJson<ArrayList<VidrockSubtitle>>(res)?.map { subtitle ->
             subtitleCallback.invoke(newSubtitleFile(subtitle.label?.replace(Regex("\\d"), "")?.replace(Regex("\\s+Hi"), "")?.trim() ?: return@map, subtitle.file ?: return@map))
         }
     }
-        // ================== CINEMAOS SOURCE ==================
+
+    // ================== CINEMAOS SOURCE ==================
     suspend fun invokeCinemaOS(
         imdbId: String? = null, tmdbId: Int? = null, title: String? = null, season: Int? = null, episode: Int? = null, year: Int? = null,
         callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit,
@@ -558,16 +562,18 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
         sourceList?.data?.forEach { source -> try { val streamUrl = if (season == null) "$RiveStreamAPI/api/backendfetch?requestID=movieVideoProvider&id=$id&service=$source&secretKey=$secretKey" else "$RiveStreamAPI/api/backendfetch?requestID=tvVideoProvider&id=$id&season=$season&episode=$episode&service=$source&secretKey=$secretKey"; val responseString = retry { app.get(streamUrl, headers, timeout = 10).text } ?: return@forEach; try { val json = JSONObject(responseString); val sourcesArray = json.optJSONObject("data")?.optJSONArray("sources") ?: return@forEach; for (i in 0 until sourcesArray.length()) { val src = sourcesArray.getJSONObject(i); val label = if(src.optString("source").contains("AsiaCloud",ignoreCase = true)) "RiveStream ${src.optString("source")}[${src.optString("quality")}]" else "RiveStream ${src.optString("source")}"; val quality = Qualities.P1080.value; val url = src.optString("url"); try { if (url.contains("proxy?url=")) { try { val fullyDecoded = URLDecoder.decode(url, "UTF-8"); val encodedUrl = fullyDecoded.substringAfter("proxy?url=").substringBefore("&headers="); val decodedUrl = URLDecoder.decode(encodedUrl, "UTF-8"); val encodedHeaders = fullyDecoded.substringAfter("&headers="); val headersMap = try { val jsonStr = URLDecoder.decode(encodedHeaders, "UTF-8"); JSONObject(jsonStr).let { json -> json.keys().asSequence().associateWith { json.getString(it) } } } catch (e: Exception) { emptyMap() }; val referer = headersMap["Referer"] ?: ""; val origin = headersMap["Origin"] ?: ""; val videoHeaders = mapOf("Referer" to referer, "Origin" to origin); val type = if (decodedUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else INFER_TYPE; callback.invoke(newExtractorLink(label, label, decodedUrl, type) { this.quality = quality; this.referer = referer; this.headers = videoHeaders }) } catch (e: Exception) {} } else { val type = if (url.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else INFER_TYPE; callback.invoke(newExtractorLink("$label (VLC)", "$label (VLC)", url, type) { this.referer = ""; this.quality = quality }) } } catch (e: Exception) {} } } catch (e: Exception) {} } catch (e: Exception) {} }
     }
 
-    // ================== ADIMOVIEBOX 2 SOURCE (TRUE FIX) ==================
+    // ================== ADIMOVIEBOX 2 SOURCE (NEW UPDATED) ==================
     suspend fun invokeAdimoviebox2(
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
     ) {
-        val apiUrl = "https://api.inmoviebox.com"
+        val apiUrl = "https://api3.aoneroom.com"
+        val (brand, model) = Adimoviebox2Helper.randomBrandModel()
+
         // 1. Search
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$title"}"""
-        val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody)
+        val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
         val searchRes = app.post(searchUrl, headers = headersSearch, requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
 
         val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
@@ -580,20 +586,16 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
 
         val mainSubjectId = matchedSubject.subjectId ?: return
         
-        // 2. Fetch Detail to get Languages/Dubs (MENIRU KODE ASLI)
+        // 2. Fetch Detail to get Languages/Dubs
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
-        val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET")
+        val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
         
-        // Manual JSON parsing to handle dynamic Dubs structure like original code
         val subjectList = mutableListOf<Pair<String, String>>()
         try {
             val json = JSONObject(detailRes)
             val data = json.optJSONObject("data")
-            // Add Original first
             subjectList.add(mainSubjectId to "Original Audio")
-            
-            // Check for Dubs
             val dubs = data?.optJSONArray("dubs")
             if (dubs != null) {
                 for (i in 0 until dubs.length()) {
@@ -615,7 +617,7 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
         // 3. Loop through all language versions
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
-            val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET")
+            val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
             val playRes = app.get(playUrl, headers = headersPlay).parsedSafe<Adimoviebox2PlayResponse>()
             val streams = playRes?.data?.streams ?: return@forEach
 
@@ -623,12 +625,10 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
                 val streamUrl = stream.url ?: return@forEach
                 val quality = getQualityFromName(stream.resolutions)
                 val signCookie = stream.signCookie
-                val baseHeaders = Adimoviebox2Helper.getHeaders(streamUrl, null, "GET").toMutableMap()
+                val baseHeaders = Adimoviebox2Helper.getHeaders(streamUrl, null, "GET", brand, model).toMutableMap()
                 if (!signCookie.isNullOrEmpty()) baseHeaders["Cookie"] = signCookie
 
-                // FIX NAME: Menampilkan Bahasa di Nama Source
                 val sourceName = "Adimoviebox2 ($languageName)"
-                
                 callback.invoke(newExtractorLink(sourceName, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
                     this.quality = quality; this.headers = baseHeaders
                 })
@@ -636,26 +636,18 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
                 if (stream.id != null) {
                     // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
-                    val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET")
+                    val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                         val lang = cap.language ?: cap.lanName ?: cap.lan ?: "Unknown"
-                        val capUrl = cap.url ?: return@forEach
-                        subtitleCallback.invoke(newSubtitleFile(lang, capUrl))
+                        subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
-                    // External Subtitles (FIX SUBTITLE: Headers manual seperti kode asli)
+                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
-                    
-                    // Header khusus untuk External Subtitles (PENTING!)
-                    val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET").toMutableMap()
-                    // Kode asli menggunakan X-Client-Info dsb dengan huruf besar di subtitle, 
-                    // tapi map 'Adimoviebox2Helper' kita lowercase. Kita coba pakai helper dulu.
-                    // Jika masih gagal, mungkin perlu header 'Cookie' signCookie juga di sini.
-                    
+                    val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                         val lang = cap.lan ?: cap.lanName ?: cap.language ?: "Unknown"
-                        val capUrl = cap.url ?: return@forEach
-                        subtitleCallback.invoke(newSubtitleFile(lang, capUrl))
+                        subtitleCallback.invoke(newSubtitleFile("$lang ($languageName) [Ext]", cap.url ?: return@forEach))
                     }
                 }
             }
@@ -664,24 +656,44 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
 
     private object Adimoviebox2Helper {
         private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
-        fun getHeaders(url: String, body: String? = null, method: String = "POST"): Map<String, String> {
+        private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("") 
+
+        fun randomBrandModel(): Pair<String, String> {
+            val brandModels = mapOf(
+                "Samsung" to listOf("SM-S918B", "SM-A528B", "SM-M336B"),
+                "Xiaomi" to listOf("2201117TI", "M2012K11AI", "Redmi Note 11"),
+                "Google" to listOf("Pixel 7", "Pixel 8")
+            )
+            val brand = brandModels.keys.random()
+            val model = brandModels[brand]!!.random()
+            return brand to model
+        }
+
+        fun getHeaders(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
             val timestamp = System.currentTimeMillis()
             val xClientToken = generateXClientToken(timestamp)
             val xTrSignature = generateXTrSignature(method, "application/json", if(method=="POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
             return mapOf(
-                "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; sdk_gphone64_x86_64; Build/BP22.250325.006; Cronet/133.0.6876.3)",
+                "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
                 "accept" to "application/json", "content-type" to "application/json", "x-client-token" to xClientToken, "x-tr-signature" to xTrSignature,
-                "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"da2b99c821e6ea023e4be55b54d5f7d8","install_store":"ps","gaid":"d7578036d13336cc","brand":"google","model":"sdk_gphone64_x86_64","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
+                "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
                 "x-client-status" to "0"
             )
         }
+        
         private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
-        private fun generateXClientToken(timestamp: Long): String { val tsStr = timestamp.toString(); val reversed = tsStr.reversed(); val hash = md5(reversed.toByteArray()); return "$tsStr,$hash" }
+        
+        private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" }
+        
+        @SuppressLint("UseKtx")
         private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
-            val parsed = Uri.parse(url); val path = parsed.path ?: ""; val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
-            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; val bodyBytes = body?.toByteArray(Charsets.UTF_8); val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; val bodyLength = bodyBytes?.size?.toString() ?: ""
+            val parsed = Uri.parse(url); val path = parsed.path ?: ""; 
+            val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
+            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
+            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; val bodyLength = bodyBytes?.size?.toString() ?: ""
             val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
-            val secretBytes = base64DecodeArray(secretKeyDefault); val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
+            val secretBytes = base64DecodeArray(secretKeyDefault); val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
+            val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
         private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
