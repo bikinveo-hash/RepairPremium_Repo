@@ -23,6 +23,6 @@ cloudstream {
         "Anime",
         "AsianDrama",
     )
-    isCrossPlatform = true
+    isCrossPlatform = false
     iconUrl = "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16"
 }
