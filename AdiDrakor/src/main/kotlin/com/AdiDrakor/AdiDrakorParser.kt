@@ -559,6 +559,7 @@ data class Adimoviebox2Stream(
     @JsonProperty("url") val url: String? = null,
     @JsonProperty("format") val format: String? = null,
     @JsonProperty("resolutions") val resolutions: String? = null,
+    @JsonProperty("signCookie") val signCookie: String? = null
 )
 
 data class Adimoviebox2SubtitleResponse(
