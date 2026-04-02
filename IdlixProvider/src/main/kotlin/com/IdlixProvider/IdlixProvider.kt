@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.plugins // Sesuaikan packagenya
+package com.lagradost.cloudstream3.plugins
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
@@ -31,12 +31,11 @@ class IdlixProvider : MainAPI() {
     )
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // [DIPERBAIKI] Fallback ke string kosong ("") agar Kotlin tidak menganggapnya Nullable
-        val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt") ?: ""
-        val href = this.selectFirst("a")?.attr("href") ?: ""
+        val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt")
+        val href = this.selectFirst("a")?.attr("href")
         
-        // Memastikan datanya valid
-        if (title.isBlank() || href.isBlank()) return null
+        // Memastikan data valid (Smart Cast menjadi non-null)
+        if (title.isNullOrBlank() || href.isNullOrBlank()) return null
         
         val posterUrl = this.selectFirst("img")?.attr("src")
         val qualityStr = this.selectFirst(".quality")?.text()
@@ -46,12 +45,14 @@ class IdlixProvider : MainAPI() {
         return if (isTvSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
-                addQuality(qualityStr)
+                // [DIPERBAIKI] Menggunakan ? let agar dipanggil hanya jika qualityStr tidak null
+                qualityStr?.let { addQuality(it) }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
-                addQuality(qualityStr)
+                // [DIPERBAIKI] Menggunakan ? let agar dipanggil hanya jika qualityStr tidak null
+                qualityStr?.let { addQuality(it) }
             }
         }
     }
@@ -114,10 +115,9 @@ class IdlixProvider : MainAPI() {
         @JsonProperty("type") val type: String?
     )
 
-    // [DIPERBAIKI] Fungsi mandiri pengganti AppUtils.cryptoJS yang tidak ada di versi ini
+    // Fungsi pemecah gembok AES independen
     private fun decryptCryptoJS(encryptedJsonStr: String, passphrase: String): String {
         try {
-            // Parsing menggunakan regex untuk efisiensi di Android
             val ct = Regex(""""ct"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
             val saltHex = Regex(""""s"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
             val ivHex = Regex(""""iv"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1)
@@ -190,14 +190,12 @@ class IdlixProvider : MainAPI() {
             val embedHtml = if (embedEncrypted.contains("<iframe")) {
                 embedEncrypted
             } else {
-                // Kunci Rahasia IDLIX
                 val key = "#dooplay-api-idlixkucom"
                 decryptCryptoJS(embedEncrypted, key).replace("\\/", "/")
             }
 
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
-            // Redirect ke Extractor JeniusPlay
             if (iframeUrl.isNotBlank()) {
                 loadExtractor(iframeUrl, data, subtitleCallback, callback)
             }
