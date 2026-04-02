@@ -26,14 +26,23 @@ class IdlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val hash = url.split("/").last()
+        // [JURUS 2] Ekstrak hash dengan lebih cerdas apapun format domainnya
+        val hash = if (url.contains("data=")) {
+            url.substringAfter("data=").substringBefore("&")
+        } else {
+            url.split("/").last()
+        }
+
+        // Ambil domain asli dari iframe-nya secara dinamis
+        val domain = if (url.startsWith("http")) url.substringBefore("/player").substringBefore("/v/") else mainUrl
+
         val originReferer = referer ?: "https://tv12.idlixku.com/"
-        val apiUrl = "$mainUrl/player/index.php?data=$hash&do=getVideo"
+        val apiUrl = "$domain/player/index.php?data=$hash&do=getVideo"
 
         val response = app.post(
             url = apiUrl,
             headers = mapOf(
-                "Origin" to mainUrl,
+                "Origin" to domain,
                 "X-Requested-With" to "XMLHttpRequest",
                 "Accept" to "*/*"
             ),
@@ -46,9 +55,8 @@ class IdlixExtractor : ExtractorApi() {
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
+        val isM3u8Url = response.hls == true || finalUrl.contains(".m3u8")
 
-        // [DIPERBAIKI] Menggunakan newExtractorLink yang merupakan standar terbaru Cloudstream
         callback.invoke(
             newExtractorLink(
                 source = this.name,
@@ -56,7 +64,7 @@ class IdlixExtractor : ExtractorApi() {
                 url = finalUrl,
                 type = if (isM3u8Url) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = "$domain/"
                 this.quality = Qualities.Unknown.value
             }
         )
