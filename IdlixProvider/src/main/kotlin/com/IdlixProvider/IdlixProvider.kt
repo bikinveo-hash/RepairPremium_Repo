@@ -1,10 +1,14 @@
-package com.lagradost.cloudstream3.plugins // Sesuaikan package
+package com.lagradost.cloudstream3.plugins // Sesuaikan packagenya
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import java.security.MessageDigest
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://tv12.idlixku.com"
@@ -18,7 +22,6 @@ class IdlixProvider : MainAPI() {
         TvType.Anime
     )
 
-    // Daftar menu yang muncul di beranda
     override val mainPage = mainPageOf(
         "Featured" to "$mainUrl/",
         "Film Terbaru" to "$mainUrl/movie/",
@@ -27,10 +30,14 @@ class IdlixProvider : MainAPI() {
         "Serial TV" to "$mainUrl/tvseries/"
     )
 
-    // Alat Parser untuk Bungkusan Film (Bisa dipakai di Homepage & Search)
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt") ?: return null
-        val href = this.selectFirst("a")?.attr("href") ?: return null
+        // [DIPERBAIKI] Fallback ke string kosong ("") agar Kotlin tidak menganggapnya Nullable
+        val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt") ?: ""
+        val href = this.selectFirst("a")?.attr("href") ?: ""
+        
+        // Memastikan datanya valid
+        if (title.isBlank() || href.isBlank()) return null
+        
         val posterUrl = this.selectFirst("img")?.attr("src")
         val qualityStr = this.selectFirst(".quality")?.text()
 
@@ -63,7 +70,6 @@ class IdlixProvider : MainAPI() {
         return document.select("article.item").mapNotNull { it.toSearchResult() }
     }
 
-    // Mengambil Detail Film / Seri (Gambar, Sinopsis, Daftar Episode)
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst(".sheader .data h1")?.text() ?: return null
@@ -73,7 +79,6 @@ class IdlixProvider : MainAPI() {
 
         if (isTvSeries) {
             val episodes = mutableListOf<Episode>()
-            // Looping mengambil data setiap episode di TV Series
             document.select(".se-c").forEach { seasonEl ->
                 val seasonNum = seasonEl.selectFirst(".se-q .se-t")?.text()?.toIntOrNull()
                 seasonEl.select(".episodios li").forEach { epEl ->
@@ -103,13 +108,54 @@ class IdlixProvider : MainAPI() {
         }
     }
 
-    // Data Class wadah untuk admin-ajax.php
+    // Data Class wadah JSON IDLIX
     data class DooPlayAjaxResponse(
         @JsonProperty("embed_url") val embed_url: String?,
         @JsonProperty("type") val type: String?
     )
 
-    // Ekstraksi Link Video (Pemecah Gembok)
+    // [DIPERBAIKI] Fungsi mandiri pengganti AppUtils.cryptoJS yang tidak ada di versi ini
+    private fun decryptCryptoJS(encryptedJsonStr: String, passphrase: String): String {
+        try {
+            // Parsing menggunakan regex untuk efisiensi di Android
+            val ct = Regex(""""ct"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
+            val saltHex = Regex(""""s"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
+            val ivHex = Regex(""""iv"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1)
+
+            val salt = saltHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            val ctBytes = base64DecodeArray(ct)
+
+            var concatenatedHashes = byteArrayOf()
+            var currentHash = byteArrayOf()
+            val passBytes = passphrase.toByteArray(Charsets.UTF_8)
+            val md5 = MessageDigest.getInstance("MD5")
+
+            while (concatenatedHashes.size < 48) {
+                md5.reset()
+                md5.update(currentHash)
+                md5.update(passBytes)
+                md5.update(salt)
+                currentHash = md5.digest()
+                concatenatedHashes += currentHash
+            }
+
+            val key = concatenatedHashes.copyOfRange(0, 32)
+            val derivedIv = if (ivHex != null) {
+                ivHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            } else {
+                concatenatedHashes.copyOfRange(32, 48)
+            }
+
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(derivedIv))
+
+            return String(cipher.doFinal(ctBytes), Charsets.UTF_8)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return ""
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -141,18 +187,17 @@ class IdlixProvider : MainAPI() {
 
             val embedEncrypted = ajaxResponse?.embed_url ?: return@forEach
             
-            // Decrypt CryptoJS bawaan bawaan Cloudstream AppUtils!
             val embedHtml = if (embedEncrypted.contains("<iframe")) {
                 embedEncrypted
             } else {
-                // Kunci Rahasia IDLIX yang kita temukan bersama
+                // Kunci Rahasia IDLIX
                 val key = "#dooplay-api-idlixkucom"
-                AppUtils.cryptoJS.decrypt(embedEncrypted, key).replace("\\/", "/")
+                decryptCryptoJS(embedEncrypted, key).replace("\\/", "/")
             }
 
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
-            // Jika ada link JeniusPlay, lempar ke Extractor kita
+            // Redirect ke Extractor JeniusPlay
             if (iframeUrl.isNotBlank()) {
                 loadExtractor(iframeUrl, data, subtitleCallback, callback)
             }
