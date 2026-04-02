@@ -1,69 +1,63 @@
-package com.IdlixProvider
+package com.lagradost.cloudstream3.plugins // Sesuaikan package
 
-import com.IdlixProvider.IdlixProvider.ResponseSource
-import com.IdlixProvider.IdlixProvider.Tracks
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.getAndUnpack
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 
-class Jeniusplay : ExtractorApi() {
-    override var name = "Jeniusplay"
-    override var mainUrl = "https://jeniusplay.com"
+class IdlixExtractor : ExtractorApi() {
+    override val name = "JeniusPlay" // Nama ini yang akan muncul di daftar putar
+    override val mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
 
+    // Data class untuk menangkap balasan JSON JeniusPlay
+    data class JeniusResponse(
+        @JsonProperty("securedLink") val securedLink: String?,
+        @JsonProperty("videoSource") val videoSource: String?,
+        @JsonProperty("hls") val hls: Boolean?
+    )
+
     override suspend fun getUrl(
-        url: String,
+        url: String, 
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = referer).documentLarge
-        val hash = url.split("/").last().substringAfter("data=")
+        // Ambil hash video dari ujung URL (misal: .../video/5062fa095d...)
+        val hash = url.split("/").last()
+        val originReferer = referer ?: "https://tv12.idlixku.com/"
+        val apiUrl = "$mainUrl/player/index.php?data=$hash&do=getVideo"
 
-        val m3uLink = app.post(
-            url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
-            data = mapOf("hash" to hash, "r" to "$referer"),
-            referer = referer,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-        ).parsed<ResponseSource>().videoSource
+        // Eksekusi POST Request
+        val response = app.post(
+            url = apiUrl,
+            headers = mapOf(
+                "Origin" to mainUrl,
+                "X-Requested-With" to "XMLHttpRequest",
+                "Accept" to "*/*"
+            ),
+            data = mapOf(
+                "hash" to hash,
+                "r" to originReferer
+            ),
+            referer = originReferer
+        ).parsedSafe<JeniusResponse>()
 
+        // Ambil securedLink (m3u8). Kalau kosong, pakai videoSource (txt)
+        val finalUrl = response?.securedLink ?: response?.videoSource ?: return
+
+        // Kirim ke Cloudstream
         callback.invoke(
-            newExtractorLink(
-                name,
-                name,
-                url = m3uLink,
-                ExtractorLinkType.M3U8
+            ExtractorLink(
+                name = this.name,
+                source = this.name,
+                url = finalUrl,
+                referer = "$mainUrl/",
+                quality = Qualities.Unknown.value,
+                isM3u8 = response.hls == true || finalUrl.contains(".m3u8")
             )
         )
-
-        document.select("script").map { script ->
-            if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
-                val subData =
-                    getAndUnpack(script.data()).substringAfter("\"tracks\":[").substringBefore("],")
-                AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
-                    subtitleCallback.invoke(
-                        newSubtitleFile(
-                            getLanguage(subtitle.label ?: ""),
-                            subtitle.file
-                        )
-                    )
-                }
-            }
-        }
-    }
-
-
-    private fun getLanguage(str: String): String {
-        return when {
-            str.contains("indonesia", true) || str
-                .contains("bahasa", true) -> "Indonesian"
-            else -> str
-        }
     }
 }
