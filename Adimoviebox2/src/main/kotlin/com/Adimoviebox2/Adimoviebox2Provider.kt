@@ -161,44 +161,16 @@ class Adimoviebox2Provider : MainAPI() {
         return "$timestamp|2|$signatureB64"
     }
 
+    // Bagian kategori yang sudah diperbarui
     override val mainPage = mainPageOf(
-        "872031290915189720" to "Trending",
-        "6528093688173053896" to "Trending in Indo",
-        "5283462032510044280"  to "Indo Drama",
+        "872031290915189720" to "Tranding",
+        "6528093688173053896" to "Tranding Indo",
+        "5283462032510044280" to "Indo Drama",
         "5848753831881965888" to "Indo Horror",
-        "4993310637209048808" to "Kehidupan Menyenangkan",
+        "7749480172839487888" to "Komedi Indo",
         "3528002473103362040" to "Horror Lucu",
-        "8434602210994128512" to "Anime",
-        "1255898847918934600" to "Reality TV",
-        "4903182713986896328" to "Indian Drama",
-        "7878715743607948784" to "Korean Drama",
-        "8788126208987989488" to "Chinese Drama",
-        "3910636007619709856" to "Western TV",
-        "5177200225164885656" to "Turkish Drama",
-        "1|1" to "Movies",
-        "1|2" to "Series",
-        "1|1006" to "Anime",
-        "1|1;country=India" to "Indian (Movies)",
-        "1|2;country=India" to "Indian (Series)",
-        "1|1;classify=Hindi dub;country=United States" to "USA (Movies)",
-        "1|2;classify=Hindi dub;country=United States" to "USA (Series)",
-        "1|1;country=Japan" to "Japan (Movies)",
-        "1|2;country=Japan" to "Japan (Series)",
-        "1|1;country=China" to "China (Movies)",
-        "1|2;country=China" to "China (Series)",
-        "1|1;country=Philippines" to "Philippines (Movies)",
-        "1|2;country=Philippines" to "Philippines (Series)",
-        "1|1;country=Thailand" to "Thailand(Movies)",
-        "1|2;country=Thailand" to "Thailand(Series)",
-        "1|1;country=Nigeria" to "Nollywood (Movies)",
-        "1|2;country=Nigeria" to "Nollywood (Series)",
-        "1|1;country=Korea" to "South Korean (Movies)",
-        "1|2;country=Korea" to "South Korean (Series)",
-        "1|1;classify=Hindi dub;genre=Action" to "Action (Movies)",
-        "1|1;classify=Hindi dub;genre=Crime" to "Crime (Movies)",
-        "1|1;classify=Hindi dub;genre=Comedy" to "Comedy (Movies)",
-        "1|2;classify=Hindi dub;genre=Crime" to "Crime (Series)",
-        "1|2;classify=Hindi dub;genre=Comedy" to "Comedy (Series)",
+        "1004503178596994616" to "Sejarah",
+        "3680249365710392160" to "Akhir dari Dunia"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -456,6 +428,11 @@ class Adimoviebox2Provider : MainAPI() {
         val Description = meta?.get("overview")?.asText() ?: description
         val IMDBRating = meta?.get("imdbRating")?.asText()
 
+        // Menangkap data trailer dari Cinemeta yang baru ditambahkan
+        val trailerId = meta?.get("trailer")?.asText() 
+            ?: meta?.get("trailers")?.firstOrNull { it.get("type")?.asText() == "Trailer" }?.get("source")?.asText()
+        val extractedTrailerUrl = trailerId?.takeIf { it.isNotBlank() }?.let { "https://www.youtube.com/watch?v=$it" }
+
         if (type == TvType.TvSeries) {
             val allSubjectIds = mutableListOf<String>()
             allSubjectIds.add(id)
@@ -562,6 +539,7 @@ class Adimoviebox2Provider : MainAPI() {
                 this.actors = actors
                 this.score = Score.from10(IMDBRating) ?: imdbRating?.let { Score.from10(it) }
                 this.duration = durationMinutes
+                this.trailerUrl = extractedTrailerUrl // Variabel trailer di sini
                 addImdbId(imdbId)
                 addTMDbId(tmdbId.toString())
             }
@@ -577,6 +555,7 @@ class Adimoviebox2Provider : MainAPI() {
             this.actors = actors
             this.score = Score.from10(IMDBRating) ?:imdbRating?.let { Score.from10(it) }
             this.duration = durationMinutes
+            this.trailerUrl = extractedTrailerUrl // Variabel trailer di sini juga
             addImdbId(imdbId)
             addTMDbId(tmdbId.toString())
         }
@@ -1085,7 +1064,7 @@ suspend fun fetchTmdbLogoUrl(
         if (isSvg(logo)) {
             if (better(bestSvg, logo)) bestSvg = logo
         } else {
-            if (better(best, logo)) best = logo
+             if (better(best, logo)) best = logo
         }
     }
 
@@ -1094,4 +1073,5 @@ suspend fun fetchTmdbLogoUrl(
 
     // No language match & no voted logos
     return null
+}
 }
