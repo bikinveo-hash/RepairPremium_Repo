@@ -54,7 +54,7 @@ class Adimoviebox2Provider : MainAPI() {
     override var mainUrl = "https://api3.aoneroom.com"
     override var name = "Adimoviebox2"
     override val hasMainPage = true
-    override var lang = "hi"
+    override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
