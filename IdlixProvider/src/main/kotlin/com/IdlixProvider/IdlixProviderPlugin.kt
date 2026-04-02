@@ -1,12 +1,16 @@
-package com.IdlixProvider
+package com.lagradost.cloudstream3.plugins // Sesuaikan nama package dengan struktur folder proyekmu!
 
-import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
+import android.content.Context
 
 @CloudstreamPlugin
-class IdlixProviderPlugin: BasePlugin() {
-    override fun load() {
+class IdlixProviderPlugin : Plugin() {
+    override fun load(context: Context) {
+        // Mendaftarkan API Website IDLIX
         registerMainAPI(IdlixProvider())
-        registerExtractorAPI(Jeniusplay())
+        
+        // Mendaftarkan Extractor JeniusPlay
+        registerExtractorAPI(IdlixExtractor())
     }
 }
