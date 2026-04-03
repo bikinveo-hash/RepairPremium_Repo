@@ -155,7 +155,8 @@ object Adicinemax21Extractor : Adicinemax21() {
                     if (el != null) {
                         val href = el.attr("href")
                         if (href.isNotEmpty() && !href.contains("javascript") && href != "#") {
-                            targetUrl = fixUrl(href, baseUrl); break
+                            targetUrl = fixUrl(href, baseUrl);
+                            break
                         }
                     }
                 }
@@ -199,7 +200,9 @@ object Adicinemax21Extractor : Adicinemax21() {
             val targetEp = if (season == null) episodes.lastOrNull() else episodes.find { it.number?.toInt() == episode }
             val epsId = targetEp?.id ?: return
             val kkeyVideo = app.get("$KISSKH_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
-            val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=&time=&kkey=$kkeyVideo"
+            
+            // PERBAIKAN: Parameter ts=null&time=null untuk API video Kisskh
+            val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=null&time=null&kkey=$kkeyVideo"
             val sources = app.get(videoUrl).parsedSafe<KisskhSources>()
 
             listOfNotNull(sources?.video, sources?.thirdParty).forEach { link ->
@@ -387,7 +390,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         val videoLink = tryParseJson<MappleSources>(res.substringAfter("1:").trim())?.data?.stream_url
         callback.invoke(newExtractorLink("Mapple", "Mapple", videoLink ?: return, ExtractorLinkType.M3U8) { this.referer = "${Adicinemax21.mappleAPI}/"; this.headers = mapOf("Accept" to "*/*") })
         val subRes = app.get("${Adicinemax21.mappleAPI}/api/subtitles?id=$tmdbId&mediaType=$mediaType${if (season == null) "" else "&season=1&episode=1"}", referer = "${Adicinemax21.mappleAPI}/").text
-        tryParseJson<ArrayList<MappleSubtitle>>(subRes)?.map { subtitle -> subtitleCallback.invoke(newSubtitleFile(subtitle.display ?: "", fixUrl(subtitle.url ?: return@map, Adicinemax21.mappleAPI))) }
+        tryParseJson<ArrayList<MappleSubtitle>> টুকরো)?.map { subtitle -> subtitleCallback.invoke(newSubtitleFile(subtitle.display ?: "", fixUrl(subtitle.url ?: return@map, Adicinemax21.mappleAPI))) }
     }
     // ================== VIDLINK SOURCE ==================
     suspend fun invokeVidlink(
@@ -686,13 +689,10 @@ object Adicinemax21Extractor : Adicinemax21() {
         private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
             val parsed = Uri.parse(url); val path = parsed.path ?: ""; 
             val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
-            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path;
-            val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
-            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else "";
-            val bodyLength = bodyBytes?.size?.toString() ?: ""
+            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
+            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; val bodyLength = bodyBytes?.size?.toString() ?: ""
             val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
-            val secretBytes = base64DecodeArray(secretKeyDefault);
-            val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
+            val secretBytes = base64DecodeArray(secretKeyDefault); val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
             val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
