@@ -26,6 +26,7 @@ class IdlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        // Mengambil hash video dari URL iframe
         val hash = if (url.contains("data=")) {
             url.substringAfter("data=").substringBefore("&")
         } else {
@@ -34,27 +35,27 @@ class IdlixExtractor : ExtractorApi() {
 
         val domain = if (url.startsWith("http")) url.substringBefore("/player").substringBefore("/v/") else mainUrl
 
-        val originReferer = referer ?: "https://tv12.idlixku.com/"
         val apiUrl = "$domain/player/index.php?data=$hash&do=getVideo"
 
+        // Menembak API JeniusPlay menggunakan HEADER PERSIS SEPERTI SKRIP PYTHON-MU
         val response = app.post(
             url = apiUrl,
             headers = mapOf(
                 "Origin" to domain,
+                "Referer" to "$domain/", 
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36",
                 "X-Requested-With" to "XMLHttpRequest",
-                "Accept" to "*/*"
+                "Content-Type" to "application/x-www-form-urlencoded"
             ),
             data = mapOf(
                 "hash" to hash,
-                "r" to originReferer
-            ),
-            referer = originReferer
+                "r" to "https://tv12.idlixku.com/" // Referer asli web IDLIX
+            )
         ).parsedSafe<JeniusResponse>()
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        // [DIPERBAIKI] Menambahkan tanda '?' karena response bersifat nullable
-        val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
+        val isM3u8Url = response.hls == true || finalUrl.contains(".m3u8")
 
         callback.invoke(
             newExtractorLink(
