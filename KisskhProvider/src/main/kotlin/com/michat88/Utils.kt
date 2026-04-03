@@ -9,7 +9,7 @@ const val TMDBAPI = "https://api.themoviedb.org/3"
 suspend fun fetchtmdb(title: String?, year: Int?, isMovie: Boolean): Int? {
     if (title.isNullOrBlank()) return null
     val encodedTitle = URLEncoder.encode(title, "UTF-8")
-    [span_14](start_span)[span_15](start_span)// API Key rahasia dari file JAR[span_14](end_span)[span_15](end_span)
+    // API Key rahasia dari file JAR
     val url = "$TMDBAPI/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
     val res = app.get(url).text
     val results = JSONObject(res).optJSONArray("results") ?: return null
