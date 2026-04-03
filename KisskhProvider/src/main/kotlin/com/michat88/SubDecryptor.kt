@@ -9,7 +9,7 @@ private const val KEY1 = "AmSmZVcH93UQUezi"
 private const val KEY2 = "8056483646328763"
 private const val KEY3 = "sWODXX04QRTkHdlZ"
 
-[span_11](start_span)// Rahasia IV yang gua bongkar dari IntArray di file JAR[span_11](end_span)
+// Rahasia IV yang gua bongkar dari IntArray di file JAR
 private const val IV1 = "ReBKWW8cqdjPEnF6"
 private const val IV2 = "6852612370185273"
 private const val IV3 = "8pwhapJeC4hrS9hO"
