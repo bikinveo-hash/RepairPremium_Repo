@@ -7,12 +7,11 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getAndUnpack
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 // ==============================
-// NEW JENIUSPLAY EXTRACTOR (FROM IDLIXPROVIDER)
+// UPDATED JENIUSPLAY EXTRACTOR
 // ==============================
 
 class Jeniusplay : ExtractorApi() {
@@ -29,29 +28,36 @@ class Jeniusplay : ExtractorApi() {
         val document = app.get(url, referer = referer).document
         val hash = url.split("/").last().substringAfter("data=")
 
-        val m3uLink = app.post(
+        // 1. Mengambil sumber video langsung dari server dan memperbaiki ekstensi file
+        val response = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
             data = mapOf("hash" to hash, "r" to "$referer"),
             referer = referer,
             headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-        ).parsedSafe<ResponseSource>()?.videoSource
+        ).parsedSafe<ResponseSource>()
 
+        val m3uLink = response?.videoSource?.replace(".txt", ".m3u8")
+
+        // 2. Jika link M3U8 ditemukan, pecah menjadi berbagai resolusi (multi-quality)
         if (m3uLink != null) {
-            callback.invoke(
-                newExtractorLink(
-                    name,
-                    name,
-                    url = m3uLink,
-                    ExtractorLinkType.M3U8
-                )
-            )
+            generateM3u8(
+                name,
+                m3uLink,
+                mainUrl
+            ).forEach(callback)
         }
 
-        document.select("script").map { script ->
+        // 3. Mencari script di halaman web yang berisi data subtitle tersembunyi
+        document.select("script").forEach { script ->
             if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
-                val subData =
-                    getAndUnpack(script.data()).substringAfter("\"tracks\":[").substringBefore("],")
+                
+                // Membongkar (unpack) data JSON yang berisi daftar subtitle
+                val subData = getAndUnpack(script.data())
+                    .substringAfter("\"tracks\":[")
+                    .substringBefore("],")
+                
                 AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
+                    // Mengirimkan data subtitle yang ditemukan ke pemutar video
                     subtitleCallback.invoke(
                         newSubtitleFile(
                             getLanguage(subtitle.label ?: ""),
@@ -63,17 +69,18 @@ class Jeniusplay : ExtractorApi() {
         }
     }
 
+    // Fungsi pembantu untuk menerjemahkan label bahasa
     private fun getLanguage(str: String): String {
         return when {
-            str.contains("indonesia", true) || str
-                .contains("bahasa", true) -> "Indonesian"
+            str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
             else -> str
         }
     }
 
+    // Model data (POJO) diletakkan di dalam agar tidak mengganggu file Adicinemax21Parser.kt
     data class ResponseSource(
-        @JsonProperty("hls") val hls: Boolean,
-        @JsonProperty("videoSource") val videoSource: String,
+        @JsonProperty("hls") val hls: Boolean?,
+        @JsonProperty("videoSource") val videoSource: String?,
         @JsonProperty("securedLink") val securedLink: String?,
     )
 
