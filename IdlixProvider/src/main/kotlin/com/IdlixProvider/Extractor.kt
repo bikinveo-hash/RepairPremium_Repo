@@ -33,11 +33,16 @@ class IdlixExtractor : ExtractorApi() {
             url.split("/").last()
         }
 
-        val domain = if (url.startsWith("http")) url.substringBefore("/player").substringBefore("/v/") else mainUrl
+        // [DIPERBAIKI] Deteksi domain dengan sangat aman (apapun path foldernya)
+        val domain = if (url.startsWith("http")) {
+            url.split("/").let { "${it[0]}//${it[2]}" }
+        } else {
+            mainUrl
+        }
 
         val apiUrl = "$domain/player/index.php?data=$hash&do=getVideo"
 
-        // Menembak API JeniusPlay menggunakan HEADER PERSIS SEPERTI SKRIP PYTHON-MU
+        // Menembak API JeniusPlay persis seperti skrip Python yang sukses
         val response = app.post(
             url = apiUrl,
             headers = mapOf(
@@ -55,7 +60,6 @@ class IdlixExtractor : ExtractorApi() {
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        // [DIPERBAIKI] Tambah tanda tanya di response?.hls untuk mengatasi error Null Safety
         val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
 
         callback.invoke(
