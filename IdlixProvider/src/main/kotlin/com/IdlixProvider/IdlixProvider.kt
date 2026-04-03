@@ -32,13 +32,11 @@ class IdlixProvider : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst("h3 a")?.text() ?: this.selectFirst("img")?.attr("alt")
-        
         var href = this.selectFirst("a")?.attr("href")
         
         if (title.isNullOrBlank() || href.isNullOrBlank()) return null
         
         href = fixUrl(href)
-        
         val posterUrl = this.selectFirst("img")?.attr("src")
         val qualityStr = this.selectFirst(".quality")?.text()
 
@@ -80,14 +78,12 @@ class IdlixProvider : MainAPI() {
 
         if (isTvSeries) {
             val episodes = mutableListOf<Episode>()
-            
             document.select(".se-c").forEach { seasonEl ->
                 val seasonNum = seasonEl.selectFirst(".se-q .se-t")?.text()?.toIntOrNull()
                 seasonEl.select(".episodios li").forEach { epEl ->
                     val epNum = epEl.selectFirst(".numerando")?.text()?.substringAfter("-")?.trim()?.toIntOrNull()
                     val epTitle = epEl.selectFirst(".episodiotitle a")?.text()
                     val epLink = epEl.selectFirst(".episodiotitle a")?.attr("href")
-                    
                     if (epLink != null) {
                         episodes.add(
                             newEpisode(epLink) {
@@ -99,7 +95,6 @@ class IdlixProvider : MainAPI() {
                     }
                 }
             }
-            
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
@@ -188,7 +183,8 @@ class IdlixProvider : MainAPI() {
 
             val embedEncrypted = ajaxResponse?.embed_url ?: return@forEach
             
-            val embedHtml = if (embedEncrypted.contains("<iframe")) {
+            // [DIPERBAIKI] Cek jika URL adalah URL mentah (diawali http), jangan didekripsi!
+            val embedHtml = if (embedEncrypted.contains("<iframe") || embedEncrypted.startsWith("http")) {
                 embedEncrypted
             } else {
                 val key = "#dooplay-api-idlixkucom"
@@ -198,7 +194,6 @@ class IdlixProvider : MainAPI() {
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
             if (iframeUrl.isNotBlank()) {
-                // [JURUS 1] Bypass loadExtractor bawaan agar tidak tertolak jika domain playernya beda
                 if (iframeUrl.contains("jenius", ignoreCase = true) || 
                     iframeUrl.contains("player", ignoreCase = true) || 
                     iframeUrl.contains("idlix", ignoreCase = true)) {
@@ -208,7 +203,6 @@ class IdlixProvider : MainAPI() {
                         e.printStackTrace()
                     }
                 } else {
-                    // Jika itu link umum (seperti YouTube, Doodstream, Mixdrop)
                     loadExtractor(iframeUrl, data, subtitleCallback, callback)
                 }
             }
