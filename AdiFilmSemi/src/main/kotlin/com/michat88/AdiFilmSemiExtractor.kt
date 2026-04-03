@@ -200,7 +200,9 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
             val targetEp = if (season == null) episodes.lastOrNull() else episodes.find { it.number?.toInt() == episode }
             val epsId = targetEp?.id ?: return
             val kkeyVideo = app.get("$KISSKH_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
-            val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=&time=&kkey=$kkeyVideo"
+            
+            // PERBAIKAN: Menambahkan parameter ts=null&time=null untuk API video Kisskh
+            val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=null&time=null&kkey=$kkeyVideo"
             val sources = app.get(videoUrl).parsedSafe<KisskhSources>()
 
             listOfNotNull(sources?.video, sources?.thirdParty).forEach { link ->
