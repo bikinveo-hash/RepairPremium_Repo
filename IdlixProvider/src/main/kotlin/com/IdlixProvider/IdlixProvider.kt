@@ -116,6 +116,13 @@ class IdlixProvider : MainAPI() {
         @JsonProperty("type") val type: String?
     )
 
+    [span_3](start_span)// Fungsi pembantu untuk menerjemahkan kode Hex (\xXX) ke karakter asli[span_3](end_span)
+    private fun decodeHexEscapes(input: String): String {
+        return input.replace(Regex("""\\x([0-9a-fA-F]{2})""")) {
+            it.groupValues[1].toInt(16).toChar().toString()
+        }
+    }
+
     private fun decryptCryptoJS(encryptedJsonStr: String, passphrase: String): String {
         try {
             val ct = Regex(""""ct"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1) ?: return ""
@@ -123,8 +130,7 @@ class IdlixProvider : MainAPI() {
             val ivHex = Regex(""""iv"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1)
 
             val salt = saltHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-           
-            val ctBytes = base64DecodeArray(ct)
+            [span_4](start_span)val ctBytes = base64DecodeArray(ct)[span_4](end_span)
 
             var concatenatedHashes = byteArrayOf()
             var currentHash = byteArrayOf()
@@ -133,12 +139,11 @@ class IdlixProvider : MainAPI() {
 
             while (concatenatedHashes.size < 48) {
                 md5.reset()
-    
                 md5.update(currentHash)
                 md5.update(passBytes)
                 md5.update(salt)
                 currentHash = md5.digest()
-                concatenatedHashes += currentHash
+                [span_5](start_span)concatenatedHashes += currentHash[span_5](end_span)
             }
 
             val key = concatenatedHashes.copyOfRange(0, 32)
@@ -151,9 +156,8 @@ class IdlixProvider : MainAPI() {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(derivedIv))
 
-            return String(cipher.doFinal(ctBytes), Charsets.UTF_8)
+            [span_6](start_span)return String(cipher.doFinal(ctBytes), Charsets.UTF_8)[span_6](end_span)
         } catch (e: Exception) {
-            e.printStackTrace()
             return ""
         }
     }
@@ -164,25 +168,15 @@ class IdlixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
-        val htmlRaw = document.html() // Ambil HTML mentah untuk menyedot Kunci Dinamis
-        
-        // [FITUR BARU] Menyedot password dinamis dari HTML secara otomatis!
-        // IDLIX menaruhnya di variabel "key":"\x3d..." atau langsung diacak.
-        var dynamicKey = Regex(""""key"\s*:\s*"([^"]+)"""").find(htmlRaw)?.groupValues?.get(1)
-        
-        if (dynamicKey.isNullOrBlank()) {
-            // Jika luput, cari rentetan \x mentah secara brutal di HTML
-            val doubleSlashMatch = Regex("""(?:\\\\x[0-9a-fA-F]{2}){10,}""").find(htmlRaw)?.value
-            if (doubleSlashMatch != null) {
-                dynamicKey = doubleSlashMatch.replace("\\\\", "\\")
-            } else {
-                dynamicKey = Regex("""(?:\\x[0-9a-fA-F]{2}){10,}""").find(htmlRaw)?.value
-            }
-        }
-        
-        val finalKey = dynamicKey ?: ""
-        
+        val responseMain = app.get(data)
+        val document = responseMain.document
+        [span_7](start_span)val htmlRaw = responseMain.text // Mengambil HTML mentah untuk mencari kunci dinamis[span_7](end_span)
+
+        [span_8](start_span)// Ekstraksi kunci dinamis dari variabel "key" di HTML[span_8](end_span)
+        val keyRegex = Regex("""["']key["']\s*:\s*["']([^"']+)["']""")
+        val keyEncoded = keyRegex.find(htmlRaw)?.groupValues?.get(1) ?: ""
+        val finalKey = decodeHexEscapes(keyEncoded) // Menerjemahkan Hex ke String asli
+
         val servers = document.select("ul#playeroptionsul li.dooplay_player_option")
 
         servers.forEach { element ->
@@ -203,17 +197,15 @@ class IdlixProvider : MainAPI() {
                 ),
                 referer = data,
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-            ).parsedSafe<DooPlayAjaxResponse>()
+            [span_9](start_span)).parsedSafe<DooPlayAjaxResponse>()[span_9](end_span)
 
             val embedEncrypted = ajaxResponse?.embed_url ?: return@forEach
             
             val embedHtml = if (embedEncrypted.contains("<iframe") || embedEncrypted.startsWith("http")) {
                 embedEncrypted
             } else {
-                // Gunakan kunci dinamis yang sudah berhasil disedot!
-                val decrypted = decryptCryptoJS(embedEncrypted, finalKey)
-                // [PENTING] Bersihkan backslash dan Jebakan Tanda Kutip (") dari hasil!
-                decrypted.replace("\\/", "/").trim('"')
+                [span_10](start_span)[span_11](start_span)// Dekripsi menggunakan kunci dinamis dan membersihkan hasil dari tanda kutip[span_10](end_span)[span_11](end_span)
+                decryptCryptoJS(embedEncrypted, finalKey).replace("\\/", "/").trim('"')
             }
 
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
@@ -223,6 +215,7 @@ class IdlixProvider : MainAPI() {
                     iframeUrl.contains("player", ignoreCase = true) || 
                     iframeUrl.contains("idlix", ignoreCase = true)) {
                     try {
+                        [span_12](start_span)[span_13](start_span)// Menggunakan Extractor yang telah kita uji sukses di Termux[span_12](end_span)[span_13](end_span)
                         IdlixExtractor().getUrl(iframeUrl, data, subtitleCallback, callback)
                     } catch (e: Exception) {
                         e.printStackTrace()
