@@ -239,7 +239,8 @@ class KisskhProvider : MainAPI() {
         val kkey = app.get("$KisskhAPI${loadData.epsId}&version=2.8.10", timeout = 10000).parsedSafe<Key>()?.key ?:""
         
         app.get(
-            "$mainUrl/api/DramaList/Episode/${loadData.epsId}.png?err=false&ts=&time=&kkey=$kkey",
+            // PERBAIKAN: Mengubah ts=&time= menjadi ts=null&time=null agar diterima oleh server
+            "$mainUrl/api/DramaList/Episode/${loadData.epsId}.png?err=false&ts=null&time=null&kkey=$kkey",
             referer = "$mainUrl/Drama/${getTitle("${loadData.title}")}/Episode-${loadData.eps}?id=${loadData.id}&ep=${loadData.epsId}&page=0&pageSize=100"
         ).parsedSafe<Sources>()?.let { source ->
             listOf(source.video, source.thirdParty).amap { link ->
@@ -303,7 +304,7 @@ class KisskhProvider : MainAPI() {
                     val chunks = responseBody.split(CHUNK_REGEX1)
                         .filter(String::isNotBlank)
                         .map(String::trim)
-                        
+                         
                     val decrypted = chunks.mapIndexed { index, chunk ->
                         if (chunk.isBlank()) return@mapIndexed ""
                         val parts = chunk.split("\n")
@@ -315,7 +316,7 @@ class KisskhProvider : MainAPI() {
                             try {
                                 decrypt(line)
                             } catch (e: Exception) {
-                                "DECRYPT_ERROR:${e.message}"
+                               "DECRYPT_ERROR:${e.message}"
                             }
                         }
                         listOf(index + 1, header, d).joinToString("\n")
