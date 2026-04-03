@@ -200,8 +200,6 @@ object Adicinemax21Extractor : Adicinemax21() {
             val targetEp = if (season == null) episodes.lastOrNull() else episodes.find { it.number?.toInt() == episode }
             val epsId = targetEp?.id ?: return
             val kkeyVideo = app.get("$KISSKH_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
-            
-            // PERBAIKAN: Parameter ts=null&time=null untuk API video Kisskh
             val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=null&time=null&kkey=$kkeyVideo"
             val sources = app.get(videoUrl).parsedSafe<KisskhSources>()
 
@@ -390,7 +388,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         val videoLink = tryParseJson<MappleSources>(res.substringAfter("1:").trim())?.data?.stream_url
         callback.invoke(newExtractorLink("Mapple", "Mapple", videoLink ?: return, ExtractorLinkType.M3U8) { this.referer = "${Adicinemax21.mappleAPI}/"; this.headers = mapOf("Accept" to "*/*") })
         val subRes = app.get("${Adicinemax21.mappleAPI}/api/subtitles?id=$tmdbId&mediaType=$mediaType${if (season == null) "" else "&season=1&episode=1"}", referer = "${Adicinemax21.mappleAPI}/").text
-        tryParseJson<ArrayList<MappleSubtitle>> টুকরো)?.map { subtitle -> subtitleCallback.invoke(newSubtitleFile(subtitle.display ?: "", fixUrl(subtitle.url ?: return@map, Adicinemax21.mappleAPI))) }
+        tryParseJson<ArrayList<MappleSubtitle>>(subRes)?.map { subtitle -> subtitleCallback.invoke(newSubtitleFile(subtitle.display ?: "", fixUrl(subtitle.url ?: return@map, Adicinemax21.mappleAPI))) }
     }
     // ================== VIDLINK SOURCE ==================
     suspend fun invokeVidlink(
