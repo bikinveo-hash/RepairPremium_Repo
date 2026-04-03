@@ -55,7 +55,8 @@ class IdlixExtractor : ExtractorApi() {
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
 
-        val isM3u8Url = response.hls == true || finalUrl.contains(".m3u8")
+        // [DIPERBAIKI] Tambah tanda tanya di response?.hls untuk mengatasi error Null Safety
+        val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
 
         callback.invoke(
             newExtractorLink(
