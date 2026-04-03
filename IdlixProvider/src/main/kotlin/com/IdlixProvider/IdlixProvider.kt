@@ -141,7 +141,6 @@ class IdlixProvider : MainAPI() {
                 concatenatedHashes += currentHash
             }
 
-        
             val key = concatenatedHashes.copyOfRange(0, 32)
             val derivedIv = if (ivHex != null) {
                 ivHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -149,7 +148,6 @@ class IdlixProvider : MainAPI() {
                 concatenatedHashes.copyOfRange(32, 48)
             }
 
-           
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(derivedIv))
 
@@ -167,6 +165,24 @@ class IdlixProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
+        val htmlRaw = document.html() // Ambil HTML mentah untuk menyedot Kunci Dinamis
+        
+        // [FITUR BARU] Menyedot password dinamis dari HTML secara otomatis!
+        // IDLIX menaruhnya di variabel "key":"\x3d..." atau langsung diacak.
+        var dynamicKey = Regex(""""key"\s*:\s*"([^"]+)"""").find(htmlRaw)?.groupValues?.get(1)
+        
+        if (dynamicKey.isNullOrBlank()) {
+            // Jika luput, cari rentetan \x mentah secara brutal di HTML
+            val doubleSlashMatch = Regex("""(?:\\\\x[0-9a-fA-F]{2}){10,}""").find(htmlRaw)?.value
+            if (doubleSlashMatch != null) {
+                dynamicKey = doubleSlashMatch.replace("\\\\", "\\")
+            } else {
+                dynamicKey = Regex("""(?:\\x[0-9a-fA-F]{2}){10,}""").find(htmlRaw)?.value
+            }
+        }
+        
+        val finalKey = dynamicKey ?: ""
+        
         val servers = document.select("ul#playeroptionsul li.dooplay_player_option")
 
         servers.forEach { element ->
@@ -191,16 +207,15 @@ class IdlixProvider : MainAPI() {
 
             val embedEncrypted = ajaxResponse?.embed_url ?: return@forEach
             
-            // [DIPERBAIKI] Cek jika URL adalah URL mentah (diawali http), jangan didekripsi!
             val embedHtml = if (embedEncrypted.contains("<iframe") || embedEncrypted.startsWith("http")) {
                 embedEncrypted
             } else {
-                // KUNCI RAHASIA BARU HASIL INTERCEPT CONSOLE DEVTOOLS!
-                val key = "=M1NTMNhW3MjWYIdQOk4kDN0zZjjOY0zZzTYTNjMNTcZ"
-                decryptCryptoJS(embedEncrypted, key).replace("\\/", "/")
+                // Gunakan kunci dinamis yang sudah berhasil disedot!
+                val decrypted = decryptCryptoJS(embedEncrypted, finalKey)
+                // [PENTING] Bersihkan backslash dan Jebakan Tanda Kutip (") dari hasil!
+                decrypted.replace("\\/", "/").trim('"')
             }
 
-          
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
             if (iframeUrl.isNotBlank()) {
