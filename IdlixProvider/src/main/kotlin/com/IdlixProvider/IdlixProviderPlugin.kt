@@ -1,15 +1,13 @@
-package com.lagradost.cloudstream3.plugins
 
+package com.hexated
+
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class IdlixProviderPlugin : Plugin() {
-    override fun load(context: android.content.Context) {
-        // Mendaftarkan API Website IDLIX
+class IdlixProviderPlugin: BasePlugin() {
+    override fun load() {
         registerMainAPI(IdlixProvider())
-        
-        // Mendaftarkan Extractor JeniusPlay
-        registerExtractorAPI(IdlixExtractor())
+        registerExtractorAPI(Jeniusplay())
     }
 }

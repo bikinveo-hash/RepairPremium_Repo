@@ -1,81 +1,64 @@
-package com.lagradost.cloudstream3.plugins
+package com.hexated
 
-import com.fasterxml.jackson.annotation.JsonProperty
+import com.hexated.IdlixProvider.ResponseSource
+import com.hexated.IdlixProvider.Tracks
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
+import com.lagradost.cloudstream3.utils.getAndUnpack
 
-class IdlixExtractor : ExtractorApi() {
-    override val name = "JeniusPlay"
-    override val mainUrl = "https://jeniusplay.com"
+class Jeniusplay : ExtractorApi() {
+    override var name = "Jeniusplay"
+    override var mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
 
-    data class JeniusResponse(
-        @JsonProperty("securedLink") val securedLink: String?,
-        @JsonProperty("videoSource") val videoSource: String?,
-        @JsonProperty("hls") val hls: Boolean?
-    )
-
     override suspend fun getUrl(
-        url: String, 
+        url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Hapus garis miring di akhir agar split hash tidak error ("")
-        val hash = if (url.contains("data=")) {
-            url.substringAfter("data=").substringBefore("&")
-        } else {
-            url.trimEnd('/').split("/").last()
-        }
+        val document = app.get(url, referer = referer).document
+        val hash = url.split("/").last().substringAfter("data=")
 
-        val domain = if (url.startsWith("http")) {
-            url.split("/").let { "${it[0]}//${it[2]}" }
-        } else {
-            mainUrl
-        }
+        val m3uLink = app.post(
+            url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
+            data = mapOf("hash" to hash, "r" to "$referer"),
+            referer = referer,
+            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+        ).parsed<ResponseSource>().videoSource.replace(".txt",".m3u8")
 
-        val originReferer = referer ?: "https://tv12.idlixku.com/"
-        
-        // [JURUS BARU] Pancing cookie dari halaman utama player dulu (GET)
-        // Sesuai log cURL-mu, server butuh cookie "fireplayer_player" sebelum kita POST
-        app.get(url, referer = originReferer)
+        generateM3u8(name,
+            m3uLink,
+            mainUrl,
+        ).forEach(callback)
 
-        val apiUrl = "$domain/player/index.php?data=$hash&do=getVideo"
-
-        val response = app.post(
-            url = apiUrl,
-            headers = mapOf(
-                "Origin" to domain,
-                "X-Requested-With" to "XMLHttpRequest",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36"
-                // Catatan: Content-Type dihapus di sini karena app.post Cloudstream otomatis menyediakannya.
-            ),
-            data = mapOf(
-                "hash" to hash,
-                "r" to "https://tv12.idlixku.com/" // Referer asli web IDLIX
-            ),
-            referer = url // Set referer ke URL iframe
-        ).parsedSafe<JeniusResponse>()
-
-        val finalUrl = response?.securedLink ?: response?.videoSource ?: return
-
-        val isM3u8Url = response?.hls == true || finalUrl.contains(".m3u8")
-
-        callback.invoke(
-            newExtractorLink(
-                source = this.name,
-                name = this.name,
-                url = finalUrl,
-                type = if (isM3u8Url) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            ) {
-                this.referer = "$domain/"
-                this.quality = Qualities.Unknown.value
+        document.select("script").forEach { script ->
+            if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
+                val subData =
+                    getAndUnpack(script.data()).substringAfter("\"tracks\":[").substringBefore("],")
+                AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
+                    subtitleCallback.invoke(
+                        newSubtitleFile(
+                            getLanguage(subtitle.label ?: ""),
+                            subtitle.file
+                        )
+                    )
+                }
             }
-        )
+        }
+    }
+
+
+    private fun getLanguage(str: String): String {
+        return when {
+            str.contains("indonesia", true) || str
+                .contains("bahasa", true) -> "Indonesian"
+            else -> str
+        }
     }
 }
