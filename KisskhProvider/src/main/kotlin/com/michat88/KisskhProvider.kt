@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import okhttp3.Interceptor
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
-import org.json.JSONObject
 
 class KisskhProvider : MainAPI() {
     override var mainUrl = "https://kisskh.ovh"
@@ -51,19 +50,19 @@ class KisskhProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        [span_17](start_span)[span_18](start_span)// Tautan API Google Script rahasia[span_17](end_span)[span_18](end_span)
+        // Tautan API Google Script rahasia
         val vApi = "https://script.google.com/macros/s/AKfycbzn8B31PuDxzaMa9_CQ0VGEDasFqfzI5bXvjaIZH4DM8DNq9q6xj1ALvZNz_JT3jF0suA/exec?id="
         val sApi = "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
         
         val loadData = parseJson<Data>(data)
         val kkey = app.get("$vApi${loadData.epsId}&version=2.8.10").parsedSafe<Key>()?.key ?: ""
         
-        [span_19](start_span)// Referer rahasia dan ekstensi .png palsu[span_19](end_span)
+        // Referer rahasia dan ekstensi .png palsu
         val videoUrl = "$mainUrl/api/DramaList/Episode/${loadData.epsId}.png?err=false&ts=&time=&kkey=$kkey"
         val ref = "$mainUrl/Drama/${loadData.title?.replace(Regex("[^a-zA-Z0-9]"), "-")}/Episode-${loadData.eps}?id=${loadData.id}&ep=${loadData.epsId}&page=0&pageSize=100"
 
         app.get(videoUrl, referer = ref).parsedSafe<Sources>()?.let { source ->
-            [span_20](start_span)// Menggunakan Huruf Kapital sesuai struktur JAR[span_20](end_span)
+            // Menggunakan Huruf Kapital sesuai struktur JAR
             listOfNotNull(source.Video, source.ThirdParty).amap { link ->
                 if (link.contains(".m3u8")) {
                     M3u8Helper.generateM3u8(this.name, link, referer = "$mainUrl/", headers = mapOf("Origin" to mainUrl)).forEach(callback)
@@ -97,7 +96,7 @@ class KisskhProvider : MainAPI() {
     }
 
     data class Data(val title: String?, val eps: Int?, val id: Int?, val epsId: Int?)
-    [span_21](start_span)// PERBAIKAN: Huruf Kapital di @JsonProperty agar link ditemukan[span_21](end_span)
+    // PERBAIKAN: Huruf Kapital di @JsonProperty agar link ditemukan
     data class Sources(@JsonProperty("Video") val Video: String?, @JsonProperty("ThirdParty") val ThirdParty: String?)
     data class Subtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
     data class Responses(@JsonProperty("data") val data: ArrayList<Media>? = arrayListOf())
