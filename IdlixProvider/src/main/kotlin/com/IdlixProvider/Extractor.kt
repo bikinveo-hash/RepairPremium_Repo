@@ -26,36 +26,40 @@ class IdlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Mengambil hash video dari URL iframe
+        // Hapus garis miring di akhir agar split hash tidak error ("")
         val hash = if (url.contains("data=")) {
             url.substringAfter("data=").substringBefore("&")
         } else {
-            url.split("/").last()
+            url.trimEnd('/').split("/").last()
         }
 
-        // [DIPERBAIKI] Deteksi domain dengan sangat aman (apapun path foldernya)
         val domain = if (url.startsWith("http")) {
             url.split("/").let { "${it[0]}//${it[2]}" }
         } else {
             mainUrl
         }
 
+        val originReferer = referer ?: "https://tv12.idlixku.com/"
+        
+        // [JURUS BARU] Pancing cookie dari halaman utama player dulu (GET)
+        // Sesuai log cURL-mu, server butuh cookie "fireplayer_player" sebelum kita POST
+        app.get(url, referer = originReferer)
+
         val apiUrl = "$domain/player/index.php?data=$hash&do=getVideo"
 
-        // Menembak API JeniusPlay persis seperti skrip Python yang sukses
         val response = app.post(
             url = apiUrl,
             headers = mapOf(
                 "Origin" to domain,
-                "Referer" to "$domain/", 
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36",
                 "X-Requested-With" to "XMLHttpRequest",
-                "Content-Type" to "application/x-www-form-urlencoded"
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36"
+                // Catatan: Content-Type dihapus di sini karena app.post Cloudstream otomatis menyediakannya.
             ),
             data = mapOf(
                 "hash" to hash,
                 "r" to "https://tv12.idlixku.com/" // Referer asli web IDLIX
-            )
+            ),
+            referer = url // Set referer ke URL iframe
         ).parsedSafe<JeniusResponse>()
 
         val finalUrl = response?.securedLink ?: response?.videoSource ?: return
