@@ -57,6 +57,7 @@ class IdlixProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
+        
         val document = app.get(url).document
         val elements = document.select("article.item")
         val homePageList = elements.mapNotNull { it.toSearchResult() }
@@ -78,11 +79,13 @@ class IdlixProvider : MainAPI() {
 
         if (isTvSeries) {
             val episodes = mutableListOf<Episode>()
+          
             document.select(".se-c").forEach { seasonEl ->
                 val seasonNum = seasonEl.selectFirst(".se-q .se-t")?.text()?.toIntOrNull()
                 seasonEl.select(".episodios li").forEach { epEl ->
                     val epNum = epEl.selectFirst(".numerando")?.text()?.substringAfter("-")?.trim()?.toIntOrNull()
                     val epTitle = epEl.selectFirst(".episodiotitle a")?.text()
+        
                     val epLink = epEl.selectFirst(".episodiotitle a")?.attr("href")
                     if (epLink != null) {
                         episodes.add(
@@ -95,6 +98,7 @@ class IdlixProvider : MainAPI() {
                     }
                 }
             }
+     
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
@@ -119,6 +123,7 @@ class IdlixProvider : MainAPI() {
             val ivHex = Regex(""""iv"\s*:\s*"([^"]+)"""").find(encryptedJsonStr)?.groupValues?.get(1)
 
             val salt = saltHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+           
             val ctBytes = base64DecodeArray(ct)
 
             var concatenatedHashes = byteArrayOf()
@@ -128,6 +133,7 @@ class IdlixProvider : MainAPI() {
 
             while (concatenatedHashes.size < 48) {
                 md5.reset()
+    
                 md5.update(currentHash)
                 md5.update(passBytes)
                 md5.update(salt)
@@ -135,6 +141,7 @@ class IdlixProvider : MainAPI() {
                 concatenatedHashes += currentHash
             }
 
+        
             val key = concatenatedHashes.copyOfRange(0, 32)
             val derivedIv = if (ivHex != null) {
                 ivHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -142,6 +149,7 @@ class IdlixProvider : MainAPI() {
                 concatenatedHashes.copyOfRange(32, 48)
             }
 
+           
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(derivedIv))
 
@@ -187,10 +195,12 @@ class IdlixProvider : MainAPI() {
             val embedHtml = if (embedEncrypted.contains("<iframe") || embedEncrypted.startsWith("http")) {
                 embedEncrypted
             } else {
-                val key = "#dooplay-api-idlixkucom"
+                // KUNCI RAHASIA BARU HASIL INTERCEPT CONSOLE DEVTOOLS!
+                val key = "=M1NTMNhW3MjWYIdQOk4kDN0zZjjOY0zZzTYTNjMNTcZ"
                 decryptCryptoJS(embedEncrypted, key).replace("\\/", "/")
             }
 
+          
             val iframeUrl = Jsoup.parse(embedHtml).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedHtml
 
             if (iframeUrl.isNotBlank()) {
