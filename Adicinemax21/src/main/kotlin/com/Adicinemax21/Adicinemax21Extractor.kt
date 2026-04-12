@@ -33,7 +33,7 @@ import android.annotation.SuppressLint
 
 object Adicinemax21Extractor : Adicinemax21() {
 
-    // ================== IDLIX SOURCE ==================
+    // ================== IDLIX SOURCE (NEW UPDATED & BULLETPROOF) ==================
     suspend fun invokeIdlix(
         title: String? = null,
         year: Int? = null,
@@ -42,80 +42,130 @@ object Adicinemax21Extractor : Adicinemax21() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val fixTitle = title?.createSlug()
-        val url = if (season == null) {
-            "$idlixAPI/movie/$fixTitle-$year"
-        } else {
-            "$idlixAPI/episode/$fixTitle-season-$season-episode-$episode"
-        }
-
         try {
-            val response = app.get(url)
-            val document = response.document
-            val directUrl = getBaseUrl(response.url)
+            // KUNCI UTAMA 1: Kita paksa pakai domain baru (z1), mengabaikan variabel lama (tv10)
+            val idlixApi = "https://z1.idlixku.com" 
+            
+            val encodedQuery = URLEncoder.encode(title ?: return, "utf-8")
+            val searchResText = app.get("$idlixApi/api/search?q=$encodedQuery").text
+            val searchRes = tryParseJson<IdlixSearchResponse>(searchResText)
+            val items = searchRes?.data ?: searchRes?.results ?: return
+            
+            val isSeries = season != null
 
-            val scriptRegex = """window\.idlixNonce=['"]([a-f0-9]+)['"].*?window\.idlixTime=(\d+).*?""".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val script = document.select("script:containsData(window.idlix)").toString()
-            val match = scriptRegex.find(script)
-            val idlixNonce = match?.groups?.get(1)?.value ?: ""
-            val idlixTime = match?.groups?.get(2)?.value ?: ""
+            // 1. Cari film/series yang cocok (Filter nama dan tipe kontennya)
+            val matchedItem = items.find { 
+                val titleMatch = it.title.equals(title, true) || it.originalTitle.equals(title, true)
+                val typeMatch = if (isSeries) it.contentType?.contains("series", true) == true else it.contentType?.contains("movie", true) == true
+                titleMatch && typeMatch
+            } ?: items.firstOrNull() ?: return
 
-            document.select("ul#playeroptionsul > li").map {
-                Triple(it.attr("data-post"), it.attr("data-nume"), it.attr("data-type"))
-            }.amap { (id, nume, type) ->
-                val json = app.post(
-                    url = "$directUrl/wp-admin/admin-ajax.php",
-                    data = mapOf(
-                        "action" to "doo_player_ajax",
-                        "post" to id,
-                        "nume" to nume,
-                        "type" to type,
-                        "_n" to idlixNonce,
-                        "_p" to id,
-                        "_t" to idlixTime
-                    ),
-                    referer = url,
-                    headers = mapOf("Accept" to "*/*", "X-Requested-With" to "XMLHttpRequest")
-                ).parsedSafe<ResponseHash>() ?: return@amap
+            val slug = matchedItem.slug ?: return
 
-                val metrix = parseJson<AesData>(json.embed_url).m
-                val password = createIdlixKey(json.key, metrix)
-                val decrypted = AesHelper.cryptoAESHandler(json.embed_url, password.toByteArray(), false)
-                    ?.fixUrlBloat() ?: return@amap
+            var contentType = "movie"
+            var contentId = ""
 
-                when {
-                    decrypted.contains("jeniusplay", true) -> {
-                        val finalUrl = if (decrypted.startsWith("//")) "https:$decrypted" else decrypted
-                        Jeniusplay().getUrl(finalUrl, "$directUrl/", subtitleCallback, callback)
+            // 2. Ambil ID unik konten dari API
+            if (!isSeries) {
+                val detailResText = app.get("$idlixApi/api/movies/$slug").text
+                val detailRes = tryParseJson<IdlixDetailResponse>(detailResText)
+                contentId = detailRes?.id ?: slug
+            } else {
+                contentType = "episode"
+                val seasonResText = app.get("$idlixApi/api/series/$slug/season/$season").text
+                val seasonRes = tryParseJson<IdlixSeasonApiResponse>(seasonResText)
+                val ep = seasonRes?.season?.episodes?.find { it.episodeNumber == episode }
+                contentId = ep?.id ?: return
+            }
+
+            // KUNCI UTAMA 2: Ubah payload menjadi RequestBody murni agar tidak gagal di Cloudstream
+            val challengeBody = mapOf("contentType" to contentType, "contentId" to contentId).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+            
+            // 3. Minta Tantangan (Challenge) Keamanan
+            val challengeResText = app.post(
+                url = "$idlixApi/api/watch/challenge",
+                requestBody = challengeBody,
+                headers = mapOf("Origin" to idlixApi, "Content-Type" to "application/json", "Accept" to "application/json, text/plain, */*", "Referer" to "$idlixApi/")
+            ).text
+            val challengeRes = tryParseJson<ChallengeResponse>(challengeResText)
+
+            val challenge = challengeRes?.challenge ?: return
+            val signature = challengeRes.signature ?: return
+            val difficulty = challengeRes.difficulty ?: 3
+
+            // 4. Tambang Nonce (Solve SHA-256 PoW)
+            val nonce = mineNonce(challenge, difficulty) ?: return
+
+            val solveBody = mapOf("challenge" to challenge, "signature" to signature, "nonce" to nonce).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
+            // 5. Kirim Jawaban dan Dapatkan Embed URL
+            val solveResText = app.post(
+                url = "$idlixApi/api/watch/solve",
+                requestBody = solveBody,
+                headers = mapOf("Origin" to idlixApi, "Content-Type" to "application/json", "Accept" to "application/json, text/plain, */*", "Referer" to "$idlixApi/")
+            ).text
+            val solveRes = tryParseJson<SolveResponse>(solveResText)
+
+            val embedPath = solveRes?.embedUrl ?: return
+            val fullEmbedUrl = if (embedPath.startsWith("/")) "$idlixApi$embedPath" else embedPath
+
+            // 6. Ambil URL final, lalu kirim ke Jeniusplay
+            val embedResponse = app.get(fullEmbedUrl, headers = mapOf("Referer" to "$idlixApi/"))
+            val finalUrl = embedResponse.url
+
+            if (finalUrl.contains("jeniusplay", true)) {
+                Jeniusplay().getUrl(finalUrl, fullEmbedUrl, subtitleCallback, callback)
+            } else {
+                var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
+                if (!iframeSrc.isNullOrEmpty()) {
+                    if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
+                    if (iframeSrc.contains("jeniusplay", true)) {
+                        Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                    } else {
+                        loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
                     }
-                    !decrypted.contains("youtube") -> {
-                        loadExtractor(decrypted, directUrl, subtitleCallback, callback)
-                    }
-                    else -> return@amap
                 }
             }
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun createIdlixKey(r: String, m: String): String {
-        val rList = r.split("\\x").filter { it.isNotEmpty() }.toTypedArray()
-        var n = ""
-        var reversedM = m.split("").reversed().joinToString("")
-        while (reversedM.length % 4 != 0) reversedM += "="
-        val decodedBytes = try {
-            base64Decode(reversedM)
-        } catch (_: Exception) { return "" }
-        val decodedM = String(decodedBytes.toCharArray())
-        for (s in decodedM.split("|")) {
-            try {
-                val index = Integer.parseInt(s)
-                if (index in rList.indices) n += "\\x" + rList[index]
-            } catch (_: Exception) {}
+    private fun mineNonce(challenge: String, difficulty: Int): Int? {
+        val md = MessageDigest.getInstance("SHA-256")
+        for (nonce in 0..2000000) {
+            val text = challenge + nonce
+            val bytes = md.digest(text.toByteArray())
+            var isValid = true
+            for (i in 0 until difficulty) {
+                val byteIndex = i / 2
+                val isHighNibble = (i % 2 == 0)
+                val nibble = if (isHighNibble) {
+                    (bytes[byteIndex].toInt() ushr 4) and 0x0F
+                } else {
+                    bytes[byteIndex].toInt() and 0x0F
+                }
+                if (nibble != 0) {
+                    isValid = false
+                    break
+                }
+            }
+            if (isValid) return nonce
         }
-        return n
+        return null
     }
+
+    // --- DATA CLASSES TAMBAHAN KHUSUS IDLIX NEW API ---
+    private data class IdlixSearchResponse(@JsonProperty("data") val data: List<IdlixContentData>? = null, @JsonProperty("results") val results: List<IdlixContentData>? = null)
+    private data class IdlixContentData(@JsonProperty("slug") val slug: String? = null, @JsonProperty("title") val title: String? = null, @JsonProperty("originalTitle") val originalTitle: String? = null, @JsonProperty("contentType") val contentType: String? = null)
+    private data class IdlixDetailResponse(@JsonProperty("id") val id: String? = null)
+    private data class IdlixSeasonApiResponse(@JsonProperty("season") val season: SeasonDetail? = null)
+    private data class SeasonDetail(@JsonProperty("episodes") val episodes: List<EpisodeDetail>? = null)
+    private data class EpisodeDetail(@JsonProperty("id") val id: String? = null, @JsonProperty("episodeNumber") val episodeNumber: Int? = null)
+    private data class ChallengeResponse(@JsonProperty("challenge") val challenge: String? = null, @JsonProperty("signature") val signature: String? = null, @JsonProperty("difficulty") val difficulty: Int? = 3)
+    private data class SolveResponse(@JsonProperty("embedUrl") val embedUrl: String? = null)
+
 
     // ================== ADIDEWASA SOURCE ==================
     @Suppress("UNCHECKED_CAST")
@@ -155,7 +205,7 @@ object Adicinemax21Extractor : Adicinemax21() {
                     if (el != null) {
                         val href = el.attr("href")
                         if (href.isNotEmpty() && !href.contains("javascript") && href != "#") {
-                            targetUrl = fixUrl(href, baseUrl);
+                            targetUrl = fixUrl(href, baseUrl)
                             break
                         }
                     }

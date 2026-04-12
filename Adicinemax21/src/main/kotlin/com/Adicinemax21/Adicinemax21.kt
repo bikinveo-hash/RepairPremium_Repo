@@ -44,9 +44,7 @@ open class Adicinemax21 : TmdbProvider() {
 
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
-    /** AUTHOR : Hexated & Adicinemax21 */
     companion object {
-        /** TOOLS */
         private const val tmdbAPI = "https://api.themoviedb.org/3"
         const val gdbot = "https://gdtot.pro"
         const val anilistAPI = "https://graphql.anilist.co"
@@ -57,7 +55,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://tv10.idlixku.com" 
+        const val idlixAPI = "https://z1.idlixku.com" // Update domain baru
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -175,7 +173,6 @@ open class Adicinemax21 : TmdbProvider() {
         val type = getType(data.type)
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         
-        // Minta bahasa Indonesia dulu (id-ID)
         val resUrlId = if (type == TvType.Movie) {
             "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         } else {
@@ -185,13 +182,12 @@ open class Adicinemax21 : TmdbProvider() {
         val res = app.get(resUrlId).parsedSafe<MediaDetail>()
             ?: throw ErrorLoadingException("Invalid Json Response")
 
-        // SMART FALLBACK 1: Mengecek Sinopsis Utama
         var plot = res.overview
         if (plot.isNullOrBlank()) {
             val resUrlEn = resUrlId.replace("&language=id-ID", "&language=en-US")
             val enRes = app.get(resUrlEn).parsedSafe<MediaDetail>()
             if (enRes != null && !enRes.overview.isNullOrBlank()) {
-                plot = enRes.overview // Jika indo kosong, timpa pakai inggris
+                plot = enRes.overview
             }
         }
 
@@ -200,10 +196,9 @@ open class Adicinemax21 : TmdbProvider() {
         val bgPoster = getOriImageUrl(res.backdropPath)
         val orgTitle = res.originalTitle ?: res.originalName ?: return null
         val releaseDate = res.releaseDate ?: res.firstAirDate
-        val year = releaseDate?.split("-")?.first()?.toIntOrNull()
+        val year = releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
         
         val genres = res.genres?.mapNotNull { it.name }
-
         val isCartoon = genres?.contains("Animation") ?: false
         val isAnime = isCartoon && (res.originalLanguage == "zh" || res.originalLanguage == "ja")
         val isAsian = !isAnime && (res.originalLanguage == "zh" || res.originalLanguage == "ko")
@@ -214,15 +209,14 @@ open class Adicinemax21 : TmdbProvider() {
 
         val actors = res.credits?.cast?.mapNotNull { cast ->
              ActorData(
-                Actor(
-                    cast.name ?: cast.originalName
-                    ?: return@mapNotNull null, getImageUrl(cast.profilePath)
+               Actor(
+                    cast.name ?: cast.originalName ?: return@mapNotNull null, 
+                    getImageUrl(cast.profilePath)
                 ), roleString = cast.character
             )
         } ?: return null
-        val recommendations =
-            res.recommendations?.results?.mapNotNull { media -> media.toSearchResponse() }
 
+        val recommendations = res.recommendations?.results?.mapNotNull { media -> media.toSearchResponse() }
         val trailer = res.videos?.results
             ?.filter { it.site == "YouTube" && it.key?.isNotBlank() == true && it.type == "Trailer" }
             ?.sortedByDescending { it.type == "Trailer" }
@@ -235,12 +229,11 @@ open class Adicinemax21 : TmdbProvider() {
                 val seasonUrlId = "$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=id-ID"
                 var seasonRes = app.get(seasonUrlId).parsedSafe<MediaDetailEpisodes>()
                 
-                // SMART FALLBACK 2: Mengecek Sinopsis Episode
                 if (seasonRes?.episodes?.firstOrNull()?.overview.isNullOrBlank()) {
                     val seasonUrlEn = seasonUrlId.replace("&language=id-ID", "&language=en-US")
                     val enSeasonRes = app.get(seasonUrlEn).parsedSafe<MediaDetailEpisodes>()
                     if (enSeasonRes != null) {
-                        seasonRes = enSeasonRes // Timpa seluruh season dengan bahasa inggris jika indonya kosong
+                        seasonRes = enSeasonRes
                     }
                 }
 
@@ -254,7 +247,7 @@ open class Adicinemax21 : TmdbProvider() {
                             eps.seasonNumber,
                             eps.episodeNumber,
                             title = title,
-                            year = season.airDate?.split("-")?.first()?.toIntOrNull(),
+                            year = season.airDate?.split("-")?.firstOrNull()?.toIntOrNull(),
                             orgTitle = orgTitle,
                             isAnime = isAnime,
                             airedYear = year,
@@ -262,15 +255,13 @@ open class Adicinemax21 : TmdbProvider() {
                             epsTitle = eps.name,
                             jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
                             date = season.airDate,
-                            airedDate = res.releaseDate
-                                ?: res.firstAirDate,
+                            airedDate = res.releaseDate ?: res.firstAirDate,
                             isAsian = isAsian,
                             isBollywood = isBollywood,
                             isCartoon = isCartoon
                         ).toJson()
                     ) {
-                        this.name =
-                            eps.name + if (isUpcoming(eps.airDate)) " • [UPCOMING]" else ""
+                        this.name = eps.name + if (isUpcoming(eps.airDate)) " • [UPCOMING]" else ""
                         this.season = eps.seasonNumber
                         this.episode = eps.episodeNumber
                         this.posterUrl = getImageUrl(eps.stillPath)
@@ -281,6 +272,7 @@ open class Adicinemax21 : TmdbProvider() {
                     }
                 }
             }?.flatten() ?: listOf()
+
             newTvSeriesLoadResponse(
                 title,
                 url,
@@ -290,7 +282,7 @@ open class Adicinemax21 : TmdbProvider() {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = bgPoster
                 this.year = year
-                this.plot = plot // Disesuaikan menggunakan variabel plot yang sudah difilter fallback
+                this.plot = plot
                 this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
                 this.score = Score.from10(res.voteAverage?.toString())
                 this.showStatus = getStatus(res.status)
@@ -316,8 +308,7 @@ open class Adicinemax21 : TmdbProvider() {
                     orgTitle = orgTitle,
                     isAnime = isAnime,
                     jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
-                    airedDate = res.releaseDate
-                        ?: res.firstAirDate,
+                    airedDate = res.releaseDate ?: res.firstAirDate,
                     isAsian = isAsian,
                     isBollywood = isBollywood
                 ).toJson(),
@@ -326,7 +317,7 @@ open class Adicinemax21 : TmdbProvider() {
                 this.backgroundPosterUrl = bgPoster
                 this.comingSoon = isUpcoming(releaseDate)
                 this.year = year
-                this.plot = plot // Disesuaikan menggunakan variabel plot yang sudah difilter fallback
+                this.plot = plot
                 this.duration = res.runtime
                 this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
                 this.score = Score.from10(res.voteAverage?.toString())
@@ -346,137 +337,26 @@ open class Adicinemax21 : TmdbProvider() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val res = parseJson<LinkData>(data)
-
         runAllAsync(
-            {
-                invokeIdlix(
-                    res.title,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeAdimoviebox2(
-                    res.title ?: return@runAllAsync,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeAdiDewasa(
-                    res.title ?: return@runAllAsync,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeKisskh(
-                    res.title ?: return@runAllAsync,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeAdimoviebox(
-                    res.title ?: return@runAllAsync,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeVidlink(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeVidsrccc(
-                    res.id,
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeVixsrc(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeCinemaOS(
-                    res.imdbId,
-                    res.id,
-                    res.title,
-                    res.season,
-                    res.episode,
-                    res.year,
-                    callback,
-                    subtitleCallback
-                )
-            },
-            {
-                if (!res.isAnime) invokePlayer4U(
-                    res.title,
-                    res.season,
-                    res.episode,
-                    res.year,
-                    callback
-                )
-            },
-            {
-                if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeVidsrc(
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeWatchsomuch(
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback
-                )
-            },
-            {
-                invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback)
-            },
-            {
-                invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback)
-            },
-            {
-                invokeWyzie(res.id, res.season, res.episode, subtitleCallback)
-            },
-            {
-                invokeSuperembed(
-                    res.id,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            }
+            { invokeIdlix(res.title, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeKisskh(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeVidlink(res.id, res.season, res.episode, callback) },
+            { invokeVidsrccc(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback) },
+            { invokeVixsrc(res.id, res.season, res.episode, callback) },
+            { invokeCinemaOS(res.imdbId, res.id, res.title, res.season, res.episode, res.year, callback, subtitleCallback) },
+            { if (!res.isAnime) invokePlayer4U(res.title, res.season, res.episode, res.year, callback) },
+            { if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, callback) },
+            { invokeVidsrc(res.imdbId, res.season, res.episode, subtitleCallback, callback) },
+            { invokeWatchsomuch(res.imdbId, res.season, res.episode, subtitleCallback) },
+            { invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback) },
+            { invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback) },
+            { invokeWyzie(res.id, res.season, res.episode, subtitleCallback) },
+            { invokeSuperembed(res.id, res.season, res.episode, subtitleCallback, callback) }
         )
-
         return true
     }
 

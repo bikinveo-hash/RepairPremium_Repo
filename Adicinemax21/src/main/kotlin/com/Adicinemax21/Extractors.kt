@@ -1,17 +1,14 @@
 package com.Adicinemax21
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.utils.AppUtils
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
-import com.lagradost.cloudstream3.utils.getAndUnpack
 
 // ==============================
-// UPDATED JENIUSPLAY EXTRACTOR
+// NEW UPDATED & BULLETPROOF JENIUSPLAY EXTRACTOR
 // ==============================
 
 class Jeniusplay : ExtractorApi() {
@@ -20,73 +17,99 @@ class Jeniusplay : ExtractorApi() {
     override val requiresReferer = true
 
     override suspend fun getUrl(
-        url: String,
+        url: String, 
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = referer).document
-        val hash = url.split("/").last().substringAfter("data=")
-
-        // 1. Mengambil sumber video langsung dari server dan memperbaiki ekstensi file
-        val response = app.post(
-            url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
-            data = mapOf("hash" to hash, "r" to "$referer"),
-            referer = referer,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-        ).parsedSafe<ResponseSource>()
-
-        val m3uLink = response?.videoSource?.replace(".txt", ".m3u8")
-
-        // 2. Jika link M3U8 ditemukan, pecah menjadi berbagai resolusi (multi-quality)
-        if (m3uLink != null) {
-            generateM3u8(
-                name,
-                m3uLink,
-                mainUrl
-            ).forEach(callback)
-        }
-
-        // 3. Mencari script di halaman web yang berisi data subtitle tersembunyi
-        document.select("script").forEach { script ->
-            if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
-                
-                // Membongkar (unpack) data JSON yang berisi daftar subtitle
-                val subData = getAndUnpack(script.data())
-                    .substringAfter("\"tracks\":[")
-                    .substringBefore("],")
-                
-                AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
-                    // Mengirimkan data subtitle yang ditemukan ke pemutar video
-                    subtitleCallback.invoke(
-                        newSubtitleFile(
-                            getLanguage(subtitle.label ?: ""),
-                            subtitle.file
-                        )
-                    )
+        try {
+            // 1. Ambil HTML dari Jeniusplay
+            val htmlContent = app.get(url, referer = referer).text
+            
+            // 2. Ekstrak Subtitle
+            val subtitleRegex = """var\s+playerjsSubtitle\s*=\s*["'](.*?)["']""".toRegex()
+            subtitleRegex.find(htmlContent)?.groupValues?.get(1)?.let { subStr ->
+                val tracks = subStr.split(",")
+                for (track in tracks) {
+                    val langMatch = """\[(.*?)\](.*)""".toRegex().find(track)
+                    if (langMatch != null) {
+                        val lang = getLanguage(langMatch.groupValues[1])
+                        val subUrl = langMatch.groupValues[2]
+                        subtitleCallback.invoke(SubtitleFile(lang, subUrl))
+                    }
                 }
             }
+
+            // 3. Bongkar Javascript Packer
+            val unpackedText = getAndUnpack(htmlContent).replace("\\/", "/")
+            
+            // 4. Cari Link Video (Bypass manipulasi .woff / .txt)
+            val videoRegex = """(https?://[^"'\s]+(?:master\.txt|\.m3u8|\.woff|\.txt))""".toRegex()
+            var videoUrl = videoRegex.find(unpackedText)?.groupValues?.get(1)?.replace(".woff", ".m3u8")?.replace(".txt", ".m3u8")
+
+            // 5. Fallback ke API do=getVideo jika regex gagal
+            if (videoUrl.isNullOrEmpty()) {
+                Log.d("adixtream", "Unpack JS gagal, mencoba fallback ke API do=getVideo...")
+                val hashRegex = """([a-zA-Z0-9]{30,})""".toRegex()
+                var hash = url.substringAfter("data=", "").substringBefore("&")
+                
+                if (hash.isBlank()) {
+                    hash = hashRegex.find(url)?.groupValues?.get(1) ?: url.split("/").last()
+                }
+                
+                val apiUrl = "$mainUrl/player/index.php?data=$hash&do=getVideo"
+                val apiResponse = app.post(
+                    url = apiUrl,
+                    data = mapOf("hash" to hash, "r" to (referer ?: mainUrl)),
+                    referer = url,
+                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                ).parsedSafe<ResponseSource>()
+                
+                val rawVideoSource = apiResponse?.videoSource
+                if (!rawVideoSource.isNullOrEmpty()) {
+                    // Bypass ekstensi woff/txt dari Cloudflare
+                    videoUrl = rawVideoSource.replace(".woff", ".m3u8").replace(".txt", ".m3u8")
+                }
+            }
+
+            // 6. Lempar Link ke ExtractorLink
+            if (!videoUrl.isNullOrEmpty()) {
+                Log.d("adixtream", "Jeniusplay berhasil menemukan video: $videoUrl")
+                
+                // Ekstraktor M3U8 (Secara otomatis memecah berbagai resolusi)
+                generateM3u8(name, videoUrl, mainUrl).forEach(callback)
+                
+                // Ekstraktor Direct (Sebagai cadangan)
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name (Direct)",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.referer = url 
+                    }
+                )
+            } else {
+                Log.d("adixtream", "Jeniusplay gagal mendapat videoSource sama sekali.")
+            }
+        } catch (e: Exception) {
+            Log.e("adixtream", "Jeniusplay Error: ${e.message}")
+            e.printStackTrace()
         }
     }
 
-    // Fungsi pembantu untuk menerjemahkan label bahasa
     private fun getLanguage(str: String): String {
         return when {
             str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
+            str.contains("english", true) -> "English"
             else -> str
         }
     }
-
-    // Model data (POJO) diletakkan di dalam agar tidak mengganggu file Adicinemax21Parser.kt
-    data class ResponseSource(
-        @JsonProperty("hls") val hls: Boolean?,
-        @JsonProperty("videoSource") val videoSource: String?,
-        @JsonProperty("securedLink") val securedLink: String?,
-    )
-
-    data class Tracks(
-        @JsonProperty("kind") val kind: String?,
-        @JsonProperty("file") val file: String,
-        @JsonProperty("label") val label: String?,
-    )
 }
+
+// Data Class Fallback Jeniusplay
+data class ResponseSource(
+    @JsonProperty("videoSource") val videoSource: String = ""
+)
