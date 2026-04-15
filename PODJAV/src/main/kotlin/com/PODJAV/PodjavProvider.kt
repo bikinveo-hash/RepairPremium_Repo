@@ -105,7 +105,7 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    /** * 3. DETAIL FILM (Ditambahkan penarikan data Aktor berdasarkan analisamu)
+    /** * 3. DETAIL FILM 
      */
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
@@ -116,7 +116,6 @@ class PodjavProvider : MainAPI() {
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
-        // Mengambil daftar pemain (Cast) dari HTML
         val actors = document.select("#cast .persons .person").mapNotNull {
             val name = it.selectFirst(".data .name a")?.text() ?: return@mapNotNull null
             val image = it.selectFirst(".img img")?.attr("src")
@@ -132,7 +131,7 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    /** * 4. EKSTRAKSI LINK VIDEO & SUBTITLE (Diperbarui dengan Multiple Server MP4/M3U8)
+    /** * 4. EKSTRAKSI LINK VIDEO & SUBTITLE
      */
     override suspend fun loadLinks(
         data: String,
@@ -154,25 +153,25 @@ class PodjavProvider : MainAPI() {
                 val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
                 val isMp4 = finalLink.contains(".mp4")
                 
+                // PERBAIKAN: Penulisan ExtractorLinkType.VIDEO dan block initializer {}
                 callback.invoke(
                     newExtractorLink(
                         source = this.name,
                         name = "HD Stream " + if(isMp4) "(MP4)" else "(M3U8)",
                         url = finalLink,
-                        referer = mainUrl,
-                        quality = Qualities.P720.value,
-                        type = if (isMp4) ExtractorLinkType.MP4 else ExtractorLinkType.M3U8
-                    )
+                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.P720.value
+                    }
                 )
             }
         } else {
-            // Rencana B: Dooplay AJAX (Berjalan dinamis mengekstrak Server 1, Server 2, dst)
-            // Mengambil Post ID dari elemen opsi player
+            // Rencana B: Dooplay AJAX
             val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
                 ?: document.selectFirst("#player-option-1")?.attr("data-post")
 
             if (postId != null) {
-                // Melakukan looping ke semua tombol server yang tersedia (nume=1, nume=2, dst)
                 document.select(".dooplay_player_option").forEach { playerOption ->
                     val nume = playerOption.attr("data-nume") ?: return@forEach
                     
@@ -197,18 +196,19 @@ class PodjavProvider : MainAPI() {
                             val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
                             val isMp4 = finalLink.contains(".mp4")
                             
+                            // PERBAIKAN: Penulisan ExtractorLinkType.VIDEO dan block initializer {}
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
                                     name = "Server $nume " + if (isMp4) "(MP4)" else "(M3U8)",
                                     url = finalLink,
-                                    referer = mainUrl,
-                                    quality = Qualities.P720.value,
-                                    type = if (isMp4) ExtractorLinkType.MP4 else ExtractorLinkType.M3U8
-                                )
+                                    type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = mainUrl
+                                    this.quality = Qualities.P720.value
+                                }
                             )
 
-                            // Ekstrak subtitle eksternal JIKA tipe videonya M3U8 (MP4 sudah hardsub)
                             if (!isMp4 && finalLink.contains("/master.m3u8")) {
                                 val baseUrl = finalLink.substringBeforeLast("/")
                                 val slug = baseUrl.substringAfterLast("/")
