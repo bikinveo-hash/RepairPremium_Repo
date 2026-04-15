@@ -14,6 +14,19 @@ class PodjavProvider : MainAPI() {
     // LABEL NSFW: Mengubah tipe konten menjadi khusus dewasa
     override val supportedTypes = setOf(TvType.NSFW)
 
+    // MENAMBAHKAN DAFTAR KATEGORI (GENRE)
+    override val mainPage = mainPageOf(
+        "$mainUrl/" to "Baru Upload",
+        "$mainUrl/genre/affair/" to "Perselingkuhan",
+        "$mainUrl/genre/abuse/" to "Pelecehan",
+        "$mainUrl/genre/cuckold/" to "Istri Tidak Setia",
+        "$mainUrl/genre/married-woman/" to "Wanita Menikah",
+        "$mainUrl/genre/rape/" to "Kekerasan",
+        "$mainUrl/genre/young-wife/" to "Istri Muda",
+        "$mainUrl/genre/sweat/" to "Sweat",
+        "$mainUrl/genre/kiss/" to "Kiss"
+    )
+
     /** * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse
      */
     private fun Element.toSearchResult(): SearchResponse? {
@@ -32,29 +45,48 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    /** * 1. HALAMAN UTAMA 
+    /** * 1. HALAMAN UTAMA & KATEGORI
      */
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
         val items = mutableListOf<HomePageList>()
-        val url = if (page == 1) mainUrl else "$mainUrl/page/$page/"
+        
+        // Logika URL untuk menangani perpindahan halaman (Pagination)
+        val url = if (page == 1) {
+            request.data
+        } else {
+            if (request.data == "$mainUrl/") {
+                "$mainUrl/page/$page/" // Pagination halaman utama
+            } else {
+                "${request.data}page/$page/" // Pagination halaman genre
+            }
+        }
         
         val document = app.get(url).document
 
-        if (page == 1) {
-            val featuredElements = document.select("#featured-titles article.item")
-            if (featuredElements.isNotEmpty()) {
-                val featuredList = featuredElements.mapNotNull { it.toSearchResult() }
-                items.add(HomePageList("Baru Upload", featuredList))
+        // Jika sedang membuka tab "Baru Upload" (Homepage)
+        if (request.name == "Baru Upload") {
+            if (page == 1) {
+                val featuredElements = document.select("#featured-titles article.item")
+                if (featuredElements.isNotEmpty()) {
+                    val featuredList = featuredElements.mapNotNull { it.toSearchResult() }
+                    items.add(HomePageList("Terpopuler", featuredList))
+                }
             }
-        }
-
-        val collectionElements = document.select(".items.full article.item")
-        if (collectionElements.isNotEmpty()) {
-            val collectionList = collectionElements.mapNotNull { it.toSearchResult() }
-            items.add(HomePageList("JAV Collection", collectionList))
+            val collectionElements = document.select(".items.full article.item")
+            if (collectionElements.isNotEmpty()) {
+                val collectionList = collectionElements.mapNotNull { it.toSearchResult() }
+                items.add(HomePageList(request.name, collectionList))
+            }
+        } else {
+            // Jika sedang membuka tab Kategori/Genre
+            val elements = document.select("article.item")
+            if (elements.isNotEmpty()) {
+                val list = elements.mapNotNull { it.toSearchResult() }
+                items.add(HomePageList(request.name, list))
+            }
         }
 
         if (items.isEmpty()) return null
@@ -116,9 +148,7 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // --- FUNGSI LOKAL: Agar video dan subtitle selalu dikirim bersamaan ---
         suspend fun processAndInvoke(m3u8Url: String, streamName: String) {
-            // 1. Kirim Video
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
@@ -131,7 +161,6 @@ class PodjavProvider : MainAPI() {
                 }
             )
 
-            // 2. Kirim Subtitle
             if (m3u8Url.contains("/master.m3u8")) {
                 val baseUrl = m3u8Url.substringBeforeLast("/")
                 val slug = baseUrl.substringAfterLast("/")
@@ -148,7 +177,6 @@ class PodjavProvider : MainAPI() {
                 )
             }
         }
-        // -----------------------------------------------------------------------
 
         val iframeSrc = document.select("iframe").mapNotNull { it.attr("src") }
             .firstOrNull { it.contains("source=") }
@@ -159,7 +187,6 @@ class PodjavProvider : MainAPI() {
 
             if (match != null) {
                 val finalM3u8 = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
-                // Panggil fungsi lokal (Video + Subtitle)
                 processAndInvoke(finalM3u8, "HD Stream")
             }
         } else {
@@ -182,7 +209,6 @@ class PodjavProvider : MainAPI() {
                     val m = sourceRegex.find(embedUrl)
                     if (m != null) {
                         val finalM3u8 = java.net.URLDecoder.decode(m.groupValues[1], "UTF-8")
-                        // Panggil fungsi lokal di jalur Backup (Video + Subtitle)
                         processAndInvoke(finalM3u8, "HD (Backup)")
                     }
                 }
