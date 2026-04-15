@@ -67,12 +67,24 @@ class PodjavProvider : MainAPI() {
         val url = "$mainUrl/?s=$query"
         val document = app.get(url).document
 
-        return document.select(".result-item").mapNotNull { element ->
-            val title = element.selectFirst(".details .title a")?.text() ?: return@mapNotNull null
-            val href = element.selectFirst(".details .title a")?.attr("href") ?: return@mapNotNull null
-            val posterUrl = element.selectFirst(".thumbnail img")?.attr("src")
-            val year = element.selectFirst(".details .year")?.text()?.toIntOrNull()
+        // Mengambil langsung semua elemen article di dalam .result-item
+        return document.select(".result-item article").mapNotNull { element ->
+            
+            // 1. Ambil URL film dari elemen a di dalam .title
+            val href = element.selectFirst(".details .title a")?.attr("href") 
+                ?: return@mapNotNull null
+            
+            // 2. Ambil Judul dari teks elemen a yang sama
+            val title = element.selectFirst(".details .title a")?.text() 
+                ?: return@mapNotNull null
+            
+            // 3. Ambil URL Poster dari tag img
+            val posterUrl = element.selectFirst(".image .thumbnail img")?.attr("src")
 
+            // 4. Ambil Tahun Rilis (hanya angkanya saja)
+            val year = element.selectFirst(".details .meta .year")?.text()?.toIntOrNull()
+
+            // 5. Kembalikan data dalam format SearchResponse
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
                 this.year = year
@@ -141,12 +153,17 @@ class PodjavProvider : MainAPI() {
                 if (m3u8Url.contains("/master.m3u8")) {
                     val baseUrl = m3u8Url.substringBeforeLast("/")
                     val slug = baseUrl.substringAfterLast("/")
-                    val srtUrl = "$baseUrl/$slug.srt"
+                    
+                    // Tambahkan timestamp untuk menghindari cache
+                    val currentTime = System.currentTimeMillis() / 1000
+                    val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
 
                     subtitleCallback.invoke(
                         SubtitleFile(
                             lang = "id",
-                            url = srtUrl
+                            url = srtUrl,
+                            // Kirim header Referer agar tidak diblokir oleh sistem anti-hotlink Podjav
+                            headers = mapOf("Referer" to mainUrl)
                         )
                     )
                 }
