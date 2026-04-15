@@ -10,7 +10,9 @@ class PodjavProvider : MainAPI() {
     override var mainUrl = "https://podjav.tv"
     override var lang = "id"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Movie)
+    
+    // LABEL NSFW: Mengubah tipe konten menjadi khusus dewasa
+    override val supportedTypes = setOf(TvType.NSFW)
 
     /** * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse
      */
@@ -25,7 +27,7 @@ class PodjavProvider : MainAPI() {
             
         val posterUrl = this.selectFirst(".poster img")?.attr("src")
 
-        return newMovieSearchResponse(title, url, TvType.Movie) {
+        return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
         }
     }
@@ -41,7 +43,6 @@ class PodjavProvider : MainAPI() {
         
         val document = app.get(url).document
 
-        // Bagian Baru Upload
         if (page == 1) {
             val featuredElements = document.select("#featured-titles article.item")
             if (featuredElements.isNotEmpty()) {
@@ -50,7 +51,6 @@ class PodjavProvider : MainAPI() {
             }
         }
 
-        // Bagian JAV Collection
         val collectionElements = document.select(".items.full article.item")
         if (collectionElements.isNotEmpty()) {
             val collectionList = collectionElements.mapNotNull { it.toSearchResult() }
@@ -67,25 +67,17 @@ class PodjavProvider : MainAPI() {
         val url = "$mainUrl/?s=$query"
         val document = app.get(url).document
 
-        // Mengambil langsung semua elemen article di dalam .result-item
         return document.select(".result-item article").mapNotNull { element ->
-            
-            // 1. Ambil URL film dari elemen a di dalam .title
             val href = element.selectFirst(".details .title a")?.attr("href") 
                 ?: return@mapNotNull null
             
-            // 2. Ambil Judul dari teks elemen a yang sama
             val title = element.selectFirst(".details .title a")?.text() 
                 ?: return@mapNotNull null
             
-            // 3. Ambil URL Poster dari tag img
             val posterUrl = element.selectFirst(".image .thumbnail img")?.attr("src")
-
-            // 4. Ambil Tahun Rilis (hanya angkanya saja)
             val year = element.selectFirst(".details .meta .year")?.text()?.toIntOrNull()
 
-            // 5. Kembalikan data dalam format SearchResponse
-            newMovieSearchResponse(title, href, TvType.Movie) {
+            newMovieSearchResponse(title, href, TvType.NSFW) {
                 this.posterUrl = posterUrl
                 this.year = year
             }
@@ -106,8 +98,7 @@ class PodjavProvider : MainAPI() {
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
-        // 'url' dikirim sebagai parameter 'data' untuk fungsi loadLinks
-        return newMovieLoadResponse(title, url, TvType.Movie, url) {
+        return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
@@ -125,7 +116,40 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Cari iframe player
+        // --- FUNGSI LOKAL: Agar video dan subtitle selalu dikirim bersamaan ---
+        suspend fun processAndInvoke(m3u8Url: String, streamName: String) {
+            // 1. Kirim Video
+            callback.invoke(
+                newExtractorLink(
+                    source = this.name,
+                    name = streamName,
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.P720.value
+                }
+            )
+
+            // 2. Kirim Subtitle
+            if (m3u8Url.contains("/master.m3u8")) {
+                val baseUrl = m3u8Url.substringBeforeLast("/")
+                val slug = baseUrl.substringAfterLast("/")
+                val currentTime = System.currentTimeMillis() / 1000
+                val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
+
+                subtitleCallback.invoke(
+                    newSubtitleFile(
+                        lang = "id",
+                        url = srtUrl
+                    ) {
+                        this.headers = mapOf("Referer" to mainUrl)
+                    }
+                )
+            }
+        }
+        // -----------------------------------------------------------------------
+
         val iframeSrc = document.select("iframe").mapNotNull { it.attr("src") }
             .firstOrNull { it.contains("source=") }
 
@@ -134,43 +158,11 @@ class PodjavProvider : MainAPI() {
             val match = sourceRegex.find(iframeSrc)
 
             if (match != null) {
-                val m3u8Url = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
-
-                // Kirim Link Video M3U8 menggunakan format builder yang baru
-                callback.invoke(
-                    newExtractorLink(
-                        source = this.name,
-                        name = "HD Stream",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.P720.value
-                    }
-                )
-
-                // Tebak Link Subtitle (.srt) berdasarkan folder M3U8
-                if (m3u8Url.contains("/master.m3u8")) {
-                    val baseUrl = m3u8Url.substringBeforeLast("/")
-                    val slug = baseUrl.substringAfterLast("/")
-                    
-                    // Tambahkan timestamp untuk menghindari cache
-                    val currentTime = System.currentTimeMillis() / 1000
-                    val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
-
-                    // PERBAIKAN: Menggunakan newSubtitleFile builder dengan lambda untuk headers
-                    subtitleCallback.invoke(
-                        newSubtitleFile(
-                            lang = "id",
-                            url = srtUrl
-                        ) {
-                            this.headers = mapOf("Referer" to mainUrl)
-                        }
-                    )
-                }
+                val finalM3u8 = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
+                // Panggil fungsi lokal (Video + Subtitle)
+                processAndInvoke(finalM3u8, "HD Stream")
             }
         } else {
-            // Backup: Menggunakan AJAX jika iframe tidak ditemukan di HTML awal
             val postId = document.selectFirst("#player-option-1")?.attr("data-post")
             if (postId != null) {
                 val ajaxResponse = app.post(
@@ -186,24 +178,12 @@ class PodjavProvider : MainAPI() {
                 
                 val embedUrl = ajaxResponse?.embedUrl
                 if (embedUrl != null && embedUrl.contains("source=")) {
-                    // Ulangi logika ekstraksi dari URL embed hasil AJAX
                     val sourceRegex = Regex("""source=([^&]+)""")
                     val m = sourceRegex.find(embedUrl)
                     if (m != null) {
                         val finalM3u8 = java.net.URLDecoder.decode(m.groupValues[1], "UTF-8")
-                        
-                        // Perbaikan ExtractorLink untuk Backup menggunakan builder baru
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = "HD (Backup)",
-                                url = finalM3u8,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.P720.value
-                            }
-                        )
+                        // Panggil fungsi lokal di jalur Backup (Video + Subtitle)
+                        processAndInvoke(finalM3u8, "HD (Backup)")
                     }
                 }
             }
