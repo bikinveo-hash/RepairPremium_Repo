@@ -247,7 +247,7 @@ class PodjavProvider : MainAPI() {
                                 // 1. Lempar ke Cloudstream extractor dulu
                                 val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
                                 
-                                // 2. KITA BONGKAR SENDIRI (Versi Tangguh Anti-Relative URL)
+                                // 2. KITA BONGKAR SENDIRI (Versi Tangguh Jaring Sapu Jagat & Relative URL)
                                 if (!isExtracted) {
                                     try {
                                         // Buka link iframe-nya
@@ -256,15 +256,15 @@ class PodjavProvider : MainAPI() {
                                         // Bongkar sandi javascript (unpack eval)
                                         val unpacked = getAndUnpack(iframeResponse)
                                         
-                                        // REGEX BARU: Tangkap apapun di dalam 'file:"..."' atau 'src:"..."' yang berakhiran .m3u8
-                                        // Termasuk yang berawalan "/" (Relative URL)
-                                        val m3u8Regex = Regex("""(?:file|src)\s*:\s*["']([^"']+\.m3u8[^"']*)["']""")
-                                        val match = m3u8Regex.find(unpacked) ?: m3u8Regex.find(iframeResponse)
+                                        // REGEX SAPU JAGAT: Menangkap URL apa pun (baik berawalan http:// maupun /) yang diakhiri .m3u8 di dalam tanda kutip
+                                        val m3u8Regex = Regex("""["']((?:https?://|/)[^"']*\.m3u8[^"']*)["']""")
                                         
-                                        if (match != null) {
-                                            var m3u8Link = match.groupValues[1]
-                                            
-                                            // Jika URL tidak pakai HTTPS (Relative URL), kita gabungkan dengan nama domain
+                                        // Cari di teks JS yang sudah di-unpack DULU, jika tidak ada, cari di teks HTML aslinya
+                                        var m3u8Link = m3u8Regex.find(unpacked)?.groupValues?.get(1) 
+                                            ?: m3u8Regex.find(iframeResponse)?.groupValues?.get(1)
+                                        
+                                        if (m3u8Link != null) {
+                                            // Jika URL tidak pakai HTTPS (Relative URL), kita gabungkan dengan nama domain iframe asalnya
                                             if (m3u8Link.startsWith("/")) {
                                                 val uri = java.net.URI(iframeUrl)
                                                 val domain = "${uri.scheme}://${uri.host}"
