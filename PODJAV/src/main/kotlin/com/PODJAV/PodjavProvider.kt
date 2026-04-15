@@ -22,7 +22,7 @@ class PodjavProvider : MainAPI() {
         val url = this.selectFirst(".data h3 a")?.attr("href") 
             ?: this.selectFirst(".poster a")?.attr("href") 
             ?: return null
-            
+      
         val posterUrl = this.selectFirst(".poster img")?.attr("src")
 
         return newMovieSearchResponse(title, url, TvType.Movie) {
@@ -124,16 +124,17 @@ class PodjavProvider : MainAPI() {
             if (match != null) {
                 val m3u8Url = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
 
-                // Kirim Link Video M3U8
+                // Kirim Link Video M3U8 menggunakan format builder yang baru
                 callback.invoke(
                     newExtractorLink(
                         source = this.name,
                         name = "HD Stream",
                         url = m3u8Url,
-                        referer = mainUrl,
-                        quality = Qualities.P720.value,
                         type = ExtractorLinkType.M3U8
-                    )
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.P720.value
+                    }
                 )
 
                 // Tebak Link Subtitle (.srt) berdasarkan folder M3U8
@@ -172,8 +173,18 @@ class PodjavProvider : MainAPI() {
                     val m = sourceRegex.find(embedUrl)
                     if (m != null) {
                         val finalM3u8 = java.net.URLDecoder.decode(m.groupValues[1], "UTF-8")
+                        
+                        // Perbaikan ExtractorLink untuk Backup menggunakan builder baru
                         callback.invoke(
-                            newExtractorLink(this.name, "HD (Backup)", finalM3u8, mainUrl, Qualities.P720.value, ExtractorLinkType.M3U8)
+                            newExtractorLink(
+                                source = this.name,
+                                name = "HD (Backup)",
+                                url = finalM3u8,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.P720.value
+                            }
                         )
                     }
                 }
