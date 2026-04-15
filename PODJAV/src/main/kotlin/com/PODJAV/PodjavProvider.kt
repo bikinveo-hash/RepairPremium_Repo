@@ -105,7 +105,7 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    /** * 3. DETAIL FILM 
+    /** * 3. DETAIL FILM (Dilengkapi Aktor & Rekomendasi)
      */
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
@@ -116,10 +116,25 @@ class PodjavProvider : MainAPI() {
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
+        // Mengambil daftar pemain (Cast) secara lebih tangguh (robust)
         val actors = document.select("#cast .persons .person").mapNotNull {
-            val name = it.selectFirst(".data .name a")?.text() ?: return@mapNotNull null
+            val name = it.selectFirst(".data .name")?.text() ?: return@mapNotNull null
             val image = it.selectFirst(".img img")?.attr("src")
             ActorData(Actor(name, image))
+        }
+
+        // Mengambil film rekomendasi (Similar titles)
+        val recommendations = document.select("#single_relacionados article").mapNotNull {
+            val linkElem = it.selectFirst("a") ?: return@mapNotNull null
+            val imgElem = it.selectFirst("img") ?: return@mapNotNull null
+            
+            val recTitle = imgElem.attr("alt") ?: return@mapNotNull null
+            val recUrl = linkElem.attr("href") ?: return@mapNotNull null
+            val recPoster = imgElem.attr("src")
+
+            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) {
+                this.posterUrl = recPoster
+            }
         }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -128,6 +143,7 @@ class PodjavProvider : MainAPI() {
             this.tags = tags
             this.year = year
             this.actors = actors
+            this.recommendations = recommendations
         }
     }
 
@@ -153,7 +169,6 @@ class PodjavProvider : MainAPI() {
                 val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
                 val isMp4 = finalLink.contains(".mp4")
                 
-                // PERBAIKAN: Penulisan ExtractorLinkType.VIDEO dan block initializer {}
                 callback.invoke(
                     newExtractorLink(
                         source = this.name,
@@ -167,7 +182,7 @@ class PodjavProvider : MainAPI() {
                 )
             }
         } else {
-            // Rencana B: Dooplay AJAX
+            // Rencana B: Dooplay AJAX (Mendukung Multi-Server)
             val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
                 ?: document.selectFirst("#player-option-1")?.attr("data-post")
 
@@ -196,7 +211,6 @@ class PodjavProvider : MainAPI() {
                             val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
                             val isMp4 = finalLink.contains(".mp4")
                             
-                            // PERBAIKAN: Penulisan ExtractorLinkType.VIDEO dan block initializer {}
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
@@ -209,6 +223,7 @@ class PodjavProvider : MainAPI() {
                                 }
                             )
 
+                            // Ekstraksi subtitle eksternal khusus untuk format M3U8
                             if (!isMp4 && finalLink.contains("/master.m3u8")) {
                                 val baseUrl = finalLink.substringBeforeLast("/")
                                 val slug = baseUrl.substringAfterLast("/")
