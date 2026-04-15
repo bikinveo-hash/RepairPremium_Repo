@@ -116,7 +116,7 @@ class PodjavProvider : MainAPI() {
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
-        // Mengambil daftar pemain (Cast) secara lebih tangguh (robust)
+        // Mengambil daftar pemain (Cast) secara lebih tangguh (robust) tanpa paksaan tag <a>
         val actors = document.select("#cast .persons .person").mapNotNull {
             val name = it.selectFirst(".data .name")?.text() ?: return@mapNotNull null
             val image = it.selectFirst(".img img")?.attr("src")
@@ -157,7 +157,7 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Rencana A: Mencari Iframe (Fallback)
+        // Rencana A: Mencari Iframe di HTML awal (Fallback)
         val iframeSrc = document.select("iframe").mapNotNull { it.attr("src") }
             .firstOrNull { it.contains("source=") }
 
@@ -182,7 +182,7 @@ class PodjavProvider : MainAPI() {
                 )
             }
         } else {
-            // Rencana B: Dooplay AJAX (Mendukung Multi-Server)
+            // Rencana B: Dooplay AJAX (Mendukung Multi-Server: MP4, M3U8, & IFRAME Pihak Ketiga)
             val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
                 ?: document.selectFirst("#player-option-1")?.attr("data-post")
 
@@ -203,38 +203,84 @@ class PodjavProvider : MainAPI() {
                     
                     val embedUrl = ajaxResponse?.embedUrl
                     
-                    if (embedUrl != null && embedUrl.contains("source=")) {
-                        val sourceRegex = Regex("""source=([^&]+)""")
-                        val match = sourceRegex.find(embedUrl)
-                        
-                        if (match != null) {
-                            val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
-                            val isMp4 = finalLink.contains(".mp4")
+                    if (embedUrl != null) {
+                        // Cek apakah server menggunakan sistem "source=" (Direct MP4/M3U8)
+                        if (embedUrl.contains("source=")) {
+                            val sourceRegex = Regex("""source=([^&]+)""")
+                            val match = sourceRegex.find(embedUrl)
                             
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = "Server $nume " + if (isMp4) "(MP4)" else "(M3U8)",
-                                    url = finalLink,
-                                    type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = mainUrl
-                                    this.quality = Qualities.P720.value
-                                }
-                            )
-
-                            // Ekstraksi subtitle eksternal khusus untuk format M3U8
-                            if (!isMp4 && finalLink.contains("/master.m3u8")) {
-                                val baseUrl = finalLink.substringBeforeLast("/")
-                                val slug = baseUrl.substringAfterLast("/")
-                                val currentTime = System.currentTimeMillis() / 1000
-                                val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
-
-                                subtitleCallback.invoke(
-                                    newSubtitleFile(lang = "id", url = srtUrl) {
-                                        this.headers = mapOf("Referer" to mainUrl)
+                            if (match != null) {
+                                val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
+                                val isMp4 = finalLink.contains(".mp4")
+                                
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "Server $nume " + if (isMp4) "(MP4)" else "(M3U8)",
+                                        url = finalLink,
+                                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = mainUrl
+                                        this.quality = Qualities.P720.value
                                     }
                                 )
+
+                                if (!isMp4 && finalLink.contains("/master.m3u8")) {
+                                    val baseUrl = finalLink.substringBeforeLast("/")
+                                    val slug = baseUrl.substringAfterLast("/")
+                                    val currentTime = System.currentTimeMillis() / 1000
+                                    val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
+
+                                    subtitleCallback.invoke(
+                                        newSubtitleFile(lang = "id", url = srtUrl) {
+                                            this.headers = mapOf("Referer" to mainUrl)
+                                        }
+                                    )
+                                }
+                            }
+                        } 
+                        // Jika bukan "source=", cek apakah ini berupa tag <IFRAME> atau link HTTP biasa
+                        else {
+                            // Menggunakan Jsoup untuk mengekstrak atribut 'src' dengan aman
+                            val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
+                            
+                            if (iframeUrl.startsWith("http")) {
+                                // 1. Coba gunakan ekstraktor bawaan Cloudstream dulu
+                                val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
+                                
+                                // 2. Jika Cloudstream tidak kenal domainnya, KITA BONGKAR SENDIRI! (Packed JS Unpacker)
+                                if (!isExtracted) {
+                                    try {
+                                        // Buka link iframe-nya
+                                        val iframeResponse = app.get(iframeUrl, referer = mainUrl).text
+                                        
+                                        // Bongkar sandi javascript (unpack eval)
+                                        val unpacked = getAndUnpack(iframeResponse)
+                                        
+                                        // Cari link m3u8 yang tersembunyi
+                                        val m3u8Regex = Regex("""(?:file|src)\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                                        val match = m3u8Regex.find(unpacked) ?: m3u8Regex.find(iframeResponse)
+                                        
+                                        if (match != null) {
+                                            val m3u8Link = match.groupValues[1]
+                                            
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    source = "Server $nume",
+                                                    name = "External (M3U8)",
+                                                    url = m3u8Link,
+                                                    type = ExtractorLinkType.M3U8
+                                                ) {
+                                                    // Referer harus ikut asal Iframe supaya tidak diblokir server mereka
+                                                    this.referer = iframeUrl 
+                                                    this.quality = Qualities.P720.value
+                                                }
+                                            )
+                                        }
+                                    } catch (e: Exception) {
+                                        // Abaikan kalau gagal agar aplikasi tidak crash
+                                    }
+                                }
                             }
                         }
                     }
