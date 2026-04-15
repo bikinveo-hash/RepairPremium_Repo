@@ -22,7 +22,7 @@ class PodjavProvider : MainAPI() {
         val url = this.selectFirst(".data h3 a")?.attr("href") 
             ?: this.selectFirst(".poster a")?.attr("href") 
             ?: return null
-      
+            
         val posterUrl = this.selectFirst(".poster img")?.attr("src")
 
         return newMovieSearchResponse(title, url, TvType.Movie) {
@@ -158,13 +158,14 @@ class PodjavProvider : MainAPI() {
                     val currentTime = System.currentTimeMillis() / 1000
                     val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
 
+                    // PERBAIKAN: Menggunakan newSubtitleFile builder dengan lambda untuk headers
                     subtitleCallback.invoke(
-                        SubtitleFile(
+                        newSubtitleFile(
                             lang = "id",
-                            url = srtUrl,
-                            // Kirim header Referer agar tidak diblokir oleh sistem anti-hotlink Podjav
-                            headers = mapOf("Referer" to mainUrl)
-                        )
+                            url = srtUrl
+                        ) {
+                            this.headers = mapOf("Referer" to mainUrl)
+                        }
                     )
                 }
             }
