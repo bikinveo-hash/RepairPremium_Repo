@@ -182,7 +182,7 @@ class PodjavProvider : MainAPI() {
                 )
             }
         } else {
-            // Rencana B: Dooplay AJAX (Mendukung Multi-Server: MP4, M3U8, & IFRAME Pihak Ketiga)
+            // Rencana B: Dooplay AJAX (Mendukung Direct Link & Iframe Pihak Ketiga)
             val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
                 ?: document.selectFirst("#player-option-1")?.attr("data-post")
 
@@ -204,7 +204,7 @@ class PodjavProvider : MainAPI() {
                     val embedUrl = ajaxResponse?.embedUrl
                     
                     if (embedUrl != null) {
-                        // Cek apakah server menggunakan sistem "source=" (Direct MP4/M3U8)
+                        // Cek apakah server menggunakan sistem "source="
                         if (embedUrl.contains("source=")) {
                             val sourceRegex = Regex("""source=([^&]+)""")
                             val match = sourceRegex.find(embedUrl)
@@ -239,16 +239,15 @@ class PodjavProvider : MainAPI() {
                                 }
                             }
                         } 
-                        // Jika bukan "source=", cek apakah ini berupa tag <IFRAME> atau link HTTP biasa
+                        // JIKA IFRAME PIHAK KETIGA (Misal: movearnpre.com / callistanise.com)
                         else {
-                            // Menggunakan Jsoup untuk mengekstrak atribut 'src' dengan aman
                             val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
                             
                             if (iframeUrl.startsWith("http")) {
-                                // 1. Coba gunakan ekstraktor bawaan Cloudstream dulu
+                                // 1. Lempar ke Cloudstream extractor dulu
                                 val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
                                 
-                                // 2. Jika Cloudstream tidak kenal domainnya, KITA BONGKAR SENDIRI! (Packed JS Unpacker)
+                                // 2. KITA BONGKAR SENDIRI (Versi Tangguh Anti-Relative URL)
                                 if (!isExtracted) {
                                     try {
                                         // Buka link iframe-nya
@@ -257,12 +256,20 @@ class PodjavProvider : MainAPI() {
                                         // Bongkar sandi javascript (unpack eval)
                                         val unpacked = getAndUnpack(iframeResponse)
                                         
-                                        // Cari link m3u8 yang tersembunyi
-                                        val m3u8Regex = Regex("""(?:file|src)\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                                        // REGEX BARU: Tangkap apapun di dalam 'file:"..."' atau 'src:"..."' yang berakhiran .m3u8
+                                        // Termasuk yang berawalan "/" (Relative URL)
+                                        val m3u8Regex = Regex("""(?:file|src)\s*:\s*["']([^"']+\.m3u8[^"']*)["']""")
                                         val match = m3u8Regex.find(unpacked) ?: m3u8Regex.find(iframeResponse)
                                         
                                         if (match != null) {
-                                            val m3u8Link = match.groupValues[1]
+                                            var m3u8Link = match.groupValues[1]
+                                            
+                                            // Jika URL tidak pakai HTTPS (Relative URL), kita gabungkan dengan nama domain
+                                            if (m3u8Link.startsWith("/")) {
+                                                val uri = java.net.URI(iframeUrl)
+                                                val domain = "${uri.scheme}://${uri.host}"
+                                                m3u8Link = "$domain$m3u8Link"
+                                            }
                                             
                                             callback.invoke(
                                                 newExtractorLink(
