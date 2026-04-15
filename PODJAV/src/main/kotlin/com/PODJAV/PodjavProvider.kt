@@ -27,7 +27,7 @@ class PodjavProvider : MainAPI() {
         "$mainUrl/genre/kiss/" to "Kiss"
     )
 
-    /** * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse
+    /** * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse 
      */
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".data h3 a")?.text() 
@@ -53,20 +53,14 @@ class PodjavProvider : MainAPI() {
     ): HomePageResponse? {
         val items = mutableListOf<HomePageList>()
         
-        // Logika URL untuk menangani perpindahan halaman (Pagination)
         val url = if (page == 1) {
             request.data
         } else {
-            if (request.data == "$mainUrl/") {
-                "$mainUrl/page/$page/" // Pagination halaman utama
-            } else {
-                "${request.data}page/$page/" // Pagination halaman genre
-            }
+            if (request.data == "$mainUrl/") "$mainUrl/page/$page/" else "${request.data}page/$page/"
         }
         
         val document = app.get(url).document
 
-        // Jika sedang membuka tab "Baru Upload" (Homepage)
         if (request.name == "Baru Upload") {
             if (page == 1) {
                 val featuredElements = document.select("#featured-titles article.item")
@@ -81,7 +75,6 @@ class PodjavProvider : MainAPI() {
                 items.add(HomePageList(request.name, collectionList))
             }
         } else {
-            // Jika sedang membuka tab Kategori/Genre
             val elements = document.select("article.item")
             if (elements.isNotEmpty()) {
                 val list = elements.mapNotNull { it.toSearchResult() }
@@ -100,12 +93,8 @@ class PodjavProvider : MainAPI() {
         val document = app.get(url).document
 
         return document.select(".result-item article").mapNotNull { element ->
-            val href = element.selectFirst(".details .title a")?.attr("href") 
-                ?: return@mapNotNull null
-            
-            val title = element.selectFirst(".details .title a")?.text() 
-                ?: return@mapNotNull null
-            
+            val href = element.selectFirst(".details .title a")?.attr("href") ?: return@mapNotNull null
+            val title = element.selectFirst(".details .title a")?.text() ?: return@mapNotNull null
             val posterUrl = element.selectFirst(".image .thumbnail img")?.attr("src")
             val year = element.selectFirst(".details .meta .year")?.text()?.toIntOrNull()
 
@@ -116,29 +105,34 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    /** * 3. DETAIL FILM 
+    /** * 3. DETAIL FILM (Ditambahkan penarikan data Aktor berdasarkan analisamu)
      */
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.selectFirst(".sheader .data h1")?.text() 
-            ?: document.selectFirst("h1")?.text() 
-            ?: return null
-
+        val title = document.selectFirst(".sheader .data h1")?.text() ?: document.selectFirst("h1")?.text() ?: return null
         val posterUrl = document.selectFirst(".sheader .poster img")?.attr("src")
         val plot = document.selectFirst(".wp-content p")?.text()
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
+
+        // Mengambil daftar pemain (Cast) dari HTML
+        val actors = document.select("#cast .persons .person").mapNotNull {
+            val name = it.selectFirst(".data .name a")?.text() ?: return@mapNotNull null
+            val image = it.selectFirst(".img img")?.attr("src")
+            ActorData(Actor(name, image))
+        }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
             this.year = year
+            this.actors = actors
         }
     }
 
-    /** * 4. EKSTRAKSI LINK VIDEO & SUBTITLE
+    /** * 4. EKSTRAKSI LINK VIDEO & SUBTITLE (Diperbarui dengan Multiple Server MP4/M3U8)
      */
     override suspend fun loadLinks(
         data: String,
@@ -148,36 +142,7 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        suspend fun processAndInvoke(m3u8Url: String, streamName: String) {
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = streamName,
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.P720.value
-                }
-            )
-
-            if (m3u8Url.contains("/master.m3u8")) {
-                val baseUrl = m3u8Url.substringBeforeLast("/")
-                val slug = baseUrl.substringAfterLast("/")
-                val currentTime = System.currentTimeMillis() / 1000
-                val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
-
-                subtitleCallback.invoke(
-                    newSubtitleFile(
-                        lang = "id",
-                        url = srtUrl
-                    ) {
-                        this.headers = mapOf("Referer" to mainUrl)
-                    }
-                )
-            }
-        }
-
+        // Rencana A: Mencari Iframe (Fallback)
         val iframeSrc = document.select("iframe").mapNotNull { it.attr("src") }
             .firstOrNull { it.contains("source=") }
 
@@ -186,30 +151,77 @@ class PodjavProvider : MainAPI() {
             val match = sourceRegex.find(iframeSrc)
 
             if (match != null) {
-                val finalM3u8 = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
-                processAndInvoke(finalM3u8, "HD Stream")
+                val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
+                val isMp4 = finalLink.contains(".mp4")
+                
+                callback.invoke(
+                    newExtractorLink(
+                        source = this.name,
+                        name = "HD Stream " + if(isMp4) "(MP4)" else "(M3U8)",
+                        url = finalLink,
+                        referer = mainUrl,
+                        quality = Qualities.P720.value,
+                        type = if (isMp4) ExtractorLinkType.MP4 else ExtractorLinkType.M3U8
+                    )
+                )
             }
         } else {
-            val postId = document.selectFirst("#player-option-1")?.attr("data-post")
+            // Rencana B: Dooplay AJAX (Berjalan dinamis mengekstrak Server 1, Server 2, dst)
+            // Mengambil Post ID dari elemen opsi player
+            val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
+                ?: document.selectFirst("#player-option-1")?.attr("data-post")
+
             if (postId != null) {
-                val ajaxResponse = app.post(
-                    "$mainUrl/wp-admin/admin-ajax.php",
-                    data = mapOf(
-                        "action" to "doo_player_ajax",
-                        "post" to postId,
-                        "nume" to "1",
-                        "type" to "movie"
-                    ),
-                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-                ).parsedSafe<DooplayAjaxResponse>()
-                
-                val embedUrl = ajaxResponse?.embedUrl
-                if (embedUrl != null && embedUrl.contains("source=")) {
-                    val sourceRegex = Regex("""source=([^&]+)""")
-                    val m = sourceRegex.find(embedUrl)
-                    if (m != null) {
-                        val finalM3u8 = java.net.URLDecoder.decode(m.groupValues[1], "UTF-8")
-                        processAndInvoke(finalM3u8, "HD (Backup)")
+                // Melakukan looping ke semua tombol server yang tersedia (nume=1, nume=2, dst)
+                document.select(".dooplay_player_option").forEach { playerOption ->
+                    val nume = playerOption.attr("data-nume") ?: return@forEach
+                    
+                    val ajaxResponse = app.post(
+                        "$mainUrl/wp-admin/admin-ajax.php",
+                        data = mapOf(
+                            "action" to "doo_player_ajax",
+                            "post" to postId,
+                            "nume" to nume,
+                            "type" to "movie"
+                        ),
+                        headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                    ).parsedSafe<DooplayAjaxResponse>()
+                    
+                    val embedUrl = ajaxResponse?.embedUrl
+                    
+                    if (embedUrl != null && embedUrl.contains("source=")) {
+                        val sourceRegex = Regex("""source=([^&]+)""")
+                        val match = sourceRegex.find(embedUrl)
+                        
+                        if (match != null) {
+                            val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
+                            val isMp4 = finalLink.contains(".mp4")
+                            
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = "Server $nume " + if (isMp4) "(MP4)" else "(M3U8)",
+                                    url = finalLink,
+                                    referer = mainUrl,
+                                    quality = Qualities.P720.value,
+                                    type = if (isMp4) ExtractorLinkType.MP4 else ExtractorLinkType.M3U8
+                                )
+                            )
+
+                            // Ekstrak subtitle eksternal JIKA tipe videonya M3U8 (MP4 sudah hardsub)
+                            if (!isMp4 && finalLink.contains("/master.m3u8")) {
+                                val baseUrl = finalLink.substringBeforeLast("/")
+                                val slug = baseUrl.substringAfterLast("/")
+                                val currentTime = System.currentTimeMillis() / 1000
+                                val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
+
+                                subtitleCallback.invoke(
+                                    newSubtitleFile(lang = "id", url = srtUrl) {
+                                        this.headers = mapOf("Referer" to mainUrl)
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
