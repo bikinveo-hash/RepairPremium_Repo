@@ -349,8 +349,15 @@ class IdlixProvider : MainAPI() {
             val fullEmbedUrl = if (embedPath.startsWith("/")) "$mainUrl$embedPath" else embedPath
             
             // Tahap 3: Ambil iframe / Data API dari path embed
-            // Karena Idlix memakai CSR (Client-Side Rendering), kita paksa tembak sebagai JSON/teks
-            val embedResponse = app.get(fullEmbedUrl, headers = headers)
+            // 🔥 KITA GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE
+            val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
+            
+            val embedResponse = app.get(
+                fullEmbedUrl, 
+                headers = headers,
+                interceptor = WebViewResolver(jeniusRegex) // Senjata rahasia Cloudstream!
+            )
+            
             val finalUrl = embedResponse.url
             val embedText = embedResponse.text 
             
@@ -361,8 +368,7 @@ class IdlixProvider : MainAPI() {
                 return true
             }
 
-            // 🔥 BYPASS API NEXT.JS: Cari link jeniusplay di dalam teks balasan JSON/HTML
-            val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
+            // Cari link jeniusplay di dalam teks balasan JSON/HTML
             var matchUrl = jeniusRegex.find(embedText)?.groupValues?.get(1)
 
             // Fallback: Apabila Idlix memblokir GET murni, coba tembak menggunakan POST
@@ -374,7 +380,7 @@ class IdlixProvider : MainAPI() {
             if (matchUrl != null) {
                 val iframeSrc = "https://$matchUrl"
                 Log.d("adixtream", "Berhasil melacak link Jeniusplay: $iframeSrc")
-                // Serahkan ke Extractor.kt (yang sudah kita pasangi Cookie Injector)
+                // Serahkan ke Extractor Jeniusplay (Yang sudah kita perbaiki!)
                 loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
                 return true
             } else {
