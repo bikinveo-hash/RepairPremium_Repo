@@ -41,7 +41,7 @@ class PodjavProvider : MainAPI() {
             
         val posterUrl = this.selectFirst(".poster img")?.attr("src")
 
-        // DETEKSI LABEL UNCENSORED: Jika elemen span HTML ditemukan, tambahkan tag ke judul!
+        // DETEKSI LABEL UNCENSORED
         val isUncensored = this.selectFirst(".uncensored-tag") != null
         val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $titleText" else titleText
 
@@ -103,7 +103,6 @@ class PodjavProvider : MainAPI() {
             val posterUrl = element.selectFirst(".image .thumbnail img")?.attr("src")
             val year = element.selectFirst(".details .meta .year")?.text()?.toIntOrNull()
 
-            // Cek Uncensored juga saat melakukan pencarian
             val isUncensored = element.selectFirst(".uncensored-tag") != null
             val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $title" else title
 
@@ -125,14 +124,12 @@ class PodjavProvider : MainAPI() {
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
-        // Mengambil daftar pemain (Cast) secara lebih tangguh tanpa paksaan tag <a>
         val actors = document.select("#cast .persons .person").mapNotNull {
             val name = it.selectFirst(".data .name")?.text() ?: return@mapNotNull null
             val image = it.selectFirst(".img img")?.attr("src")
             ActorData(Actor(name, image))
         }
 
-        // Mengambil film rekomendasi (Similar titles)
         val recommendations = document.select("#single_relacionados article").mapNotNull {
             val linkElem = it.selectFirst("a") ?: return@mapNotNull null
             val imgElem = it.selectFirst("img") ?: return@mapNotNull null
@@ -194,7 +191,7 @@ class PodjavProvider : MainAPI() {
                 )
             }
         } else {
-            // Rencana B: Dooplay AJAX (Mendukung Direct Link & Iframe Pihak Ketiga)
+            // Rencana B: Dooplay AJAX (Mendukung Direct Link, VOD, & Iframe Pihak Ketiga)
             val postId = document.selectFirst(".dooplay_player_option")?.attr("data-post") 
                 ?: document.selectFirst("#player-option-1")?.attr("data-post")
 
@@ -251,48 +248,83 @@ class PodjavProvider : MainAPI() {
                                 }
                             }
                         } 
-                        // JIKA IFRAME PIHAK KETIGA (Misal: movearnpre.com / callistanise.com / ryderjet.com)
+                        // JIKA BERUPA DIRECT LINK, VOD SERVER ATAU IFRAME PIHAK KETIGA
                         else {
                             val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
                             
                             if (iframeUrl.startsWith("http")) {
-                                // 1. Lempar ke Cloudstream extractor dulu (Ryderjet dkk)
-                                val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
                                 
-                                // 2. KITA BONGKAR SENDIRI (Jaring Sapu Jagat & Relative URL Handler)
-                                if (!isExtracted) {
-                                    try {
-                                        val iframeResponse = app.get(iframeUrl, referer = mainUrl).text
-                                        val unpacked = getAndUnpack(iframeResponse)
-                                        
-                                        // REGEX SAPU JAGAT: Menangkap URL apa pun yang diakhiri .m3u8 di dalam tanda kutip
-                                        val m3u8Regex = Regex("""["']((?:https?://|/)[^"']*\.m3u8[^"']*)["']""")
-                                        
-                                        var m3u8Link = m3u8Regex.find(unpacked)?.groupValues?.get(1) 
-                                            ?: m3u8Regex.find(iframeResponse)?.groupValues?.get(1)
-                                        
-                                        if (m3u8Link != null) {
-                                            // Handle Relative URL (awalan "/") dengan menggabungkan domain asalnya
-                                            if (m3u8Link.startsWith("/")) {
-                                                val uri = java.net.URI(iframeUrl)
-                                                val domain = "${uri.scheme}://${uri.host}"
-                                                m3u8Link = "$domain$m3u8Link"
-                                            }
-                                            
-                                            callback.invoke(
-                                                newExtractorLink(
-                                                    source = "Server $nume",
-                                                    name = "External (M3U8)",
-                                                    url = m3u8Link,
-                                                    type = ExtractorLinkType.M3U8
-                                                ) {
-                                                    this.referer = iframeUrl 
-                                                    this.quality = Qualities.P720.value
-                                                }
-                                            )
+                                // JALUR CEPAT (FAST TRACK): Deteksi VOD Server Pribadi (.m3u8 / .mp4)
+                                val isDirectMp4 = iframeUrl.contains(".mp4")
+                                val isDirectM3u8 = iframeUrl.contains(".m3u8")
+
+                                if (isDirectMp4 || isDirectM3u8) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "VOD Server $nume",
+                                            name = "Direct Stream " + if (isDirectMp4) "(MP4)" else "(M3U8)",
+                                            url = iframeUrl,
+                                            type = if (isDirectMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = mainUrl
+                                            this.quality = Qualities.Unknown.value // Biar ExoPlayer otomatis membaca 360p/480p dari dalam M3U8
                                         }
-                                    } catch (e: Exception) {
-                                        // Silent fail
+                                    )
+
+                                    // Subtitle handler untuk VOD Pribadi
+                                    if (!isDirectMp4 && iframeUrl.contains("/master.m3u8")) {
+                                        val baseUrl = iframeUrl.substringBeforeLast("/")
+                                        val slug = baseUrl.substringAfterLast("/")
+                                        val currentTime = System.currentTimeMillis() / 1000
+                                        val srtUrl = "$baseUrl/$slug.srt?t=$currentTime"
+
+                                        subtitleCallback.invoke(
+                                            newSubtitleFile(lang = "id", url = srtUrl) {
+                                                this.headers = mapOf("Referer" to mainUrl)
+                                            }
+                                        )
+                                    }
+                                } 
+                                // JIKA BUKAN DIRECT LINK, MASUK JARING SAPU JAGAT
+                                else {
+                                    // 1. Lempar ke Cloudstream extractor dulu (Ryderjet dkk)
+                                    val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
+                                    
+                                    // 2. KITA BONGKAR SENDIRI (Jaring Sapu Jagat & Relative URL Handler)
+                                    if (!isExtracted) {
+                                        try {
+                                            val iframeResponse = app.get(iframeUrl, referer = mainUrl).text
+                                            val unpacked = getAndUnpack(iframeResponse)
+                                            
+                                            // REGEX SAPU JAGAT
+                                            val m3u8Regex = Regex("""["']((?:https?://|/)[^"']*\.m3u8[^"']*)["']""")
+                                            
+                                            var m3u8Link = m3u8Regex.find(unpacked)?.groupValues?.get(1) 
+                                                ?: m3u8Regex.find(iframeResponse)?.groupValues?.get(1)
+                                            
+                                            if (m3u8Link != null) {
+                                                // Handle Relative URL
+                                                if (m3u8Link.startsWith("/")) {
+                                                    val uri = java.net.URI(iframeUrl)
+                                                    val domain = "${uri.scheme}://${uri.host}"
+                                                    m3u8Link = "$domain$m3u8Link"
+                                                }
+                                                
+                                                callback.invoke(
+                                                    newExtractorLink(
+                                                        source = "Server $nume",
+                                                        name = "External (M3U8)",
+                                                        url = m3u8Link,
+                                                        type = ExtractorLinkType.M3U8
+                                                    ) {
+                                                        this.referer = iframeUrl 
+                                                        this.quality = Qualities.P720.value
+                                                    }
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            // Silent fail
+                                        }
                                     }
                                 }
                             }
