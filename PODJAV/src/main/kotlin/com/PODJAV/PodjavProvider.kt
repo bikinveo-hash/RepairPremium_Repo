@@ -239,12 +239,12 @@ class PodjavProvider : MainAPI() {
                                 }
                             }
                         } 
-                        // JIKA IFRAME PIHAK KETIGA (Misal: movearnpre.com / callistanise.com)
+                        // JIKA IFRAME PIHAK KETIGA (Misal: movearnpre.com / callistanise.com / ryderjet.com)
                         else {
                             val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
                             
                             if (iframeUrl.startsWith("http")) {
-                                // 1. Lempar ke Cloudstream extractor dulu
+                                // 1. Lempar ke Cloudstream extractor dulu (Ryderjet akan diekstrak di sini)
                                 val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
                                 
                                 // 2. KITA BONGKAR SENDIRI (Versi Tangguh Jaring Sapu Jagat & Relative URL)
