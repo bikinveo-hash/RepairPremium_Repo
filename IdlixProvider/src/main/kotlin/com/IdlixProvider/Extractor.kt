@@ -96,22 +96,22 @@ class Jeniusplay : ExtractorApi() {
             if (!videoUrl.isNullOrEmpty()) {
                 Log.d("adixtream", "Jeniusplay berhasil menemukan video final: $videoUrl")
                 
-                // Ekstraktor Direct (Ini paling aman jika format akhir adalah .txt)
+                // Ekstraktor Direct
                 callback.invoke(
                     newExtractorLink(
                         source = name,
                         name = "$name",
                         url = videoUrl!!,
-                        referer = "", // Dikosongkan agar terhindar dari blokir CDN 403 Forbidden
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.quality = Qualities.Unknown.value
                         // 🔥 SUNTIKKAN HEADER & COOKIE KE EXOPLAYER
+                        // Tanpa referer yang spesifik di sini agar CDN tidak memblokir (403 Forbidden)
                         this.headers = mapOf("Cookie" to cookieString) 
                     }
                 )
                 
-                // Ekstraktor M3U8 Bawaan Cloudstream (Opsi tambahan jika link berformat .m3u8)
+                // Ekstraktor M3U8 Bawaan Cloudstream
                 try {
                     generateM3u8(name, videoUrl!!, url, headers = playerHeaders).forEach(callback)
                 } catch (e: Exception) {
@@ -139,5 +139,5 @@ class Jeniusplay : ExtractorApi() {
 // Data Class Fallback Jeniusplay
 data class ResponseSource(
     @JsonProperty("videoSource") val videoSource: String? = null,
-    @JsonProperty("securedLink") val securedLink: String? = null // 🔥 Wajib ditambahkan
+    @JsonProperty("securedLink") val securedLink: String? = null // 🔥 Tambahan untuk tiket token
 )
