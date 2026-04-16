@@ -19,8 +19,22 @@ class Jeniusplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // 1. Ambil HTML dari Jeniusplay
-            val htmlContent = app.get(url, referer = referer).text
+            Log.d("adixtream", "Jeniusplay Ekstraktor Memproses: $url")
+            
+            // 1. Ambil HTML dari Jeniusplay & TANGKAP COOKIE-NYA!
+            val response = app.get(url, referer = referer)
+            val htmlContent = response.text
+            
+            // 🔥 MERAMPOK COOKIE SESSION (Untuk disuapkan ke ExoPlayer)
+            val cookies = response.cookies
+            val cookieString = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            
+            // Siapkan Header Khusus untuk ExoPlayer
+            val playerHeaders = mapOf(
+                "Referer" to url,
+                "Cookie" to cookieString,
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+            )
             
             // 2. Ekstrak Subtitle
             val subtitleRegex = """var\s+playerjsSubtitle\s*=\s*["'](.*?)["']""".toRegex()
@@ -58,7 +72,10 @@ class Jeniusplay : ExtractorApi() {
                     url = apiUrl,
                     data = mapOf("hash" to hash, "r" to (referer ?: mainUrl)),
                     referer = url,
-                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                    headers = mapOf(
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "Cookie" to cookieString // Pastikan API fallback juga pakai Cookie
+                    )
                 ).parsedSafe<ResponseSource>()
                 
                 val rawVideoSource = apiResponse?.videoSource
@@ -68,12 +85,12 @@ class Jeniusplay : ExtractorApi() {
                 }
             }
 
-            // 6. Lempar Link ke ExtractorLink
+            // 6. Lempar Link ke ExtractorLink dengan COOKIE INJECTOR
             if (!videoUrl.isNullOrEmpty()) {
                 Log.d("adixtream", "Jeniusplay berhasil menemukan video: $videoUrl")
                 
-                // Ekstraktor M3U8
-                generateM3u8(name, videoUrl, mainUrl).forEach(callback)
+                // Ekstraktor M3U8 (Pakai playerHeaders yang sudah ada Cookienya)
+                generateM3u8(name, videoUrl, url, headers = playerHeaders).forEach(callback)
                 
                 // Ekstraktor Direct
                 callback.invoke(
@@ -84,7 +101,8 @@ class Jeniusplay : ExtractorApi() {
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.quality = Qualities.Unknown.value
-                        this.referer = url 
+                        // 🔥 SUNTIKKAN HEADER & COOKIE KE EXOPLAYER
+                        this.headers = playerHeaders 
                     }
                 )
             } else {
