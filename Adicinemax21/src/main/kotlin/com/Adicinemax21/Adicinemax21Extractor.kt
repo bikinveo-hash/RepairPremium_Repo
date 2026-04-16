@@ -109,20 +109,44 @@ object Adicinemax21Extractor : Adicinemax21() {
             val embedPath = solveRes?.embedUrl ?: return
             val fullEmbedUrl = if (embedPath.startsWith("/")) "$idlixApi$embedPath" else embedPath
 
-            // 6. Ambil URL final, lalu kirim ke Jeniusplay
-            val embedResponse = app.get(fullEmbedUrl, headers = mapOf("Referer" to "$idlixApi/"))
+            // 6. 🔥 GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE DI EMBED
+            val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
+            
+            val embedResponse = app.get(
+                fullEmbedUrl, 
+                headers = mapOf("Referer" to "$idlixApi/"),
+                interceptor = WebViewResolver(jeniusRegex)
+            )
+            
             val finalUrl = embedResponse.url
+            val embedText = embedResponse.text 
 
+            // Apabila request langsung di-redirect ke jeniusplay
             if (finalUrl.contains("jeniusplay", true)) {
                 Jeniusplay().getUrl(finalUrl, fullEmbedUrl, subtitleCallback, callback)
             } else {
-                var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
-                if (!iframeSrc.isNullOrEmpty()) {
-                    if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
-                    if (iframeSrc.contains("jeniusplay", true)) {
-                        Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                    } else {
-                        loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                // Cari link jeniusplay di dalam teks balasan JSON/HTML
+                var matchUrl = jeniusRegex.find(embedText)?.groupValues?.get(1)
+
+                // Fallback: Apabila Idlix memblokir GET murni, coba tembak menggunakan POST
+                if (matchUrl == null) {
+                    val embedPostResponse = app.post(fullEmbedUrl, headers = mapOf("Referer" to "$idlixApi/"))
+                    matchUrl = jeniusRegex.find(embedPostResponse.text)?.groupValues?.get(1)
+                }
+
+                if (matchUrl != null) {
+                    val iframeSrc = "https://$matchUrl"
+                    Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                } else {
+                    // Fallback kalau pakai iframe biasa
+                    var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
+                    if (!iframeSrc.isNullOrEmpty()) {
+                        if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
+                        if (iframeSrc.contains("jeniusplay", true)) {
+                            Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                        } else {
+                            loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                        }
                     }
                 }
             }
@@ -484,7 +508,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         val res = app.get(url).document.selectFirst("script:containsData(window.masterPlaylist)")?.data() ?: return
         val video1 = Regex("""'token':\s*'(\w+)'[\S\s]+'expires':\s*'(\w+)'[\S\s]+url:\s*'(\S+)'""").find(res)?.let {
                     val (token, expires, path) = it.destructured
-                    "$path?token=$token&expires=$expires&h=1&lang=en"
+                "$path?token=$token&expires=$expires&h=1&lang=en"
                 } ?: return
         val video2 = "$proxy/p/${base64Encode("$proxy/api/proxy/m3u8?url=${encode(video1)}&source=sakura|ananananananananaBatman!".toByteArray())}"
         listOf(VixsrcSource("Vixsrc [Alpha]", video1, url), VixsrcSource("Vixsrc [Beta]", video2, "${Adicinemax21.mappleAPI}/")).map {
