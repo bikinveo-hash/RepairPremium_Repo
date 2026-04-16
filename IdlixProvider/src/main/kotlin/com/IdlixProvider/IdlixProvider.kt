@@ -37,7 +37,7 @@ class IdlixProvider : MainAPI() {
         "$mainUrl/api/browse?page=1&limit=36&sort=latest&genre=thriller" to "Thriller"
     )
 
-    // Helper untuk merakit Judul + Season saja yang rapi
+    // Helper untuk merakit Judul + Season
     private fun formatTitle(title: String, season: Int?): String {
         return if (season != null && season > 0) "$title (S$season)" else title
     }
@@ -296,7 +296,7 @@ class IdlixProvider : MainAPI() {
         }
     }
 
-    // --- MENDAPATKAN LINK VIDEO ---
+    // --- MENDAPATKAN LINK VIDEO (API & CSR BYPASS) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -311,62 +311,76 @@ class IdlixProvider : MainAPI() {
             val contentId = parts.getOrNull(1) ?: data 
             val refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
 
+            val headers = mapOf(
+                "Referer" to refererUrl, 
+                "Origin" to mainUrl, 
+                "Accept" to "application/json, text/plain, */*",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+            )
+
             // Tahap 1: Challenge
             val challengeRes = app.post(
                 url = "$mainUrl/api/watch/challenge",
                 json = mapOf("contentType" to contentType, "contentId" to contentId),
-                headers = mapOf("Referer" to refererUrl, "Origin" to mainUrl, "Accept" to "application/json, text/plain, */*")
-            ).parsedSafe<ChallengeResponse>()
+                headers = headers
+            ).parsedSafe<ChallengeResponse>() ?: return false
 
-            val challenge = challengeRes?.challenge ?: return false
+            val challenge = challengeRes.challenge ?: return false
             val signature = challengeRes.signature ?: return false
             val difficulty = challengeRes.difficulty ?: 3
             
             // Tahap 2: Solve Nonce (SHA-256 Bypass)
-            val nonce = mineNonce(challenge, difficulty)
-            if (nonce == null) return false
+            val nonce = mineNonce(challenge, difficulty) ?: return false
 
             val solveRes = app.post(
                 url = "$mainUrl/api/watch/solve",
                 json = mapOf("challenge" to challenge, "signature" to signature, "nonce" to nonce),
-                headers = mapOf("Referer" to refererUrl, "Origin" to mainUrl, "Accept" to "application/json, text/plain, */*")
+                headers = headers
             ).parsedSafe<SolveResponse>()
 
             val embedPath = solveRes?.embedUrl ?: return false
+            
+            // Cek instan: jika embedUrl langsung mengarah ke Jeniusplay
+            if (embedPath.contains("jeniusplay.com")) {
+                loadExtractor(embedPath, refererUrl, subtitleCallback, callback)
+                return true
+            }
+
             val fullEmbedUrl = if (embedPath.startsWith("/")) "$mainUrl$embedPath" else embedPath
             
-            // Tahap 3: Ambil iframe / Redirect Jeniusplay
-            val embedResponse = app.get(fullEmbedUrl, headers = mapOf("Referer" to refererUrl))
+            // Tahap 3: Ambil iframe / Data API dari path embed
+            // Karena Idlix memakai CSR (Client-Side Rendering), kita paksa tembak sebagai JSON/teks
+            val embedResponse = app.get(fullEmbedUrl, headers = headers)
             val finalUrl = embedResponse.url
-            val embedHtml = embedResponse.text // Ambil teks HTML mentahnya
+            val embedText = embedResponse.text 
             
+            // Apabila request langsung di-redirect ke jeniusplay
             if (finalUrl.contains("jeniusplay.com")) {
                 Log.d("adixtream", "Redirected ke Jeniusplay: $finalUrl")
                 loadExtractor(finalUrl, fullEmbedUrl, subtitleCallback, callback)
-            } else {
-                var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src") 
-                
-                // 🔥 BYPASS BARU: Regex Super Agresif
-                // Menangkap apapun formatnya (baik pakai https://, //, atau tanpa protokol)
-                if (iframeSrc.isNullOrEmpty()) {
-                    val jeniusRegex = """(jeniusplay\.com/video/[a-zA-Z0-9]+)""".toRegex()
-                    val matchUrl = jeniusRegex.find(embedHtml)?.groupValues?.get(1)
-                    if (matchUrl != null) {
-                        iframeSrc = "https://$matchUrl"
-                    }
-                }
-
-                if (!iframeSrc.isNullOrEmpty()) {
-                    if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
-                    Log.d("adixtream", "Berhasil melacak link Jeniusplay: $iframeSrc")
-                    
-                    // Serahkan ke Extractor.kt (yang sudah kita pasangi Cookie Injector)
-                    loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                } else {
-                    Log.d("adixtream", "Iframe tidak ditemukan dan Regex gagal menangkap link.")
-                }
+                return true
             }
-            return true
+
+            // 🔥 BYPASS API NEXT.JS: Cari link jeniusplay di dalam teks balasan JSON/HTML
+            val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
+            var matchUrl = jeniusRegex.find(embedText)?.groupValues?.get(1)
+
+            // Fallback: Apabila Idlix memblokir GET murni, coba tembak menggunakan POST
+            if (matchUrl == null) {
+                val embedPostResponse = app.post(fullEmbedUrl, headers = headers)
+                matchUrl = jeniusRegex.find(embedPostResponse.text)?.groupValues?.get(1)
+            }
+
+            if (matchUrl != null) {
+                val iframeSrc = "https://$matchUrl"
+                Log.d("adixtream", "Berhasil melacak link Jeniusplay: $iframeSrc")
+                // Serahkan ke Extractor.kt (yang sudah kita pasangi Cookie Injector)
+                loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                return true
+            } else {
+                Log.d("adixtream", "Iframe tidak ditemukan dan Regex gagal menangkap link.")
+            }
+            return false
         } catch (e: Exception) {
             Log.e("adixtream", "Error di loadLinks: ${e.message}")
             e.printStackTrace()
