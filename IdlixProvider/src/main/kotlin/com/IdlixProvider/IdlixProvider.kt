@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.WebViewResolver // 🔥 Ini alat yang sebelumnya hilang
 import java.security.MessageDigest
 
 class IdlixProvider : MainAPI() {
@@ -349,13 +350,13 @@ class IdlixProvider : MainAPI() {
             val fullEmbedUrl = if (embedPath.startsWith("/")) "$mainUrl$embedPath" else embedPath
             
             // Tahap 3: Ambil iframe / Data API dari path embed
-            // 🔥 KITA GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE
             val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
             
+            // 🔥 KITA GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE
             val embedResponse = app.get(
                 fullEmbedUrl, 
                 headers = headers,
-                interceptor = WebViewResolver(jeniusRegex) // Senjata rahasia Cloudstream!
+                interceptor = WebViewResolver(jeniusRegex)
             )
             
             val finalUrl = embedResponse.url
@@ -380,7 +381,6 @@ class IdlixProvider : MainAPI() {
             if (matchUrl != null) {
                 val iframeSrc = "https://$matchUrl"
                 Log.d("adixtream", "Berhasil melacak link Jeniusplay: $iframeSrc")
-                // Serahkan ke Extractor Jeniusplay (Yang sudah kita perbaiki!)
                 loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
                 return true
             } else {
