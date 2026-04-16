@@ -90,12 +90,10 @@ class Yflix : MainAPI() {
         val year = document.selectFirst("span[itemprop=dateCreated]")?.text()?.substringBefore("-")?.toIntOrNull()
             ?: document.selectFirst(".metadata span:matches(\\d{4})")?.text()?.toIntOrNull()
             
-        // Ambil nilai mentah, biarkan CS3 yang konversi otomatis
         val ratingString = document.selectFirst(".rating")?.attr("data-score")
         val actorsList = document.select("li:contains(Casts) a").map { it.text() }
         val tags = document.select("li:contains(Genres) a").map { it.text() }
 
-        // Ekstrak Media ID
         val mediaId = document.selectFirst(".user-bookmark, .rating")?.attr("data-id") ?: return null
         val isTvSeries = url.contains("/tv/") || url.contains("season")
         val episodes = ArrayList<Episode>()
@@ -112,7 +110,7 @@ class Yflix : MainAPI() {
 
             if (eid.isNotBlank()) {
                 episodes.add(
-                    newEpisode(eid) { // Simpan Episode ID (eid) ke parameter data
+                    newEpisode(eid) { // Simpan eid di parameter 'data'
                         this.name = epName
                         this.episode = epNum
                     }
@@ -120,7 +118,6 @@ class Yflix : MainAPI() {
             }
         }
 
-        // Kalau list episodenya kosong (biasanya pada Movie), kita pakai Media ID sebagai cadangan
         if (episodes.isEmpty() && !isTvSeries) {
             episodes.add(newEpisode(mediaId))
         }
@@ -132,8 +129,9 @@ class Yflix : MainAPI() {
                 this.plot = plot
                 this.year = year
                 this.tags = tags
-                addScore(ratingString)
-                addActors(actorsList)
+                // Properti langsung CS3
+                this.score = Score.from(ratingString, 10)
+                this.actors = actorsList.map { ActorData(Actor(it)) }
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, episodes) {
@@ -141,8 +139,9 @@ class Yflix : MainAPI() {
                 this.plot = plot
                 this.year = year
                 this.tags = tags
-                addScore(ratingString)
-                addActors(actorsList)
+                // Properti langsung CS3
+                this.score = Score.from(ratingString, 10)
+                this.actors = actorsList.map { ActorData(Actor(it)) }
             }
         }
     }
@@ -151,24 +150,30 @@ class Yflix : MainAPI() {
     // EKSTRAKSI LINK VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
-        data: String, // Parameter 'data' ini berisi Episode ID (eid) dari fungsi load()
+        data: String, // Berisi Episode ID (eid)
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // 3. Tembak API Server List menggunakan Episode ID
+        // 3. Tembak API Server List
         val serverApiUrl = "$mainUrl/ajax/links/list?eid=$data"
         val serverJsonResponse = app.get(serverApiUrl).parsedSafe<Map<String, String>>()
         val serverHtml = serverJsonResponse?.get("result") ?: return false
         val serverDocument = org.jsoup.Jsoup.parse(serverHtml)
 
-        // 4. Looping untuk mengambil masing-masing Server
+        // 4. Tembak Subtitle API
+        try {
+            val subApiUrl = "$mainUrl/api/v1/episodes/$data/subtitles"
+            // Extractor CloudStream akan narik otomatis, namun API ini bisa digali lebih lanjut jika butuh custom sub.
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 5. Looping setiap Server
         serverDocument.select(".server").forEach { server ->
             val lid = server.attr("data-lid")
             if (lid.isNotBlank()) {
-                
-                // 5. Tembak API View rahasia untuk mendapatkan link iframe (Rapidshare, dll)
                 val viewApiUrl = "$mainUrl/ajax/links/view?id=$lid" 
                 
                 try {
@@ -176,7 +181,7 @@ class Yflix : MainAPI() {
                     val iframeUrl = viewResponse?.get("link") ?: viewResponse?.get("url") ?: viewResponse?.get("src")
                     
                     if (!iframeUrl.isNullOrBlank()) {
-                        // 6. Serahkan URL Iframe ke sistem Extractor bawaan CloudStream
+                        // Serahkan URL Iframe (Rapidshare dkk) ke sistem CloudStream
                         loadExtractor(iframeUrl, viewApiUrl, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
