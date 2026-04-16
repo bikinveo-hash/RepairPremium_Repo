@@ -25,11 +25,11 @@ class Jeniusplay : ExtractorApi() {
             val response = app.get(url, referer = referer)
             val htmlContent = response.text
             
-            // 🔥 MERAMPOK COOKIE SESSION (Untuk disuapkan ke ExoPlayer)
+            // 🔥 MERAMPOK COOKIE SESSION (Untuk disuapkan ke API dan ExoPlayer)
             val cookies = response.cookies
             val cookieString = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
             
-            // Siapkan Header Khusus untuk ExoPlayer
+            // Siapkan Header Khusus untuk ExoPlayer & M3U8 Generator
             val playerHeaders = mapOf(
                 "Referer" to url,
                 "Cookie" to cookieString,
@@ -78,33 +78,46 @@ class Jeniusplay : ExtractorApi() {
                     )
                 ).parsedSafe<ResponseSource>()
                 
+                // 🔥 HASIL ANALISA: Tangkap securedLink yang punya token MD5
+                val secured = apiResponse?.securedLink
                 val rawVideoSource = apiResponse?.videoSource
-                if (!rawVideoSource.isNullOrEmpty()) {
-                    // Bypass ekstensi woff/txt dari Cloudflare
-                    videoUrl = rawVideoSource.replace(".woff", ".m3u8").replace(".txt", ".m3u8")
+
+                if (!secured.isNullOrEmpty()) {
+                    Log.d("adixtream", "Berhasil mendapat Secured Link M3U8 dengan Token!")
+                    videoUrl = secured
+                } else if (!rawVideoSource.isNullOrEmpty()) {
+                    Log.d("adixtream", "Fallback ke videoSource biasa (master.txt)")
+                    // Bypass ekstensi woff dari Cloudflare, JANGAN UBAH .txt menjadi .m3u8
+                    videoUrl = rawVideoSource.replace(".woff", ".m3u8")
                 }
             }
 
             // 6. Lempar Link ke ExtractorLink dengan COOKIE INJECTOR
             if (!videoUrl.isNullOrEmpty()) {
-                Log.d("adixtream", "Jeniusplay berhasil menemukan video: $videoUrl")
+                Log.d("adixtream", "Jeniusplay berhasil menemukan video final: $videoUrl")
                 
-                // Ekstraktor M3U8 (Pakai playerHeaders yang sudah ada Cookienya)
-                generateM3u8(name, videoUrl, url, headers = playerHeaders).forEach(callback)
-                
-                // Ekstraktor Direct
+                // Ekstraktor Direct (Ini paling aman jika format akhir adalah .txt)
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name = "$name (Direct)",
-                        url = videoUrl,
+                        name = "$name",
+                        url = videoUrl!!,
+                        referer = "", // Dikosongkan agar terhindar dari blokir CDN 403 Forbidden
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.quality = Qualities.Unknown.value
                         // 🔥 SUNTIKKAN HEADER & COOKIE KE EXOPLAYER
-                        this.headers = playerHeaders 
+                        this.headers = mapOf("Cookie" to cookieString) 
                     }
                 )
+                
+                // Ekstraktor M3U8 Bawaan Cloudstream (Opsi tambahan jika link berformat .m3u8)
+                try {
+                    generateM3u8(name, videoUrl!!, url, headers = playerHeaders).forEach(callback)
+                } catch (e: Exception) {
+                    Log.d("adixtream", "generateM3u8 dilewati: ${e.message}")
+                }
+                
             } else {
                 Log.d("adixtream", "Jeniusplay gagal mendapat videoSource sama sekali.")
             }
@@ -125,5 +138,6 @@ class Jeniusplay : ExtractorApi() {
 
 // Data Class Fallback Jeniusplay
 data class ResponseSource(
-    @JsonProperty("videoSource") val videoSource: String = ""
+    @JsonProperty("videoSource") val videoSource: String? = null,
+    @JsonProperty("securedLink") val securedLink: String? = null // 🔥 Wajib ditambahkan
 )
