@@ -24,13 +24,14 @@ class PodjavProvider : MainAPI() {
         "$mainUrl/genre/rape/" to "Kekerasan",
         "$mainUrl/genre/young-wife/" to "Istri Muda",
         "$mainUrl/genre/sweat/" to "Sweat",
-        "$mainUrl/genre/kiss/" to "Kiss"
+        "$mainUrl/genre/kiss/" to "Kiss",
+        "$mainUrl/genre/step-mother/" to "Ibu Tiri"
     )
 
     /** * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse 
      */
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".data h3 a")?.text() 
+        val titleText = this.selectFirst(".data h3 a")?.text() 
             ?: this.selectFirst(".poster img")?.attr("alt") 
             ?: return null
         
@@ -40,7 +41,11 @@ class PodjavProvider : MainAPI() {
             
         val posterUrl = this.selectFirst(".poster img")?.attr("src")
 
-        return newMovieSearchResponse(title, url, TvType.NSFW) {
+        // DETEKSI LABEL UNCENSORED: Jika elemen span HTML ditemukan, tambahkan tag ke judul!
+        val isUncensored = this.selectFirst(".uncensored-tag") != null
+        val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $titleText" else titleText
+
+        return newMovieSearchResponse(finalTitle, url, TvType.NSFW) {
             this.posterUrl = posterUrl
         }
     }
@@ -98,7 +103,11 @@ class PodjavProvider : MainAPI() {
             val posterUrl = element.selectFirst(".image .thumbnail img")?.attr("src")
             val year = element.selectFirst(".details .meta .year")?.text()?.toIntOrNull()
 
-            newMovieSearchResponse(title, href, TvType.NSFW) {
+            // Cek Uncensored juga saat melakukan pencarian
+            val isUncensored = element.selectFirst(".uncensored-tag") != null
+            val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $title" else title
+
+            newMovieSearchResponse(finalTitle, href, TvType.NSFW) {
                 this.posterUrl = posterUrl
                 this.year = year
             }
@@ -110,13 +119,13 @@ class PodjavProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.selectFirst(".sheader .data h1")?.text() ?: document.selectFirst("h1")?.text() ?: return null
+        val titleText = document.selectFirst(".sheader .data h1")?.text() ?: document.selectFirst("h1")?.text() ?: return null
         val posterUrl = document.selectFirst(".sheader .poster img")?.attr("src")
         val plot = document.selectFirst(".wp-content p")?.text()
         val tags = document.select(".sgeneros a").map { it.text() }
         val year = document.selectFirst(".date")?.text()?.takeLast(4)?.toIntOrNull()
 
-        // Mengambil daftar pemain (Cast) secara lebih tangguh (robust) tanpa paksaan tag <a>
+        // Mengambil daftar pemain (Cast) secara lebih tangguh tanpa paksaan tag <a>
         val actors = document.select("#cast .persons .person").mapNotNull {
             val name = it.selectFirst(".data .name")?.text() ?: return@mapNotNull null
             val image = it.selectFirst(".img img")?.attr("src")
@@ -132,12 +141,15 @@ class PodjavProvider : MainAPI() {
             val recUrl = linkElem.attr("href") ?: return@mapNotNull null
             val recPoster = imgElem.attr("src")
 
-            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) {
+            val isRecUncensored = it.selectFirst(".uncensored-tag") != null
+            val finalRecTitle = if (isRecUncensored) "🔥 [UNCENSORED] $recTitle" else recTitle
+
+            newMovieSearchResponse(finalRecTitle, recUrl, TvType.NSFW) {
                 this.posterUrl = recPoster
             }
         }
 
-        return newMovieLoadResponse(title, url, TvType.NSFW, url) {
+        return newMovieLoadResponse(titleText, url, TvType.NSFW, url) {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
@@ -244,27 +256,23 @@ class PodjavProvider : MainAPI() {
                             val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
                             
                             if (iframeUrl.startsWith("http")) {
-                                // 1. Lempar ke Cloudstream extractor dulu (Ryderjet akan diekstrak di sini)
+                                // 1. Lempar ke Cloudstream extractor dulu (Ryderjet dkk)
                                 val isExtracted = loadExtractor(iframeUrl, subtitleCallback, callback)
                                 
-                                // 2. KITA BONGKAR SENDIRI (Versi Tangguh Jaring Sapu Jagat & Relative URL)
+                                // 2. KITA BONGKAR SENDIRI (Jaring Sapu Jagat & Relative URL Handler)
                                 if (!isExtracted) {
                                     try {
-                                        // Buka link iframe-nya
                                         val iframeResponse = app.get(iframeUrl, referer = mainUrl).text
-                                        
-                                        // Bongkar sandi javascript (unpack eval)
                                         val unpacked = getAndUnpack(iframeResponse)
                                         
-                                        // REGEX SAPU JAGAT: Menangkap URL apa pun (baik berawalan http:// maupun /) yang diakhiri .m3u8 di dalam tanda kutip
+                                        // REGEX SAPU JAGAT: Menangkap URL apa pun yang diakhiri .m3u8 di dalam tanda kutip
                                         val m3u8Regex = Regex("""["']((?:https?://|/)[^"']*\.m3u8[^"']*)["']""")
                                         
-                                        // Cari di teks JS yang sudah di-unpack DULU, jika tidak ada, cari di teks HTML aslinya
                                         var m3u8Link = m3u8Regex.find(unpacked)?.groupValues?.get(1) 
                                             ?: m3u8Regex.find(iframeResponse)?.groupValues?.get(1)
                                         
                                         if (m3u8Link != null) {
-                                            // Jika URL tidak pakai HTTPS (Relative URL), kita gabungkan dengan nama domain iframe asalnya
+                                            // Handle Relative URL (awalan "/") dengan menggabungkan domain asalnya
                                             if (m3u8Link.startsWith("/")) {
                                                 val uri = java.net.URI(iframeUrl)
                                                 val domain = "${uri.scheme}://${uri.host}"
@@ -278,14 +286,13 @@ class PodjavProvider : MainAPI() {
                                                     url = m3u8Link,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
-                                                    // Referer harus ikut asal Iframe supaya tidak diblokir server mereka
                                                     this.referer = iframeUrl 
                                                     this.quality = Qualities.P720.value
                                                 }
                                             )
                                         }
                                     } catch (e: Exception) {
-                                        // Abaikan kalau gagal agar aplikasi tidak crash
+                                        // Silent fail
                                     }
                                 }
                             }
