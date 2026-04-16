@@ -338,17 +338,32 @@ class IdlixProvider : MainAPI() {
             // Tahap 3: Ambil iframe / Redirect Jeniusplay
             val embedResponse = app.get(fullEmbedUrl, headers = mapOf("Referer" to refererUrl))
             val finalUrl = embedResponse.url
+            val embedHtml = embedResponse.text // Ambil teks HTML mentahnya
             
             if (finalUrl.contains("jeniusplay.com")) {
                 Log.d("adixtream", "Redirected ke Jeniusplay: $finalUrl")
                 loadExtractor(finalUrl, fullEmbedUrl, subtitleCallback, callback)
             } else {
                 var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src") 
+                
+                // 🔥 BYPASS BARU: Regex Super Agresif
+                // Menangkap apapun formatnya (baik pakai https://, //, atau tanpa protokol)
+                if (iframeSrc.isNullOrEmpty()) {
+                    val jeniusRegex = """(jeniusplay\.com/video/[a-zA-Z0-9]+)""".toRegex()
+                    val matchUrl = jeniusRegex.find(embedHtml)?.groupValues?.get(1)
+                    if (matchUrl != null) {
+                        iframeSrc = "https://$matchUrl"
+                    }
+                }
+
                 if (!iframeSrc.isNullOrEmpty()) {
                     if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
+                    Log.d("adixtream", "Berhasil melacak link Jeniusplay: $iframeSrc")
+                    
+                    // Serahkan ke Extractor.kt (yang sudah kita pasangi Cookie Injector)
                     loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
                 } else {
-                    Log.d("adixtream", "Iframe tidak ditemukan dan tidak ada redirect.")
+                    Log.d("adixtream", "Iframe tidak ditemukan dan Regex gagal menangkap link.")
                 }
             }
             return true
