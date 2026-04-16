@@ -15,19 +15,15 @@ class Yflix : MainAPI() {
     )
 
     // ==========================================
-    // FUNGSI BANTUAN: EKSTRAK ITEM FILM
+    // FUNGSI BANTUAN
     // ==========================================
     private fun Element.toSearchResult(): SearchResponse? {
         val href = this.selectFirst("a.poster")?.attr("href") ?: return null
         val title = this.selectFirst(".info .title")?.text() ?: return null
-        
-        // Mengatasi Lazy Loading Gambar
         val posterUrl = this.selectFirst("img")?.let { 
             it.attr("data-src").ifEmpty { it.attr("src") } 
         }
         val quality = this.selectFirst(".quality")?.text()
-
-        // Deteksi Tipe (Movie atau TV)
         val isTvSeries = this.select(".metadata span").text().contains("TV") || href.contains("-season-")
         
         return if (isTvSeries) {
@@ -50,19 +46,15 @@ class Yflix : MainAPI() {
         val document = app.get("$mainUrl/home").document 
         val homeList = ArrayList<HomePageList>()
 
-        // 1. Top 10 Today
         val top10Items = document.select("#top10 .item").mapNotNull { it.toSearchResult() }
         if (top10Items.isNotEmpty()) homeList.add(HomePageList("Top 10 Today", top10Items))
 
-        // 2. Recommended Movies
         val recMovies = document.select(".tab-body[data-id=movie] .item").mapNotNull { it.toSearchResult() }
         if (recMovies.isNotEmpty()) homeList.add(HomePageList("Recommended Movies", recMovies))
 
-        // 3. Recommended TV Series
         val recTv = document.select(".tab-body[data-id=tv] .item").mapNotNull { it.toSearchResult() }
         if (recTv.isNotEmpty()) homeList.add(HomePageList("Recommended TV Series", recTv))
 
-        // 4. Latest (Slider Dinamis)
         document.select("section.slider").forEach { section ->
             val title = section.selectFirst(".section-title")?.text() ?: "Latest"
             val items = section.select(".item").mapNotNull { it.toSearchResult() }
@@ -81,9 +73,7 @@ class Yflix : MainAPI() {
         val url = "$mainUrl/filter?keyword=$query"
         val document = app.get(url).document
 
-        return document.select(".item").mapNotNull { element ->
-            element.toSearchResult()
-        }
+        return document.select(".item").mapNotNull { it.toSearchResult() }
     }
 
     // ==========================================
@@ -92,42 +82,63 @@ class Yflix : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // Ekstrak Informasi Dasar
-        val title = document.selectFirst("h1.title, .detail .title")?.text() ?: return null
-        val poster = document.selectFirst(".poster img")?.attr("src")
-        val plot = document.selectFirst(".description, .plot")?.text()
-        val year = document.selectFirst(".metadata span:contains(20)")?.text()?.toIntOrNull()
+        val title = document.selectFirst("h1.title")?.text() ?: return null
+        val poster = document.selectFirst(".poster img")?.let { 
+            it.attr("data-src").ifEmpty { it.attr("src") } 
+        }
+        val plot = document.selectFirst(".description")?.text()
+        val year = document.selectFirst("span[itemprop=dateCreated]")?.text()?.substringBefore("-")?.toIntOrNull()
+            ?: document.selectFirst(".metadata span:matches(\\d{4})")?.text()?.toIntOrNull()
+        val rating = document.selectFirst(".rating")?.attr("data-score")
+        val tags = document.select("li:contains(Genres) a").map { it.text() }
+        val actors = document.select("li:contains(Casts) a").map { it.text() }
+
+        // Ambil Media ID
+        val mediaId = document.selectFirst(".user-bookmark, .rating")?.attr("data-id") ?: return null
+        val isTvSeries = url.contains("/tv/") || url.contains("season")
+        val episodes = ArrayList<Episode>()
+
+        // 1. Tembak API Episode
+        val epsApiUrl = "$mainUrl/ajax/episodes/list?id=$mediaId"
+        val epsResponse = app.get(epsApiUrl).text
+        val epsDocument = org.jsoup.Jsoup.parse(epsResponse)
         
-        // Deteksi apakah ini TV Series atau Movie
-        val isTvSeries = document.select(".episodes, .seasons, .episode-list").isNotEmpty() || url.contains("-season-")
+        epsDocument.select(".episode, a[data-id], li a").forEach { ep ->
+            val epName = ep.text()
+            val epNum = epName.replace(Regex("[^0-9]"), "").toIntOrNull()
+            val eid = ep.attr("data-id").ifEmpty { ep.attr("href").substringAfterLast(".") }
 
-        if (isTvSeries) {
-            val episodes = ArrayList<Episode>()
-            // Asumsi struktur episode: <li><a href="...">Episode 1</a></li>
-            document.select(".episode-list a, .episodes a").forEach { ep ->
-                val epHref = ep.attr("href")
-                val epName = ep.text()
-                val epNum = ep.text().replace(Regex("[^0-9]"), "").toIntOrNull() // Ekstrak angka episode
-
+            if (eid.isNotBlank()) {
                 episodes.add(
-                    newEpisode(epHref) {
+                    newEpisode(eid) { // Simpan eid di parameter 'data'
                         this.name = epName
                         this.episode = epNum
                     }
                 )
             }
+        }
 
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+        if (episodes.isEmpty() && !isTvSeries) {
+            episodes.add(newEpisode(mediaId))
+        }
+
+        return if (isTvSeries) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
+                this.tags = tags
+                addActors(actors)
+                addScore(rating)
             }
         } else {
-            // Jika Movie, episodenya adalah link movie itu sendiri
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            newMovieLoadResponse(title, url, TvType.Movie, episodes) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
+                this.tags = tags
+                addActors(actors)
+                addScore(rating)
             }
         }
     }
@@ -136,28 +147,45 @@ class Yflix : MainAPI() {
     // EKSTRAKSI LINK VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
-        data: String,
+        data: String, // Berisi Episode ID (eid)
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Buka halaman player (data berisi url episode atau movie)
-        val document = app.get(data).document
+        
+        // 2. Tembak API Server List
+        val serverApiUrl = "$mainUrl/ajax/links/list?eid=$data"
+        val serverJsonResponse = app.get(serverApiUrl).parsedSafe<Map<String, String>>()
+        val serverHtml = serverJsonResponse?.get("result") ?: return false
+        val serverDocument = org.jsoup.Jsoup.parse(serverHtml)
 
-        // Skenario 1: Web menggunakan iframe untuk memutar video (paling umum)
-        document.select("iframe").forEach { iframe ->
-            val iframeSrc = iframe.attr("src")
-            if (iframeSrc.isNotBlank()) {
-                // Meminta Cloudstream untuk mendeteksi Extractor (seperti Streamtape, Doodstream, dll)
-                loadExtractor(iframeSrc, data, subtitleCallback, callback)
-            }
+        // 3. Tembak Subtitle API (Dari temuan rahasia lu!)
+        try {
+            val subApiUrl = "$mainUrl/api/v1/episodes/$data/subtitles"
+            // Kalau misal balasan JSON-nya list subtitle, lu bisa proses di sini
+            // Sementara kita abaikan jika Ekstraktor bawaan CloudStream sudah otomatis narik sub-nya.
+        } catch (e: Exception) {
+            logError(e)
         }
 
-        // Skenario 2: Link server disembunyikan di tombol (misal: data-link="https://...")
-        document.select(".server-btn, [data-link]").forEach { server ->
-            val serverLink = server.attr("data-link")
-            if (serverLink.isNotBlank()) {
-                loadExtractor(serverLink, data, subtitleCallback, callback)
+        // 4. Looping setiap Server
+        serverDocument.select(".server").forEach { server ->
+            val lid = server.attr("data-lid")
+            if (lid.isNotBlank()) {
+                // INI DIA KUNCI UTAMANYA:
+                val viewApiUrl = "$mainUrl/ajax/links/view?id=$lid" 
+                
+                try {
+                    val viewResponse = app.get(viewApiUrl).parsedSafe<Map<String, String>>()
+                    val iframeUrl = viewResponse?.get("link") ?: viewResponse?.get("url") ?: viewResponse?.get("src")
+                    
+                    if (!iframeUrl.isNullOrBlank()) {
+                        // Serahkan URL Rapidshare/MegaCloud ke sistem CloudStream
+                        loadExtractor(iframeUrl, viewApiUrl, subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                    logError(e)
+                }
             }
         }
 
