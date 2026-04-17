@@ -16,7 +16,7 @@ class Sflix : MainAPI() {
         "$mainUrl/home" to "Home"
     )
 
-    // Header khusus buat ngelewatin pelindung Bot SFlix
+    // Header khusus buat Bypass Anti-Bot SFlix
     private val ajaxHeaders = mapOf(
         "Accept" to "*/*",
         "X-Requested-With" to "XMLHttpRequest"
@@ -119,7 +119,7 @@ class Sflix : MainAPI() {
         val isMovie = watchDiv.attr("data-type") == "1"
 
         if (isMovie) {
-            // 💥 FIX UTAMA: Movie pakai dataUrl langsung (String murni)
+            // FIX: Movie pakai dataUrl langsung (String murni)
             val dataUrl = "$mainUrl/ajax/episode/list/$dataId"
             
             return newMovieLoadResponse(title, url, TvType.Movie, dataUrl) {
@@ -146,7 +146,6 @@ class Sflix : MainAPI() {
                     val epNum = ep.selectFirst("strong")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
                     val epTitle = ep.attr("title").ifEmpty { ep.text() }
                     
-                    // Aturan baru CS3: Wajib pakai newEpisode
                     episodeList.add(
                         newEpisode("$mainUrl/ajax/episode/servers/$epId") {
                             this.name = epTitle
@@ -178,19 +177,40 @@ class Sflix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Ambil daftar server
         val serversResponse = app.get(data, headers = ajaxHeaders).document
         
         serversResponse.select("a.nav-link").forEach { serverNode ->
             val serverId = serverNode.attr("data-id")
+            val serverName = serverNode.selectFirst("span")?.text()?.trim() ?: serverNode.text().trim()
+
             if (serverId.isNotBlank()) {
                 val sourceUrl = "$mainUrl/ajax/episode/sources/$serverId"
                 val sourceJson = app.get(sourceUrl, headers = ajaxHeaders).parsedSafe<SourceResponse>()
                 
                 val iframeUrl = sourceJson?.link
                 if (!iframeUrl.isNullOrBlank()) {
-                    // Serahkan ke Extractor Bawaan CS3 buat ngebobol Iframe-nya!
-                    loadExtractor(iframeUrl, mainUrl, subtitleCallback, callback)
+                    
+                    // 💥 BYPASS EXTRACTOR: Ambil ID videonya saja (misal I8PrNMCsxI9h)
+                    val embedId = iframeUrl.substringAfterLast("/").substringBefore("?")
+                    
+                    // 💥 RAKIT URL PALSU: Sesuaikan dengan selera mesin CS3
+                    if (serverName.contains("UpCloud", ignoreCase = true) || serverName.contains("Vidcloud", ignoreCase = true)) {
+                        val rabbitUrl = "https://rabbitstream.net/embed-4/e-1/$embedId"
+                        loadExtractor(rabbitUrl, mainUrl, subtitleCallback, callback)
+                        
+                    } else if (serverName.contains("MegaCloud", ignoreCase = true)) {
+                        val megaUrl = "https://megacloud.tv/embed-2/e-1/$embedId"
+                        loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)
+                        
+                    } else if (serverName.contains("AKCloud", ignoreCase = true)) {
+                        val dokiUrl = "https://dokicloud.one/embed-4/e-1/$embedId"
+                        loadExtractor(dokiUrl, mainUrl, subtitleCallback, callback)
+                        
+                    } else {
+                        // Fallback aman
+                        val fixedUrl = iframeUrl.replace("videostr.net", "megacloud.tv")
+                        loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
+                    }
                 }
             }
         }
