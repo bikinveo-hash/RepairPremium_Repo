@@ -94,7 +94,12 @@ class Sflix : MainAPI() {
         val year = document.select("div.row-line:contains(Released)").text().substringAfter("Released:").trim().take(4).toIntOrNull()
         val duration = document.selectFirst("span.duration")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         val tags = document.select("div.row-line:contains(Genre) a").map { it.text() }
-        val actors = document.select("div.row-line:contains(Casts) a").map { it.text() }
+        
+        // 💥 FIX ERROR AKTOR: Aturan baru CS3 wajib pakai ActorData
+        val actors = document.select("div.row-line:contains(Casts) a").map { 
+            ActorData(Actor(it.text())) 
+        }
+        
         val recommendations = document.select(".film_list-wrap .flw-item").mapNotNull { it.toSearchResult() }
 
         val watchDiv = document.selectFirst(".detail_page-watch")
@@ -102,11 +107,11 @@ class Sflix : MainAPI() {
         val isMovie = watchDiv.attr("data-type") == "1"
 
         if (isMovie) {
+            // 💥 FIX ERROR EPISODE: Aturan baru CS3 wajib pakai newEpisode
             val episodeList = listOf(
-                Episode(
-                    data = "$mainUrl/ajax/episode/list/$dataId",
-                    name = "Movie"
-                )
+                newEpisode("$mainUrl/ajax/episode/list/$dataId") {
+                    this.name = "Movie"
+                }
             )
             return newMovieLoadResponse(title, url, TvType.Movie, episodeList) {
                 this.posterUrl = poster
@@ -132,13 +137,13 @@ class Sflix : MainAPI() {
                     val epNum = ep.selectFirst("strong")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
                     val epTitle = ep.attr("title").ifEmpty { ep.text() }
                     
+                    // 💥 FIX ERROR EPISODE: Aturan baru CS3 wajib pakai newEpisode
                     episodeList.add(
-                        Episode(
-                            data = "$mainUrl/ajax/episode/servers/$epId",
-                            name = epTitle,
-                            season = seasonNum,
-                            episode = epNum
-                        )
+                        newEpisode("$mainUrl/ajax/episode/servers/$epId") {
+                            this.name = epTitle
+                            this.season = seasonNum
+                            this.episode = epNum
+                        }
                     )
                 }
             }
