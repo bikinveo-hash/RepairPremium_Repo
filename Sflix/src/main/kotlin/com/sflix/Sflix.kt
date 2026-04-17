@@ -86,6 +86,7 @@ data class SflixSubtitleResponse(@JsonProperty("data") val data: SflixSubtitleDa
 data class SflixSubtitleData(@JsonProperty("captions") val captions: List<SflixCaption>? = null)
 data class SflixCaption(
     @JsonProperty("lanName") val lanName: String? = null,
+    @JsonProperty("lan") val lan: String? = null,
     @JsonProperty("url") val url: String? = null
 )
 
@@ -101,10 +102,10 @@ class SflixProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
     override var lang = "id"
     override val hasMainPage = true
-    override val hasQuickSearch = false // Kita set false karena API suggestnya beda
+    override val hasQuickSearch = false
 
-    // Token Hardcode dari tangkapan Network-mu
-    private val hardcodedBearer = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjIyOTQ0NzA1MzU0OTk2MjkwNTYsImF0cCI6MywiZXh0IjoiMTc3NjQ0NTgzOSIsImV4cCI6MTc4NDIyMTgzOSwiaWF0IjoxNzc2NDQ1NTM5fQ.c_0FLy4h-eefWW5xIt2u9CzxczQ1IT0EEY4H2JM9Y9s"
+    // Token Hardcode dari tangkapan Network terakhirmu
+    private val hardcodedBearer = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjc5OTMyOTY0NzY4NjcyODE0MDgsImF0cCI6MywiZXh0IjoiMTc3NjQ1MDM1OSIsImV4cCI6MTc4NDIyNjM1OSwiaWF0IjoxNzc2NDUwMDU5fQ.1SvmTEtzsosH4gnSiYgFjshtYf028U6ZAhnquMMo3fo"
     
     private val apiHeaders = mapOf(
         "Authorization" to "Bearer $hardcodedBearer",
@@ -151,7 +152,6 @@ class SflixProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse>? {
         val searchUrl = "$apiBaseUrl/subject/search"
         
-        // Membungkus data JSON untuk dikirim via POST
         val requestData = mapOf(
             "keyword" to query,
             "page" to "1",
@@ -207,13 +207,14 @@ class SflixProvider : MainAPI() {
         }
 
         if (subject.subjectType == 1) { // Movie
-            val linkData = SflixLinkData(subjectId, detailPath, 0, 0).toJson()
+            // Di cURL terbarumu, film dipanggil dengan se=1&ep=1, mari kita sesuaikan
+            val linkData = SflixLinkData(subjectId, detailPath, 1, 1).toJson()
             return newMovieLoadResponse(title, url, TvType.Movie, linkData) {
                 this.posterUrl = subject.cover?.url
                 this.plot = subject.description
                 this.tags = subject.genre?.split(",")?.map { it.trim() }
                 this.actors = actors
-                this.score = Score.from10(subject.imdbRatingValue)
+                addScore(subject.imdbRatingValue) // addScore jalan normal di LoadResponse
             }
         } else { // TV Series
             val episodes = mutableListOf<Episode>()
@@ -238,7 +239,7 @@ class SflixProvider : MainAPI() {
                 this.plot = subject.description
                 this.tags = subject.genre?.split(",")?.map { it.trim() }
                 this.actors = actors
-                this.score = Score.from10(subject.imdbRatingValue)
+                addScore(subject.imdbRatingValue)
             }
         }
     }
@@ -252,13 +253,20 @@ class SflixProvider : MainAPI() {
     ): Boolean {
         val linkData = tryParseJson<SflixLinkData>(data) ?: return false
         
-        // Catatan: Jika server menggunakan indeks 0 untuk episode pertama,
-        // ubah linkData.episodeNumber menjadi (linkData.episodeNumber - 1)
-        val playApiUrl = "$apiBaseUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.seasonNumber}&ep=${linkData.episodeNumber}&detailPath=${linkData.detailPath}"
+        val playApiUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.seasonNumber}&ep=${linkData.episodeNumber}&detailPath=${linkData.detailPath}"
 
-        val resText = app.get(playApiUrl, headers = apiHeaders).text
-        val playResponse = tryParseJson<SflixPlayResponse>(resText)
+        // Header khusus Play API menggunakan Cookie
+        val playHeaders = mapOf(
+            "cookie" to "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjc5OTMyOTY0NzY4NjcyODE0MDgsImF0cCI6MywiZXh0IjoiMTc3NjQ1MDM1OSIsImV4cCI6MTc4NDIyNjM1OSwiaWF0IjoxNzc2NDUwMDU5fQ.1SvmTEtzsosH4gnSiYgFjshtYf028U6ZAhnquMMo3fo%22;",
+            "x-client-info" to """{"timezone":"Asia/Jayapura"}""",
+            "accept" to "application/json",
+            "referer" to "$mainUrl/spa/videoPlayPage/movies/${linkData.detailPath}?id=${linkData.subjectId}&type=/movie/detail&lang=en"
+        )
+
+        val resText = app.get(playApiUrl, headers = playHeaders).text
+        println("SFLIX PLAY RESPONSE: $resText") // Jaga-jaga buat debug
         
+        val playResponse = tryParseJson<SflixPlayResponse>(resText)
         val streams = playResponse?.data?.streams ?: return false
         var subtitleId: String? = null
 
@@ -279,6 +287,7 @@ class SflixProvider : MainAPI() {
             )
         }
 
+        // Ambil Subtitle (Tembak ke apiBaseUrl, pakai apiHeaders yang ada Bearernya)
         if (subtitleId != null) {
             val subApiUrl = "$apiBaseUrl/subject/caption?format=MP4&id=$subtitleId&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
             val subResText = app.get(subApiUrl, headers = apiHeaders).text
@@ -286,7 +295,7 @@ class SflixProvider : MainAPI() {
             
             subResponse?.data?.captions?.forEach { caption ->
                 val subUrl = caption.url ?: return@forEach
-                val langName = caption.lanName ?: "Unknown"
+                val langName = caption.lanName ?: caption.lan ?: "Unknown"
                 subtitleCallback(newSubtitleFile(langName, subUrl))
             }
         }
