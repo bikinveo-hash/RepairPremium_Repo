@@ -243,11 +243,30 @@ class Sflix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // 1. Ekstrak data dari URL yang dilempar oleh fungsi load()
+        val subjectId = Regex("subjectId=([^&]+)").find(data)?.groupValues?.get(1) ?: ""
+        val detailPath = Regex("detailPath=([^&]+)").find(data)?.groupValues?.get(1) ?: ""
+        val se = Regex("se=([^&]+)").find(data)?.groupValues?.get(1) ?: "0"
+        
+        // 2. Tentukan apakah ini Film atau Serial TV untuk menyesuaikan URL Referer
+        val isMovie = se == "0"
+        val typePath = if (isMovie) "movies" else "series"
+        val typeQuery = if (isMovie) "/movie/detail" else "/tv/detail"
+        
+        // 3. Buat Referer dinamis persis seperti simulasi Termux kita yang berhasil
+        val dynamicReferer = "$mainUrl/spa/videoPlayPage/$typePath/$detailPath?id=$subjectId&type=$typeQuery&lang=en"
+
+        // 4. Ambil header dasar, lalu timpa "Referer" dengan yang dinamis
+        val requestHeaders = getSflixHeaders().toMutableMap()
+        requestHeaders["Referer"] = dynamicReferer
+        
+        // 5. Minta data ke server
         val response = app.get(
             url = data,
-            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
+            headers = requestHeaders // <-- Menggunakan header dengan Referer baru
         ).parsedSafe<SflixPlayResponse>()?.data
 
+        // 6. Urai link video yang didapat
         response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
             val resolution = stream.resolutions ?: ""
@@ -260,7 +279,7 @@ class Sflix : MainAPI() {
                     url = videoUrl,
                     type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    this.referer = "$mainUrl/"
+                    this.referer = "$mainUrl/" // Referer standar untuk memutar videonya di player
                     this.quality = videoQuality
                 }
             )
