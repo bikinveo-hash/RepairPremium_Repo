@@ -22,7 +22,7 @@ class Sflix : MainAPI() {
         "X-Requested-With" to "XMLHttpRequest"
     )
 
-    // Penangkap JSON Iframe
+    // Penangkap JSON Iframe dari API
     data class SourceResponse(
         @JsonProperty("type") val type: String?,
         @JsonProperty("link") val link: String?
@@ -98,12 +98,11 @@ class Sflix : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         
-        // 🛡️ Fallback Cerdas: Jika <a> tidak ada, ambil langsung dari teks <h2>
+        // 🛡️ Fallback Cerdas anti-crash
         val title = document.selectFirst("h2.heading-name")?.text() 
             ?: document.selectFirst(".m-detail .film-name")?.text() 
             ?: return null
             
-        // 🛡️ Fallback Cerdas: Cek data-src dulu, baru src
         val poster = fixUrlNull(document.selectFirst("img.film-poster-img")?.let {
             it.attr("data-src").ifEmpty { it.attr("src") }
         })
@@ -121,10 +120,9 @@ class Sflix : MainAPI() {
 
         val watchDiv = document.selectFirst(".detail_page-watch")
         
-        // 🛡️ Fallback Cerdas: Jika div disembunyikan SFlix, ambil ID dari buntut URL!
+        // 🛡️ Fallback: Ambil ID dari buntut URL kalau elemen HTML disembunyikan
         val dataId = watchDiv?.attr("data-id")?.ifEmpty { null } ?: url.substringAfterLast("-")
         
-        // 🛡️ Fallback Cerdas: Penentuan tipe Movie/TV dari URL jika div lenyap
         val isMovie = if (watchDiv != null && watchDiv.hasAttr("data-type")) {
             watchDiv.attr("data-type") == "1"
         } else {
@@ -190,18 +188,11 @@ class Sflix : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        var serversUrl = data
-
-        // FIX: Karena Movie mengirim link "list", kita wajib ambil "epId" nya dulu
-        if (data.contains("/episode/list/")) {
-            val epListDoc = app.get(data, headers = ajaxHeaders).document
-            val epId = epListDoc.selectFirst("a.nav-link")?.attr("data-id") ?: return false
-            serversUrl = "$mainUrl/ajax/episode/servers/$epId"
-        }
-
-        val serversResponse = app.get(serversUrl, headers = ajaxHeaders).document
+        // Tarik daftar server langsung (bisa dari Movie List / TV Servers)
+        val serversResponse = app.get(data, headers = ajaxHeaders).document
         
-        serversResponse.select("a.nav-link").forEach { serverNode ->
+        // Cari semua tag <a> yang punya data-id (lebih kebal dari perubahan SFlix)
+        serversResponse.select("a.nav-link, a[data-id]").forEach { serverNode ->
             val serverId = serverNode.attr("data-id")
 
             if (serverId.isNotBlank()) {
@@ -216,12 +207,26 @@ class Sflix : MainAPI() {
                         fixedUrl = "https:$fixedUrl"
                     }
                     
-                    // Trik Ninja Termux!
-                    if (fixedUrl.contains("videostr.net")) {
-                        fixedUrl = fixedUrl.replace("videostr.net", "rabbitstream.net")
+                    // 🚨 OPERASI PLASTIK URL 🚨
+                    if (fixedUrl.contains("/e-1/")) {
+                        // Ambil jantung ID videonya saja
+                        val idAndToken = fixedUrl.substringAfter("/e-1/")
+                        
+                        // Rakit ulang jadi URL mulus standar Cloudstream
+                        val cleanMegaUrl = "https://megacloud.tv/embed-2/e-1/$idAndToken"
+                        val cleanRabbitUrl = "https://rabbitstream.net/embed-2/e-1/$idAndToken"
+                        val cleanDokicloudUrl = "https://dokicloud.one/embed-2/e-1/$idAndToken"
+                        
+                        // Tembak beruntun pakai Extractor bawaan!
+                        loadExtractor(cleanMegaUrl, mainUrl, subtitleCallback, callback)
+                        loadExtractor(cleanRabbitUrl, mainUrl, subtitleCallback, callback)
+                        loadExtractor(cleanDokicloudUrl, mainUrl, subtitleCallback, callback)
+                        
+                    } else {
+                        // Fallback aman kalau format /e-1/ tidak ditemukan
+                        fixedUrl = fixedUrl.replace("videostr.net", "megacloud.tv")
+                        loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
                     }
-                    
-                    loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
                 }
             }
         }
