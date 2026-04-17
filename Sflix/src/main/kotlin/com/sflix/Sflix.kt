@@ -14,8 +14,20 @@ class Sflix : MainAPI() {
         TvType.TvSeries
     )
 
+    // ==========================================
+    // DAFTAR KATEGORI HALAMAN UTAMA
+    // ==========================================
     override val mainPage = mainPageOf(
-        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending" to "Trending"
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=872031290915189720" to "Trending",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=6528093688173053896" to "IndoMovie",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=5283462032510044280" to "IndoDrama",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=4993310637209048808" to "Komedi",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=5848753831881965888" to "Horror Indo",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=3528002473103362040" to "Horror Lucu",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=1469286917119311888" to "Hollywood",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=8027941456897802448" to "Pernikahan Palsu",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=1164329479448281992" to "Drama Thailand",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/ranking-list?id=173752404280836544" to "Drama Ahok"
     )
 
     // ==========================================
@@ -70,7 +82,8 @@ class Sflix : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = "${request.data}?page=$page&perPage=18"
+        val separator = if (request.data.contains("?")) "&" else "?"
+        val url = "${request.data}${separator}page=$page&perPage=18"
         
         val response = app.get(
             url = url,
@@ -251,13 +264,11 @@ class Sflix : MainAPI() {
         val requestHeaders = getSflixHeaders().toMutableMap()
         requestHeaders["Referer"] = dynamicReferer
         
-        // 1. Minta data video
         val response = app.get(
             url = data,
             headers = requestHeaders 
         ).parsedSafe<SflixPlayResponse>()?.data
 
-        // 2. Urai link video
         response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
             val resolution = stream.resolutions ?: ""
@@ -276,17 +287,15 @@ class Sflix : MainAPI() {
             )
         }
 
-        // 3. Minta data subtitle (Menggunakan ID dari stream pertama yang ditemukan)
         val firstStreamId = response?.streams?.firstOrNull()?.id
         if (firstStreamId != null) {
             val captionUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/caption?format=MP4&id=$firstStreamId&subjectId=$subjectId&detailPath=$detailPath"
             
             val captionResponse = app.get(
                 url = captionUrl,
-                headers = requestHeaders // Menggunakan referer dinamis yang sama
+                headers = requestHeaders 
             ).parsedSafe<SflixCaptionResponse>()?.data
 
-            // 4. Urai link subtitle ke Cloudstream
             captionResponse?.captions?.forEach { caption ->
                 val subUrl = caption.url ?: return@forEach
                 val langName = caption.lanName ?: "Unknown"
@@ -350,13 +359,12 @@ class Sflix : MainAPI() {
     data class SflixPlayResponse(val data: SflixPlayData? = null)
     data class SflixPlayData(val streams: List<SflixStream>? = null)
     data class SflixStream(
-        val id: String? = null, // <-- Ditambahkan untuk mengambil ID Subtitle
+        val id: String? = null, 
         val format: String? = null,
         val url: String? = null,
         val resolutions: String? = null
     )
 
-    // Data Class Baru Untuk Subtitle
     data class SflixCaptionResponse(val data: SflixCaptionData? = null)
     data class SflixCaptionData(val captions: List<SflixCaption>? = null)
     data class SflixCaption(
