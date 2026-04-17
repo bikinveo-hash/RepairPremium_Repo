@@ -1,0 +1,9 @@
+{
+    "name": "Freemium_Repo",
+    "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/main/Icons/Adi.png",
+    "description": "Repository Plugin Michat88",
+    "manifestVersion": 1,
+    "pluginLists": [
+      "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/plugins.json"
+    ]
+}

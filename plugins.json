@@ -1,0 +1,443 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Adicinemax21.cs3",
+        "status": 1,
+        "version": 10,
+        "name": "Adicinemax21",
+        "internalName": "Adicinemax21",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 130638,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-a1f98a36280aa554df4e3c2b80586ea00ecfc45cf9dbdaf70a1c0c3d0178d7ca"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiDrakor.cs3",
+        "status": 1,
+        "version": 9,
+        "name": "AdiDrakor",
+        "internalName": "AdiDrakor",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 127112,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-dd3a557e9e669de0f9609f5c82f8b3827afcdafeabeaaa4235fe84418b131340"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiFilmSemi.cs3",
+        "status": 1,
+        "version": 7,
+        "name": "AdiFilmSemi",
+        "internalName": "AdiFilmSemi",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 113762,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://klikxxi.me/wp-content/uploads/2024/02/cropped-site-icon.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-57bd66b9107f75697ca4a0c254fcf4991187bff4143ce32a642b8c63c57fb443"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Adimoviebox.cs3",
+        "status": 1,
+        "version": 7,
+        "name": "Adimoviebox",
+        "internalName": "Adimoviebox",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 31920,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://moviebox.ph/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-04623cb31996be1ab486e4c9cc3fca53d3997c54bc9926784dc68bbe1a27684d"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiXtream.cs3",
+        "status": 1,
+        "version": 13,
+        "name": "AdiXtream",
+        "internalName": "AdiXtream",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 88125,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-696459b193f5ea8739de1cb2f2e1099897f75a23f290d439a7e0d8e24855ed02"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Eporner.cs3",
+        "status": 1,
+        "version": 13,
+        "name": "Eporner",
+        "internalName": "Eporner",
+        "authors": [
+            "AdiManu"
+        ],
+        "description": "Eporner",
+        "fileSize": 15092,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/main/eporner.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-a6432977bf3e16070f5ac62dafef72fb1f568cfccce08a40525242433cfbd671"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/FreeReels.cs3",
+        "status": 1,
+        "version": 30,
+        "name": "FreeReels",
+        "internalName": "FreeReels",
+        "authors": [
+            "AdiManu"
+        ],
+        "fileSize": 37570,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "iconUrl": "https://free-reels.com/free-reels.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-6fe22f4d1488f4f224839475a8ff3f7bfff18fc7c1596f87f16ec0b1e4a884b2"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/IdlixProvider.cs3",
+        "status": 1,
+        "version": 8,
+        "name": "IdlixProvider",
+        "internalName": "IdlixProvider",
+        "authors": [
+            "AdiManu"
+        ],
+        "fileSize": 49064,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
+        "apiVersion": 1,
+        "fileHash": "sha256-4c4de5848d35a35475d729a150e35c8667c188e52638d2a49a6ba72cdd3f565d"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/IndoAsia.cs3",
+        "status": 1,
+        "version": 7,
+        "name": "IndoAsia",
+        "internalName": "IndoAsia",
+        "authors": [
+            "aldry84"
+        ],
+        "description": "Jangan Coli Yaa",
+        "fileSize": 22008,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://homecookingrocks.com/wp-content/uploads/2024/10/cropped-indomax21-favicon-color-1.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-cd6d2e8ed613590bf022494b8bf66176dcb7b3b85b8b9f39575e6d0c83b59fa8"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/JavHey.cs3",
+        "status": 1,
+        "version": 10,
+        "name": "JavHey",
+        "internalName": "JavHey",
+        "authors": [
+            "aldey84"
+        ],
+        "description": "Best Japan AV porn site, free forever, high speed, no lag, over 100,000 videos, daily update, no ads while playing video.",
+        "fileSize": 23064,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://missav.ws/missav/logo-square.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-10679525b32f1f649ffa88512df0cbf0f4c6b90ca938c3e42463d5518110bc4a"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/KisskhProvider.cs3",
+        "status": 1,
+        "version": 17,
+        "name": "KisskhProvider",
+        "internalName": "KisskhProvider",
+        "authors": [
+            "michat88"
+        ],
+        "fileSize": 39812,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Anime",
+            "Movie"
+        ],
+        "iconUrl": "https://www.google.com/s2/favicons?domain=kisskh.co&sz=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-3546e59f9452b65c7908c3ab3c5c80e8f85eb91cdb2ee72e5aa7a9fa30673b52",
+        "jarFileSize": 156277,
+        "jarUrl": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/KisskhProvider.jar",
+        "jarHash": "sha256-49884f5778d823e1182e212bc6319b165a796a7332da14090bf8970bbca4c10a"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/KlikXXI.cs3",
+        "status": 1,
+        "version": 7,
+        "name": "KlikXXI",
+        "internalName": "KlikXXI",
+        "authors": [
+            "aldry84"
+        ],
+        "description": "request @ian_hiro",
+        "fileSize": 33643,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://klikxxi.me/wp-content/uploads/2024/02/cropped-site-icon-60x60.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-0bfd34d69e57338a9627bdf06b2748e596d18db36f8dfec3e5c7ed4d16163b34"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/LayarKacaProvider.cs3",
+        "status": 1,
+        "version": 9,
+        "name": "LayarKacaProvider",
+        "internalName": "LayarKacaProvider",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 64918,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://assets.lk21.party/favicons/apple-icon-144x144.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-1c77af87e05903d7710614b264064df31a10dfd1bef3ff6e4e822c9ca8e77d9b"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Mangoporn.cs3",
+        "status": 1,
+        "version": 5,
+        "name": "Mangoporn",
+        "internalName": "Mangoporn",
+        "authors": [
+            "AmanHnB"
+        ],
+        "description": "MangoPorn",
+        "fileSize": 18939,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "http://mangoporn.net/wp-content/uploads/2024/07/mangoporn.net_.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-f335fc04d3017380678d825d56c10f98c6e69c13ee5512193389b910447a4be1"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/MissAv.cs3",
+        "status": 1,
+        "version": 11,
+        "name": "MissAv",
+        "internalName": "MissAv",
+        "authors": [
+            "aldey84"
+        ],
+        "description": "Best Japan AV porn site, free forever, high speed, no lag, over 100,000 videos, daily update, no ads while playing video.",
+        "fileSize": 17587,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://missav.ws/missav/logo-square.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-430923302162cef220080ce3ce2cdb198acec8d86739fddfadd26a4824306892"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Moviebox.cs3",
+        "status": 1,
+        "version": 8,
+        "name": "Moviebox",
+        "internalName": "Moviebox",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 32804,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://moviebox.ph/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-2b2c06766a7e50f15b7035034c9a7fac3a91552bff49aa34a62434567246680f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/NgeFilm.cs3",
+        "status": 1,
+        "version": 9,
+        "name": "NgeFilm",
+        "internalName": "NgeFilm",
+        "authors": [
+            "aldry84"
+        ],
+        "fileSize": 26001,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "iconUrl": "https://new31.ngefilm.site/wp-content/uploads/2023/08/cropped-imageedit_8_4481000408-60x60.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-39d80fe5c42f8674dfde2b987892cfb8f16289c0245505b843ab412fd46a468f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/PODJAV.cs3",
+        "status": 1,
+        "version": 9,
+        "name": "PODJAV",
+        "internalName": "PODJAV",
+        "authors": [
+            "aldey84"
+        ],
+        "description": "Best Japan AV porn site, free forever, high speed, no lag, over 100,000 videos, daily update, no ads while playing video.",
+        "fileSize": 21175,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://podjav.tv/wp-content/uploads/2025/02/favicon-podjav.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-ae02db87a052cef083d3171792af926887c7a3c469eecd6f75e669739c84fe8a"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Pornhub.cs3",
+        "status": 1,
+        "version": 10,
+        "name": "Pornhub",
+        "internalName": "Pornhub",
+        "authors": [
+            "aldey84"
+        ],
+        "description": "Awas Jangan Coli Kawan",
+        "fileSize": 18292,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://www.pornhub.com/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-9dc7acd18ca1c366ce2e9a689fbab8f9e6561c7c39afe362d51d6c7666e13cb1"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Sflix.cs3",
+        "status": 1,
+        "version": 3,
+        "name": "Sflix",
+        "internalName": "Sflix",
+        "authors": [
+            "AdiManu"
+        ],
+        "fileSize": 35559,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "id",
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "iconUrl": "https://sflix.film/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-ad07f81e5efb3b9aca06c60c16d10635e7ffdf6867c0356527b7cdadf1b43a40"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Xhamster.cs3",
+        "status": 1,
+        "version": 9,
+        "name": "Xhamster",
+        "internalName": "Xhamster",
+        "authors": [
+            "aldey84"
+        ],
+        "description": "Awas Jangan Coli Kawan",
+        "fileSize": 16038,
+        "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://static.xhpingcdn.com/xh-mobile/images/favicon/favicon-v2-512x512.png?v=1",
+        "apiVersion": 1,
+        "fileHash": "sha256-4663e37d407676d4a0e29ec6409bf72abac5f5327348ffb95ce7de2471d66cc4"
+    }
+]
