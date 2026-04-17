@@ -7,7 +7,7 @@ class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
     override var name = "Sflix"
     
-    // 1. KITA UBAH MENJADI TRUE AGAR MUNCUL DI BERANDA
+    // 1. Mengaktifkan halaman utama agar muncul di beranda
     override val hasMainPage = true 
     
     override var lang = "en"
@@ -17,9 +17,9 @@ class Sflix : MainAPI() {
         TvType.TvSeries
     )
 
-    // 2. KITA DAFTARKAN MENU HALAMAN UTAMA (Contoh: Trending)
+    // 2. PERBAIKAN: Format yang benar adalah "URL" to "Nama Menu"
     override val mainPage = mainPageOf(
-        "Trending" to "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending"
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending" to "Trending"
     )
 
     // ==========================================
@@ -69,7 +69,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI PENCARIAN (SEARCH)
+    // 4. FUNGSI PENCARIAN (SEARCH)
     // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
@@ -117,7 +117,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI DETAIL (LOAD)
+    // 5. FUNGSI DETAIL (LOAD)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
@@ -203,7 +203,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // 6. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
         data: String,
@@ -243,7 +243,6 @@ class Sflix : MainAPI() {
     // ==========================================
     // DATA CLASSES UNTUK PARSING JSON
     // ==========================================
-    // Data class tambahan untuk halaman utama (Trending)
     data class SflixTrendingResponse(val data: SflixTrendingData? = null)
     data class SflixTrendingData(val pager: SflixPager? = null, val subjectList: List<SflixSubjectItem>? = null)
 
