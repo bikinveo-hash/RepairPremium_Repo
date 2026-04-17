@@ -106,12 +106,9 @@ class Sflix : MainAPI() {
         val year = document.select("div.row-line:contains(Released)").text().substringAfter("Released:").trim().take(4).toIntOrNull()
         val duration = document.selectFirst("span.duration")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         val tags = document.select("div.row-line:contains(Genre) a").map { it.text() }
-        
-        // Membungkus aktor sesuai format Cloudstream terbaru
         val actors = document.select("div.row-line:contains(Casts) a").map { 
             ActorData(Actor(it.text())) 
         }
-        
         val recommendations = document.select(".film_list-wrap .flw-item").mapNotNull { it.toSearchResult() }
 
         val watchDiv = document.selectFirst(".detail_page-watch")
@@ -119,12 +116,8 @@ class Sflix : MainAPI() {
         val isMovie = watchDiv.attr("data-type") == "1"
 
         if (isMovie) {
-            // FIX 1: Mengambil epId terlebih dahulu sebelum mengirimnya ke loadLinks
-            val epListDoc = app.get("$mainUrl/ajax/episode/list/$dataId", headers = ajaxHeaders).document
-            val epId = epListDoc.selectFirst("a.nav-link")?.attr("data-id") ?: return null
-            
-            // Mengubah URL ke format 'servers' agar bisa diproses oleh fungsi loadLinks
-            val dataUrl = "$mainUrl/ajax/episode/servers/$epId"
+            // KEMBALI KE ASAL: Jangan lakukan app.get di sini agar tidak error loading!
+            val dataUrl = "$mainUrl/ajax/episode/list/$dataId"
             
             return newMovieLoadResponse(title, url, TvType.Movie, dataUrl) {
                 this.posterUrl = poster
@@ -181,7 +174,18 @@ class Sflix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val serversResponse = app.get(data, headers = ajaxHeaders).document
+        
+        var serversUrl = data
+
+        // FIX: Jika data dari Movie (/episode/list/...), kita harus request epId-nya dulu di sini!
+        if (data.contains("/episode/list/")) {
+            val epListDoc = app.get(data, headers = ajaxHeaders).document
+            val epId = epListDoc.selectFirst("a.nav-link")?.attr("data-id") ?: return false
+            serversUrl = "$mainUrl/ajax/episode/servers/$epId"
+        }
+
+        // Sekarang kita mengeksekusi link servers yang sudah pasti benar
+        val serversResponse = app.get(serversUrl, headers = ajaxHeaders).document
         
         serversResponse.select("a.nav-link").forEach { serverNode ->
             val serverId = serverNode.attr("data-id")
@@ -193,20 +197,16 @@ class Sflix : MainAPI() {
                 val iframeUrl = sourceJson?.link
                 if (!iframeUrl.isNullOrBlank()) {
                     
-                    // 1. Rapikan format URL jika awalnya pakai "//"
                     var fixedUrl = iframeUrl
                     if (fixedUrl.startsWith("//")) {
                         fixedUrl = "https:$fixedUrl"
                     }
                     
-                    // 2. TRIK NINJA: Ganti host videostr.net jadi rabbitstream.net 
-                    // agar dikenali otomatis oleh Extractor bawaan Cloudstream,
-                    // TANPA merusak parameter kunci (?z=) di belakangnya.
+                    // Trik Ninja Termux: Ganti host videostr.net jadi rabbitstream.net 
                     if (fixedUrl.contains("videostr.net")) {
                         fixedUrl = fixedUrl.replace("videostr.net", "rabbitstream.net")
                     }
                     
-                    // 3. Serahkan link utuh yang sudah disamarkan ini ke Extractor Cloudstream
                     loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
                 }
             }
