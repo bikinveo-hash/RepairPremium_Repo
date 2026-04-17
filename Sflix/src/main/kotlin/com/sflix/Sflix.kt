@@ -1,4 +1,4 @@
-package com.sflix
+package com.sfli
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
