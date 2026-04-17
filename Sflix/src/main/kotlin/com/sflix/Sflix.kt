@@ -6,7 +6,10 @@ import com.lagradost.cloudstream3.utils.*
 class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
     override var name = "Sflix"
-    override val hasMainPage = false
+    
+    // 1. KITA UBAH MENJADI TRUE AGAR MUNCUL DI BERANDA
+    override val hasMainPage = true 
+    
     override var lang = "en"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
@@ -14,8 +17,59 @@ class Sflix : MainAPI() {
         TvType.TvSeries
     )
 
+    // 2. KITA DAFTARKAN MENU HALAMAN UTAMA (Contoh: Trending)
+    override val mainPage = mainPageOf(
+        "Trending" to "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending"
+    )
+
     // ==========================================
-    // 1. FUNGSI PENCARIAN (SEARCH)
+    // 3. FUNGSI HALAMAN UTAMA (GET MAIN PAGE)
+    // ==========================================
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        // Menambahkan paginasi ke URL
+        val url = "${request.data}?page=$page&perPage=18"
+        
+        val response = app.get(
+            url = url,
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )
+        ).parsedSafe<SflixTrendingResponse>()
+
+        // Mengurai data menjadi item poster di beranda
+        val homeItems = response?.data?.subjectList?.mapNotNull { item ->
+            val title = item.title ?: return@mapNotNull null
+            val urlPath = item.detailPath ?: return@mapNotNull null
+            val poster = item.cover?.url
+            val rating = item.imdbRatingValue
+            val year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
+
+            if (item.subjectType == 1) {
+                newMovieSearchResponse(title, urlPath, TvType.Movie) {
+                    this.posterUrl = poster
+                    this.year = year
+                    this.score = Score.from10(rating)
+                }
+            } else {
+                newTvSeriesSearchResponse(title, urlPath, TvType.TvSeries) {
+                    this.posterUrl = poster
+                    this.year = year
+                    this.score = Score.from10(rating)
+                }
+            }
+        } ?: emptyList()
+
+        val hasNext = response?.data?.pager?.hasMore ?: false
+        return newHomePageResponse(request.name, homeItems, hasNext)
+    }
+
+    // ==========================================
+    // FUNGSI PENCARIAN (SEARCH)
     // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
@@ -63,7 +117,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 2. FUNGSI DETAIL (LOAD)
+    // FUNGSI DETAIL (LOAD)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
@@ -108,7 +162,6 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
-                // Menggunakan TrailerData agar aman dari error
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
                 }
@@ -150,7 +203,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 3. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // FUNGSI PEMUTAR VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
         data: String,
@@ -172,7 +225,6 @@ class Sflix : MainAPI() {
             val resolution = stream.resolutions ?: ""
             val videoQuality = getQualityFromName("${resolution}p")
             
-            // newExtractorLink menggunakan format builder terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
@@ -191,8 +243,13 @@ class Sflix : MainAPI() {
     // ==========================================
     // DATA CLASSES UNTUK PARSING JSON
     // ==========================================
+    // Data class tambahan untuk halaman utama (Trending)
+    data class SflixTrendingResponse(val data: SflixTrendingData? = null)
+    data class SflixTrendingData(val pager: SflixPager? = null, val subjectList: List<SflixSubjectItem>? = null)
+
     data class SflixSearchResponse(val data: SflixSearchData? = null)
     data class SflixSearchData(val pager: SflixPager? = null, val items: List<SflixSubjectItem>? = null)
+    
     data class SflixPager(val hasMore: Boolean? = null)
     data class SflixSubjectItem(
         val subjectType: Int? = null,
