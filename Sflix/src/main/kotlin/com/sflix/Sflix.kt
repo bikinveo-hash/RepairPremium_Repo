@@ -1,265 +1,236 @@
 package com.sflix
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.AppUtils.parsedSafe
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.nicehttp.RequestBodyTypes
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 
-// ==========================================
-// DATA CLASSES UNTUK PARSING JSON
-// ==========================================
-
-data class SflixResponse(@JsonProperty("data") val data: SflixData? = null)
-data class SflixData(
-    @JsonProperty("subjectList") val subjectList: List<SflixSubject>? = null,
-    @JsonProperty("pager") val pager: SflixPager? = null
-)
-data class SflixSubject(
-    @JsonProperty("subjectId") val subjectId: String? = null,
-    @JsonProperty("subjectType") val subjectType: Int? = null,
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("cover") val cover: SflixCover? = null,
-    @JsonProperty("imdbRatingValue") val imdbRatingValue: String? = null,
-    @JsonProperty("detailPath") val detailPath: String? = null
-)
-data class SflixCover(@JsonProperty("url") val url: String? = null)
-data class SflixPager(@JsonProperty("hasMore") val hasMore: Boolean? = null)
-
-data class SflixSearchAPIResponse(@JsonProperty("data") val data: SflixSearchData? = null)
-data class SflixSearchData(@JsonProperty("items") val items: List<SflixSubject>? = null)
-
-data class SflixDetailResponse(@JsonProperty("data") val data: SflixDetailData? = null)
-data class SflixDetailData(
-    @JsonProperty("subject") val subject: SflixSubjectDetail? = null,
-    @JsonProperty("stars") val stars: List<SflixStar>? = null,
-    @JsonProperty("resource") val resource: SflixResource? = null
-)
-data class SflixSubjectDetail(
-    @JsonProperty("subjectId") val subjectId: String? = null,
-    @JsonProperty("subjectType") val subjectType: Int? = null,
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("description") val description: String? = null,
-    @JsonProperty("genre") val genre: String? = null,
-    @JsonProperty("cover") val cover: SflixCover? = null,
-    @JsonProperty("imdbRatingValue") val imdbRatingValue: String? = null
-)
-data class SflixStar(
-    @JsonProperty("name") val name: String? = null,
-    @JsonProperty("character") val character: String? = null,
-    @JsonProperty("avatarUrl") val avatarUrl: String? = null
-)
-data class SflixResource(@JsonProperty("seasons") val seasons: List<SflixSeason>? = null)
-data class SflixSeason(
-    @JsonProperty("se") val se: Int? = null,
-    @JsonProperty("resolutions") val resolutions: List<SflixResolution>? = null
-)
-data class SflixResolution(@JsonProperty("epNum") val epNum: Int? = null)
-
-data class SflixLinkData(
-    val subjectId: String,
-    val detailPath: String,
-    val seasonNumber: Int,
-    val episodeNumber: Int
-)
-
-data class SflixPlayResponse(@JsonProperty("data") val data: SflixPlayData? = null)
-data class SflixPlayData(@JsonProperty("streams") val streams: List<SflixStream>? = null)
-data class SflixStream(
-    @JsonProperty("id") val id: String? = null,
-    @JsonProperty("url") val url: String? = null,
-    @JsonProperty("resolutions") val resolutions: String? = null
-)
-data class SflixSubtitleResponse(@JsonProperty("data") val data: SflixSubtitleData? = null)
-data class SflixSubtitleData(@JsonProperty("captions") val captions: List<SflixCaption>? = null)
-data class SflixCaption(
-    @JsonProperty("lanName") val lanName: String? = null,
-    @JsonProperty("url") val url: String? = null
-)
-
-// ==========================================
-// SFLIX PROVIDER CLASS
-// ==========================================
-
-class SflixProvider : MainAPI() {
-    override var name = "Sflix"
+class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
-    private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
-    
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
-    override var lang = "id"
-    override val hasMainPage = true
-    override val hasQuickSearch = false
-
-    private val hardcodedBearer = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjc5OTMyOTY0NzY4NjcyODE0MDgsImF0cCI6MywiZXh0IjoiMTc3NjQ1MDM1OSIsImV4cCI6MTc4NDIyNjM1OSwiaWF0IjoxNzc2NDUwMDU5fQ.1SvmTEtzsosH4gnSiYgFjshtYf028U6ZAhnquMMo3fo"
-    
-    private val apiHeaders = mapOf(
-        "Authorization" to "Bearer $hardcodedBearer",
-        "x-request-lang" to "en",
-        "x-client-info" to """{"timezone":"Asia/Jayapura"}""",
-        "accept" to "application/json"
+    override var name = "Sflix"
+    override val hasMainPage = false // Ubah ke true nanti jika kita sudah buat getMainPage
+    override var lang = "en"
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries
     )
 
-    override val mainPage = mainPageOf(
-        "$apiBaseUrl/subject/trending?" to "Trending"
-    )
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val url = "${request.data}page=$page&perPage=18"
-        val resText = app.get(url, headers = apiHeaders).text
-        val response = tryParseJson<SflixResponse>(resText)
-
-        val homeItems = response?.data?.subjectList?.mapNotNull { item ->
-            val title = item.title ?: return@mapNotNull null
-            val detailPath = item.detailPath ?: return@mapNotNull null
-            val urlDetail = "$mainUrl/detail/$detailPath" 
-            val poster = item.cover?.url
-            val rating = item.imdbRatingValue
-
-            if (item.subjectType == 1) {
-                newMovieSearchResponse(title, urlDetail, TvType.Movie) {
-                    this.posterUrl = poster
-                    this.score = Score.from10(rating) 
-                }
-            } else {
-                newTvSeriesSearchResponse(title, urlDetail, TvType.TvSeries) {
-                    this.posterUrl = poster
-                    this.score = Score.from10(rating) 
-                }
-            }
-        } ?: return null
-
-        val hasNext = response.data.pager?.hasMore ?: false
-        return newHomePageResponse(request, homeItems, hasNext)
-    }
-
-    override suspend fun search(query: String): List<SearchResponse>? {
-        val searchUrl = "$apiBaseUrl/subject/search"
-        val requestData = mapOf(
+    // ==========================================
+    // 1. FUNGSI PENCARIAN (SEARCH)
+    // ==========================================
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
+        val payload = mapOf(
             "keyword" to query,
-            "page" to "1",
+            "page" to page.toString(),
             "perPage" to 24,
             "subjectType" to 0
-        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        )
 
-        val resText = app.post(url = searchUrl, headers = apiHeaders, requestBody = requestData).text
-        val response = tryParseJson<SflixSearchAPIResponse>(resText)
+        val response = app.post(
+            url = searchUrl,
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            ),
+            json = payload
+        ).parsedSafe<SflixSearchResponse>()
 
-        return response?.data?.items?.mapNotNull { item ->
+        val searchResults = response?.data?.items?.mapNotNull { item ->
             val title = item.title ?: return@mapNotNull null
-            val detailPath = item.detailPath ?: return@mapNotNull null
-            val urlDetail = "$mainUrl/detail/$detailPath" 
+            val urlPath = item.detailPath ?: return@mapNotNull null
             val poster = item.cover?.url
             val rating = item.imdbRatingValue
+            val year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
 
+            // subjectType: 1 = Movie, 2 = Series
             if (item.subjectType == 1) {
-                newMovieSearchResponse(title, urlDetail, TvType.Movie) {
+                newMovieSearchResponse(title, urlPath, TvType.Movie) {
                     this.posterUrl = poster
-                    this.score = Score.from10(rating) 
+                    this.year = year
+                    this.score = Score.from10(rating)
                 }
             } else {
-                newTvSeriesSearchResponse(title, urlDetail, TvType.TvSeries) {
+                newTvSeriesSearchResponse(title, urlPath, TvType.TvSeries) {
                     this.posterUrl = poster
-                    this.score = Score.from10(rating) 
+                    this.year = year
+                    this.score = Score.from10(rating)
                 }
             }
-        }
+        } ?: emptyList()
+
+        val hasNext = response?.data?.pager?.hasMore ?: false
+        return newSearchResponseList(searchResults, hasNext)
     }
 
-    override suspend fun load(url: String): LoadResponse? {
-        val detailPath = url.substringAfter("detail/").substringBefore("?")
-        val detailApiUrl = "$apiBaseUrl/detail?detailPath=$detailPath"
+    // ==========================================
+    // 2. FUNGSI DETAIL (LOAD)
+    // ==========================================
+    override suspend fun load(url: String): LoadResponse {
+        val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
+        
+        val responseData = app.get(
+            url = detailUrl,
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )
+        ).parsedSafe<SflixDetailResponse>()?.data
+            ?: throw ErrorLoadingException("Gagal mengambil detail dari Sflix")
 
-        val resText = app.get(detailApiUrl, headers = apiHeaders).text
-        val response = tryParseJson<SflixDetailResponse>(resText)
-        val data = response?.data ?: return null
-        val subject = data.subject ?: return null
-        val subjectId = subject.subjectId ?: return null
-        val title = subject.title ?: return null
+        val subject = responseData.subject ?: throw ErrorLoadingException("Data tidak ditemukan")
+        val subjectId = subject.subjectId ?: ""
+        
+        val title = subject.title ?: ""
+        val poster = subject.cover?.url
+        val plot = subject.description
+        val rating = subject.imdbRatingValue
+        val year = subject.releaseDate?.substringBefore("-")?.toIntOrNull()
+        val tags = subject.genre?.split(",")?.map { it.trim() }
+        val duration = subject.duration?.let { it / 60 } // Cloudstream menggunakan hitungan menit
 
-        val actors = data.stars?.mapNotNull {
-            ActorData(actor = Actor(it.name ?: return@mapNotNull null, it.avatarUrl), roleString = it.character)
+        val actorsList = responseData.stars?.mapNotNull { star ->
+            val actorName = star.name ?: return@mapNotNull null
+            ActorData(Actor(actorName), roleString = star.character)
         }
 
+        val trailerUrl = subject.trailer?.videoAddress?.url
+
+        // Cek tipe: 1 = Movie, 2 = Series
         if (subject.subjectType == 1) {
-            val linkData = SflixLinkData(subjectId, detailPath, 1, 1).toJson()
-            return newMovieLoadResponse(title, url, TvType.Movie, linkData) {
-                this.posterUrl = subject.cover?.url
-                this.plot = subject.description
-                this.tags = subject.genre?.split(",")?.map { it.trim() }
-                this.actors = actors
-                this.score = Score.from10(subject.imdbRatingValue)
+            val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
+            
+            return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
+                this.posterUrl = poster
+                this.year = year
+                this.plot = plot
+                this.tags = tags
+                this.duration = duration
+                this.score = Score.from10(rating)
+                this.actors = actorsList
+                if (!trailerUrl.isNullOrEmpty()) this.addTrailer(trailerUrl)
             }
         } else {
-            val episodes = mutableListOf<Episode>()
-            data.resource?.seasons?.forEach { season ->
-                val seasonNum = season.se ?: 0
-                val totalEp = season.resolutions?.firstOrNull()?.epNum ?: 0
-                for (ep in 1..totalEp) {
-                    val linkData = SflixLinkData(subjectId, detailPath, seasonNum, ep).toJson()
-                    episodes.add(newEpisode(linkData) {
-                        this.season = seasonNum
-                        this.episode = ep
-                        this.name = "Episode $ep"
-                    })
+            val episodeList = mutableListOf<Episode>()
+            
+            responseData.resource?.seasons?.forEach { season ->
+                val seasonNum = season.se ?: 1
+                val maxEp = season.maxEp ?: 0
+                
+                for (epNum in 1..maxEp) {
+                    val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$seasonNum&ep=$epNum&detailPath=$url"
+                    
+                    episodeList.add(
+                        newEpisode(playUrl) {
+                            this.name = "Episode $epNum"
+                            this.season = seasonNum
+                            this.episode = epNum
+                        }
+                    )
                 }
             }
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = subject.cover?.url
-                this.plot = subject.description
-                this.tags = subject.genre?.split(",")?.map { it.trim() }
-                this.actors = actors
-                this.score = Score.from10(subject.imdbRatingValue)
+
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodeList) {
+                this.posterUrl = poster
+                this.year = year
+                this.plot = plot
+                this.tags = tags
+                this.duration = duration
+                this.score = Score.from10(rating)
+                this.actors = actorsList
+                if (!trailerUrl.isNullOrEmpty()) this.addTrailer(trailerUrl)
             }
         }
     }
 
+    // ==========================================
+    // 3. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val linkData = tryParseJson<SflixLinkData>(data) ?: return false
-        val playApiUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.seasonNumber}&ep=${linkData.episodeNumber}&detailPath=${linkData.detailPath}"
+        // 'data' berisi 'playUrl' dari fungsi load()
+        val response = app.get(
+            url = data,
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )
+        ).parsedSafe<SflixPlayResponse>()?.data
 
-        val playHeaders = mapOf(
-            "cookie" to "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjc5OTMyOTY0NzY4NjcyODE0MDgsImF0cCI6MywiZXh0IjoiMTc3NjQ1MDM1OSIsImV4cCI6MTc4NDIyNjM1OSwiaWF0IjoxNzc2NDUwMDU5fQ.1SvmTEtzsosH4gnSiYgFjshtYf028U6ZAhnquMMo3fo%22;",
-            "x-client-info" to """{"timezone":"Asia/Jayapura"}""",
-            "accept" to "application/json",
-            "referer" to "$mainUrl/spa/videoPlayPage/movies/${linkData.detailPath}?id=${linkData.subjectId}&type=/movie/detail&lang=en"
-        )
-
-        val resText = app.get(playApiUrl, headers = playHeaders).text
-        val playResponse = tryParseJson<SflixPlayResponse>(resText)
-        val streams = playResponse?.data?.streams ?: return false
-        var subtitleId: String? = null
-
-        streams.forEach { stream ->
+        response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
-            if (subtitleId == null && !stream.id.isNullOrBlank()) subtitleId = stream.id
+            val resolution = stream.resolutions ?: ""
+            val quality = getQualityFromName("${resolution}p")
             
-            callback(newExtractorLink(this.name, this.name, videoUrl, ExtractorLinkType.VIDEO) {
-                this.referer = mainUrl
-                this.quality = getQualityFromName(stream.resolutions)
-            })
-        }
-
-        if (subtitleId != null) {
-            val subApiUrl = "$apiBaseUrl/subject/caption?format=MP4&id=$subtitleId&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
-            val subResText = app.get(subApiUrl, headers = apiHeaders).text
-            val subResponse = tryParseJson<SflixSubtitleResponse>(subResText)
-            
-            subResponse?.data?.captions?.forEach { caption ->
-                subtitleCallback(newSubtitleFile(caption.lanName ?: "Unknown", caption.url ?: return@forEach))
-            }
+            callback.invoke(
+                newExtractorLink(
+                    source = this.name,
+                    name = "Sflix ${stream.format ?: "MP4"}",
+                    url = videoUrl,
+                    referer = "$mainUrl/",
+                    quality = quality,
+                    type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                )
+            )
         }
         return true
     }
+
+    // ==========================================
+    // DATA CLASSES UNTUK PARSING JSON
+    // ==========================================
+    data class SflixSearchResponse(val data: SflixSearchData? = null)
+    data class SflixSearchData(val pager: SflixPager? = null, val items: List<SflixSubjectItem>? = null)
+    data class SflixPager(val hasMore: Boolean? = null)
+    data class SflixSubjectItem(
+        val subjectType: Int? = null,
+        val title: String? = null,
+        val releaseDate: String? = null,
+        val cover: SflixCover? = null,
+        val imdbRatingValue: String? = null,
+        val detailPath: String? = null
+    )
+
+    data class SflixDetailResponse(val data: SflixDetailData? = null)
+    data class SflixDetailData(
+        val subject: SflixSubject? = null,
+        val stars: List<SflixStar>? = null,
+        val resource: SflixResource? = null
+    )
+    data class SflixSubject(
+        val subjectId: String? = null,
+        val subjectType: Int? = null,
+        val title: String? = null,
+        val description: String? = null,
+        val releaseDate: String? = null,
+        val duration: Int? = null,
+        val genre: String? = null,
+        val cover: SflixCover? = null,
+        val imdbRatingValue: String? = null,
+        val trailer: SflixTrailer? = null
+    )
+    data class SflixStar(val name: String? = null, val character: String? = null)
+    data class SflixTrailer(val videoAddress: SflixVideoAddress? = null)
+    data class SflixVideoAddress(val url: String? = null)
+    data class SflixResource(val seasons: List<SflixSeason>? = null)
+    data class SflixSeason(val se: Int? = null, val maxEp: Int? = null)
+    data class SflixCover(val url: String? = null)
+
+    data class SflixPlayResponse(val data: SflixPlayData? = null)
+    data class SflixPlayData(val streams: List<SflixStream>? = null)
+    data class SflixStream(
+        val format: String? = null,
+        val url: String? = null,
+        val resolutions: String? = null
+    )
 }
