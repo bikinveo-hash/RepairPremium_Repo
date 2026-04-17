@@ -19,7 +19,53 @@ class Sflix : MainAPI() {
     )
 
     // ==========================================
-    // 1. FUNGSI HALAMAN UTAMA (GET MAIN PAGE)
+    // FUNGSI PENCURI TOKEN (AUTO-AUTH)
+    // ==========================================
+    private var currentToken: String? = null
+
+    private suspend fun getSflixHeaders(): Map<String, String> {
+        // Jika token belum ada, kita curi dulu dari API country-code
+        if (currentToken == null) {
+            try {
+                val response = app.get(
+                    "https://h5-api.aoneroom.com/wefeed-h5api-bff/country-code",
+                    headers = mapOf(
+                        "Accept" to "application/json",
+                        "Origin" to mainUrl,
+                        "Referer" to "$mainUrl/"
+                    )
+                )
+                
+                // Ekstrak token dari header Set-Cookie
+                val cookies = response.okhttpResponse.headers("set-cookie")
+                val tokenCookie = cookies.find { it.contains("token=") }
+                
+                if (tokenCookie != null) {
+                    currentToken = tokenCookie.substringAfter("token=").substringBefore(";")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // Siapkan header wajib
+        val headers = mutableMapOf(
+            "Accept" to "application/json",
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/"
+        )
+
+        // Suntikkan token jika berhasil didapat
+        if (!currentToken.isNullOrEmpty()) {
+            headers["Authorization"] = "Bearer $currentToken"
+            headers["Cookie"] = "token=$currentToken; sflix_token=%22$currentToken%22"
+        }
+
+        return headers
+    }
+
+    // ==========================================
+    // FUNGSI HALAMAN UTAMA (GET MAIN PAGE)
     // ==========================================
     override suspend fun getMainPage(
         page: Int,
@@ -29,11 +75,7 @@ class Sflix : MainAPI() {
         
         val response = app.get(
             url = url,
-            headers = mapOf(
-                "Accept" to "application/json",
-                "Origin" to mainUrl,
-                "Referer" to "$mainUrl/"
-            )
+            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
         ).parsedSafe<SflixTrendingResponse>()
 
         val homeItems = response?.data?.subjectList?.mapNotNull { item ->
@@ -63,7 +105,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 2. FUNGSI PENCARIAN (SEARCH)
+    // FUNGSI PENCARIAN (SEARCH)
     // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
@@ -76,11 +118,7 @@ class Sflix : MainAPI() {
 
         val response = app.post(
             url = searchUrl,
-            headers = mapOf(
-                "Accept" to "application/json",
-                "Origin" to mainUrl,
-                "Referer" to "$mainUrl/"
-            ),
+            headers = getSflixHeaders(), // <-- Menggunakan header dengan Token
             json = payload
         ).parsedSafe<SflixSearchResponse>()
 
@@ -111,18 +149,14 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 3. FUNGSI DETAIL (LOAD)
+    // FUNGSI DETAIL (LOAD)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
         
         val responseData = app.get(
             url = detailUrl,
-            headers = mapOf(
-                "Accept" to "application/json",
-                "Origin" to mainUrl,
-                "Referer" to "$mainUrl/"
-            )
+            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
         ).parsedSafe<SflixDetailResponse>()?.data
             ?: throw ErrorLoadingException("Gagal mengambil detail dari Sflix")
 
@@ -145,7 +179,6 @@ class Sflix : MainAPI() {
         val trailerUrl = subject.trailer?.videoAddress?.url
 
         if (subject.subjectType == 1) {
-            // PERBAIKAN 1: Menggunakan h5-api untuk URL Play agar tidak gagal DNS
             val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
             
             return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
@@ -157,7 +190,6 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
-                // PERBAIKAN 2: raw = true agar trailer langsung (.mp4) bisa diputar
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
                 }
@@ -170,7 +202,6 @@ class Sflix : MainAPI() {
                 val maxEp = season.maxEp ?: 0
                 
                 for (epNum in 1..maxEp) {
-                    // PERBAIKAN 1: Menggunakan h5-api untuk URL Play Serial
                     val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$seasonNum&ep=$epNum&detailPath=$url"
                     
                     episodeList.add(
@@ -192,7 +223,6 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
-                // PERBAIKAN 2: raw = true untuk trailer serial
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
                 }
@@ -201,7 +231,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 4. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // FUNGSI PEMUTAR VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
         data: String,
@@ -211,11 +241,7 @@ class Sflix : MainAPI() {
     ): Boolean {
         val response = app.get(
             url = data,
-            headers = mapOf(
-                "Accept" to "application/json",
-                "Origin" to mainUrl,
-                "Referer" to "$mainUrl/"
-            )
+            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
         ).parsedSafe<SflixPlayResponse>()?.data
 
         response?.streams?.forEach { stream ->
