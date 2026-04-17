@@ -15,10 +15,18 @@ class Sflix : MainAPI() {
     )
 
     // ==========================================
-    // DAFTAR KATEGORI HALAMAN UTAMA
+    // DAFTAR KATEGORI HALAMAN UTAMA (Diperbarui dengan Platform)
     // ==========================================
     override val mainPage = mainPageOf(
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=872031290915189720" to "Trending",
+        // Platform Populer
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Netflix" to "Netflix",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=PrimeVideo" to "Prime Video",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Disney" to "Disney+",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=AppleTV" to "Apple TV+",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Viu" to "Viu",
+        "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Hulu" to "Hulu",
+        // Kategori Genre
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=6528093688173053896" to "IndoMovie",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=5283462032510044280" to "IndoDrama",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=4993310637209048808" to "Komedi",
@@ -82,16 +90,26 @@ class Sflix : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Logika untuk menambahkan parameter page tanpa merusak URL bawaan yang sudah ada ?id=
         val separator = if (request.data.contains("?")) "&" else "?"
         val url = "${request.data}${separator}page=$page&perPage=18"
         
-        val response = app.get(
-            url = url,
-            headers = getSflixHeaders()
-        ).parsedSafe<SflixTrendingResponse>()
+        var hasNext = false
+        
+        // Logika percabangan untuk membaca format JSON yang berbeda
+        val itemsList = if (url.contains("platform/play-list")) {
+            // Membaca JSON tipe Platform (bersarang di dalam monthList)
+            val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixPlatformResponse>()
+            hasNext = response?.data?.pager?.hasMore ?: false
+            // flatMap digunakan untuk meleburkan semua "subjects" dari berbagai "monthList" menjadi satu daftar list
+            response?.data?.monthList?.flatMap { it.subjects ?: emptyList() } ?: emptyList()
+        } else {
+            // Membaca JSON tipe Kategori Biasa
+            val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixTrendingResponse>()
+            hasNext = response?.data?.pager?.hasMore ?: false
+            response?.data?.subjectList ?: emptyList()
+        }
 
-        val homeItems = response?.data?.subjectList?.mapNotNull { item ->
+        val homeItems = itemsList.mapNotNull { item ->
             val title = item.title ?: return@mapNotNull null
             val urlPath = item.detailPath ?: return@mapNotNull null
             val poster = item.cover?.url
@@ -111,9 +129,8 @@ class Sflix : MainAPI() {
                     this.score = Score.from10(rating)
                 }
             }
-        } ?: emptyList()
+        }
 
-        val hasNext = response?.data?.pager?.hasMore ?: false
         return newHomePageResponse(request.name, homeItems, hasNext)
     }
 
@@ -260,19 +277,16 @@ class Sflix : MainAPI() {
         val typePath = if (isMovie) "movies" else "series"
         val typeQuery = if (isMovie) "/movie/detail" else "/tv/detail"
         
-        // Referer dinamis yang lolos pengecekan server
         val dynamicReferer = "$mainUrl/spa/videoPlayPage/$typePath/$detailPath?id=$subjectId&type=$typeQuery&lang=en"
 
         val requestHeaders = getSflixHeaders().toMutableMap()
         requestHeaders["Referer"] = dynamicReferer
         
-        // 1. Minta data video
         val response = app.get(
             url = data,
             headers = requestHeaders 
         ).parsedSafe<SflixPlayResponse>()?.data
 
-        // 2. Urai link video
         response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
             val resolution = stream.resolutions ?: ""
@@ -291,7 +305,6 @@ class Sflix : MainAPI() {
             )
         }
 
-        // 3. Minta data subtitle (Menggunakan ID dari stream pertama yang ditemukan)
         val firstStreamId = response?.streams?.firstOrNull()?.id
         if (firstStreamId != null) {
             val captionUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/caption?format=MP4&id=$firstStreamId&subjectId=$subjectId&detailPath=$detailPath"
@@ -301,7 +314,6 @@ class Sflix : MainAPI() {
                 headers = requestHeaders 
             ).parsedSafe<SflixCaptionResponse>()?.data
 
-            // 4. Urai link subtitle ke Cloudstream
             captionResponse?.captions?.forEach { caption ->
                 val subUrl = caption.url ?: return@forEach
                 val langName = caption.lanName ?: "Unknown"
@@ -321,13 +333,22 @@ class Sflix : MainAPI() {
     // ==========================================
     // DATA CLASSES UNTUK PARSING JSON
     // ==========================================
+    
+    // 1. Data Class untuk Kategori Biasa
     data class SflixTrendingResponse(val data: SflixTrendingData? = null)
     data class SflixTrendingData(val pager: SflixPager? = null, val subjectList: List<SflixSubjectItem>? = null)
+
+    // 2. Data Class untuk Kategori Platform (Baru ditambahkan)
+    data class SflixPlatformResponse(val data: SflixPlatformData? = null)
+    data class SflixPlatformData(val pager: SflixPager? = null, val monthList: List<SflixMonth>? = null)
+    data class SflixMonth(val subjects: List<SflixSubjectItem>? = null)
 
     data class SflixSearchResponse(val data: SflixSearchData? = null)
     data class SflixSearchData(val pager: SflixPager? = null, val items: List<SflixSubjectItem>? = null)
     
     data class SflixPager(val hasMore: Boolean? = null)
+    
+    // SflixSubjectItem ini dipakai bersama oleh Trending, Search, dan Platform
     data class SflixSubjectItem(
         val subjectType: Int? = null,
         val title: String? = null,
