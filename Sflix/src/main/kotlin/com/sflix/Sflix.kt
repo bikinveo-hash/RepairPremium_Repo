@@ -8,7 +8,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.utils.newExtractorLink // Import fungsi baru untuk Extractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 
 // ==========================================
 // DATA CLASSES UNTUK MENANGKAP JSON API
@@ -108,6 +108,7 @@ class SflixProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = "${request.data}page=$page&perPage=18"
+        
         // Cara parsing yang lebih aman dari error
         val resText = app.get(url, headers = apiHeaders).text
         val response = tryParseJson<SflixResponse>(resText)
@@ -199,7 +200,7 @@ class SflixProvider : MainAPI() {
         val linkData = tryParseJson<SflixLinkData>(data) ?: return false
         val playApiUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.seasonNumber}&ep=${linkData.episodeNumber}&detailPath=${linkData.detailPath}"
 
-        // Header Play API (Sesuai dengan screenshot terbarumu)
+        // Header Play API dengan token dari screenshot kamu
         val playHeaders = mapOf(
             "cookie" to "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjIyOTQ0NzA1MzU0OTk2MjkwNTYsImF0cCI6MywiZXh0IjoiMTc3NjQ0NTgzOSIsImV4cCI6MTc4NDIyMTgzOSwiaWF0IjoxNzc2NDQ1NTM5fQ.c_0FLy4h-eefWW5xIt2u9CzxczQ1IT0EEY4H2JM9Y9s%22; token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjgzMDAyMzE3NDQ4MzI5MTQwMDgsImF0cCI6MywiZXh0IjoiMTc3NjQ0NTg4MSIsImV4cCI6MTc4NDIyMTg4MSwiaWF0IjoxNzc2NDQ1NTgxfQ.hGOhBNqRyjFpxnvDPyzkwWHqKf4vsVGuZUKfygoB9Zc;",
             "x-client-info" to """{"timezone":"Asia/Jayapura"}""",
@@ -221,9 +222,9 @@ class SflixProvider : MainAPI() {
                     source = this.name,
                     name = this.name,
                     url = videoUrl,
-                    referer = mainUrl,
                     type = ExtractorLinkType.VIDEO
                 ) {
+                    this.referer = mainUrl // Referer sudah dipindah ke dalam blok initializer!
                     this.quality = getQualityFromName(stream.resolutions)
                 }
             )
