@@ -24,7 +24,6 @@ class Sflix : MainAPI() {
     private var currentToken: String? = null
 
     private suspend fun getSflixHeaders(): Map<String, String> {
-        // Jika token belum ada, kita curi dulu dari API country-code
         if (currentToken == null) {
             try {
                 val response = app.get(
@@ -36,7 +35,6 @@ class Sflix : MainAPI() {
                     )
                 )
                 
-                // Ekstrak token dari header Set-Cookie
                 val cookies = response.okhttpResponse.headers("set-cookie")
                 val tokenCookie = cookies.find { it.contains("token=") }
                 
@@ -48,7 +46,6 @@ class Sflix : MainAPI() {
             }
         }
 
-        // Siapkan header wajib (Diperbarui berdasarkan analisa Termux)
         val headers = mutableMapOf(
             "Accept" to "application/json",
             "Origin" to mainUrl,
@@ -58,10 +55,8 @@ class Sflix : MainAPI() {
             "X-Source" to "null"
         )
 
-        // Suntikkan token jika berhasil didapat
         if (!currentToken.isNullOrEmpty()) {
             headers["Authorization"] = "Bearer $currentToken"
-            // Menambahkan sflix_i18n_lang=en ke dalam Cookie agar sama persis dengan browser
             headers["Cookie"] = "token=$currentToken; sflix_token=%22$currentToken%22; sflix_i18n_lang=en"
         }
 
@@ -79,7 +74,7 @@ class Sflix : MainAPI() {
         
         val response = app.get(
             url = url,
-            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
+            headers = getSflixHeaders()
         ).parsedSafe<SflixTrendingResponse>()
 
         val homeItems = response?.data?.subjectList?.mapNotNull { item ->
@@ -122,7 +117,7 @@ class Sflix : MainAPI() {
 
         val response = app.post(
             url = searchUrl,
-            headers = getSflixHeaders(), // <-- Menggunakan header dengan Token
+            headers = getSflixHeaders(),
             json = payload
         ).parsedSafe<SflixSearchResponse>()
 
@@ -160,7 +155,7 @@ class Sflix : MainAPI() {
         
         val responseData = app.get(
             url = detailUrl,
-            headers = getSflixHeaders() // <-- Menggunakan header dengan Token
+            headers = getSflixHeaders()
         ).parsedSafe<SflixDetailResponse>()?.data
             ?: throw ErrorLoadingException("Gagal mengambil detail dari Sflix")
 
@@ -235,7 +230,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // FUNGSI PEMUTAR VIDEO & SUBTITLE (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
         data: String,
@@ -243,30 +238,26 @@ class Sflix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 1. Ekstrak data dari URL yang dilempar oleh fungsi load()
         val subjectId = Regex("subjectId=([^&]+)").find(data)?.groupValues?.get(1) ?: ""
         val detailPath = Regex("detailPath=([^&]+)").find(data)?.groupValues?.get(1) ?: ""
         val se = Regex("se=([^&]+)").find(data)?.groupValues?.get(1) ?: "0"
         
-        // 2. Tentukan apakah ini Film atau Serial TV untuk menyesuaikan URL Referer
         val isMovie = se == "0"
         val typePath = if (isMovie) "movies" else "series"
         val typeQuery = if (isMovie) "/movie/detail" else "/tv/detail"
         
-        // 3. Buat Referer dinamis persis seperti simulasi Termux kita yang berhasil
         val dynamicReferer = "$mainUrl/spa/videoPlayPage/$typePath/$detailPath?id=$subjectId&type=$typeQuery&lang=en"
 
-        // 4. Ambil header dasar, lalu timpa "Referer" dengan yang dinamis
         val requestHeaders = getSflixHeaders().toMutableMap()
         requestHeaders["Referer"] = dynamicReferer
         
-        // 5. Minta data ke server
+        // 1. Minta data video
         val response = app.get(
             url = data,
-            headers = requestHeaders // <-- Menggunakan header dengan Referer baru
+            headers = requestHeaders 
         ).parsedSafe<SflixPlayResponse>()?.data
 
-        // 6. Urai link video yang didapat
+        // 2. Urai link video
         response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
             val resolution = stream.resolutions ?: ""
@@ -279,11 +270,36 @@ class Sflix : MainAPI() {
                     url = videoUrl,
                     type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    this.referer = "$mainUrl/" // Referer standar untuk memutar videonya di player
+                    this.referer = "$mainUrl/" 
                     this.quality = videoQuality
                 }
             )
         }
+
+        // 3. Minta data subtitle (Menggunakan ID dari stream pertama yang ditemukan)
+        val firstStreamId = response?.streams?.firstOrNull()?.id
+        if (firstStreamId != null) {
+            val captionUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/caption?format=MP4&id=$firstStreamId&subjectId=$subjectId&detailPath=$detailPath"
+            
+            val captionResponse = app.get(
+                url = captionUrl,
+                headers = requestHeaders // Menggunakan referer dinamis yang sama
+            ).parsedSafe<SflixCaptionResponse>()?.data
+
+            // 4. Urai link subtitle ke Cloudstream
+            captionResponse?.captions?.forEach { caption ->
+                val subUrl = caption.url ?: return@forEach
+                val langName = caption.lanName ?: "Unknown"
+                
+                subtitleCallback.invoke(
+                    SubtitleFile(
+                        lang = langName,
+                        url = subUrl
+                    )
+                )
+            }
+        }
+
         return true
     }
 
@@ -334,8 +350,17 @@ class Sflix : MainAPI() {
     data class SflixPlayResponse(val data: SflixPlayData? = null)
     data class SflixPlayData(val streams: List<SflixStream>? = null)
     data class SflixStream(
+        val id: String? = null, // <-- Ditambahkan untuk mengambil ID Subtitle
         val format: String? = null,
         val url: String? = null,
         val resolutions: String? = null
+    )
+
+    // Data Class Baru Untuk Subtitle
+    data class SflixCaptionResponse(val data: SflixCaptionData? = null)
+    data class SflixCaptionData(val captions: List<SflixCaption>? = null)
+    data class SflixCaption(
+        val lanName: String? = null,
+        val url: String? = null
     )
 }
