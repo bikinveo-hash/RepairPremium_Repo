@@ -107,7 +107,7 @@ class Sflix : MainAPI() {
         val duration = document.selectFirst("span.duration")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         val tags = document.select("div.row-line:contains(Genre) a").map { it.text() }
         
-        // Aturan baru CS3: Wajib pakai ActorData
+        // Membungkus aktor sesuai format Cloudstream terbaru
         val actors = document.select("div.row-line:contains(Casts) a").map { 
             ActorData(Actor(it.text())) 
         }
@@ -119,8 +119,12 @@ class Sflix : MainAPI() {
         val isMovie = watchDiv.attr("data-type") == "1"
 
         if (isMovie) {
-            // FIX: Movie pakai dataUrl langsung (String murni)
-            val dataUrl = "$mainUrl/ajax/episode/list/$dataId"
+            // FIX 1: Mengambil epId terlebih dahulu sebelum mengirimnya ke loadLinks
+            val epListDoc = app.get("$mainUrl/ajax/episode/list/$dataId", headers = ajaxHeaders).document
+            val epId = epListDoc.selectFirst("a.nav-link")?.attr("data-id") ?: return null
+            
+            // Mengubah URL ke format 'servers' agar bisa diproses oleh fungsi loadLinks
+            val dataUrl = "$mainUrl/ajax/episode/servers/$epId"
             
             return newMovieLoadResponse(title, url, TvType.Movie, dataUrl) {
                 this.posterUrl = poster
@@ -181,7 +185,6 @@ class Sflix : MainAPI() {
         
         serversResponse.select("a.nav-link").forEach { serverNode ->
             val serverId = serverNode.attr("data-id")
-            val serverName = serverNode.selectFirst("span")?.text()?.trim() ?: serverNode.text().trim()
 
             if (serverId.isNotBlank()) {
                 val sourceUrl = "$mainUrl/ajax/episode/sources/$serverId"
@@ -190,27 +193,21 @@ class Sflix : MainAPI() {
                 val iframeUrl = sourceJson?.link
                 if (!iframeUrl.isNullOrBlank()) {
                     
-                    // 💥 BYPASS EXTRACTOR: Ambil ID videonya saja (misal I8PrNMCsxI9h)
-                    val embedId = iframeUrl.substringAfterLast("/").substringBefore("?")
-                    
-                    // 💥 RAKIT URL PALSU: Sesuaikan dengan selera mesin CS3
-                    if (serverName.contains("UpCloud", ignoreCase = true) || serverName.contains("Vidcloud", ignoreCase = true)) {
-                        val rabbitUrl = "https://rabbitstream.net/embed-4/e-1/$embedId"
-                        loadExtractor(rabbitUrl, mainUrl, subtitleCallback, callback)
-                        
-                    } else if (serverName.contains("MegaCloud", ignoreCase = true)) {
-                        val megaUrl = "https://megacloud.tv/embed-2/e-1/$embedId"
-                        loadExtractor(megaUrl, mainUrl, subtitleCallback, callback)
-                        
-                    } else if (serverName.contains("AKCloud", ignoreCase = true)) {
-                        val dokiUrl = "https://dokicloud.one/embed-4/e-1/$embedId"
-                        loadExtractor(dokiUrl, mainUrl, subtitleCallback, callback)
-                        
-                    } else {
-                        // Fallback aman
-                        val fixedUrl = iframeUrl.replace("videostr.net", "megacloud.tv")
-                        loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
+                    // 1. Rapikan format URL jika awalnya pakai "//"
+                    var fixedUrl = iframeUrl
+                    if (fixedUrl.startsWith("//")) {
+                        fixedUrl = "https:$fixedUrl"
                     }
+                    
+                    // 2. TRIK NINJA: Ganti host videostr.net jadi rabbitstream.net 
+                    // agar dikenali otomatis oleh Extractor bawaan Cloudstream,
+                    // TANPA merusak parameter kunci (?z=) di belakangnya.
+                    if (fixedUrl.contains("videostr.net")) {
+                        fixedUrl = fixedUrl.replace("videostr.net", "rabbitstream.net")
+                    }
+                    
+                    // 3. Serahkan link utuh yang sudah disamarkan ini ke Extractor Cloudstream
+                    loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
                 }
             }
         }
