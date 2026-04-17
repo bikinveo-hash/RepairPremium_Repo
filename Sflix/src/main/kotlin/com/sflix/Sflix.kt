@@ -98,8 +98,16 @@ class Sflix : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         
-        val title = document.selectFirst("h2.heading-name a")?.text() ?: return null
-        val poster = fixUrlNull(document.selectFirst("img.film-poster-img")?.attr("src"))
+        // 🛡️ Fallback Cerdas: Jika <a> tidak ada, ambil langsung dari teks <h2>
+        val title = document.selectFirst("h2.heading-name")?.text() 
+            ?: document.selectFirst(".m-detail .film-name")?.text() 
+            ?: return null
+            
+        // 🛡️ Fallback Cerdas: Cek data-src dulu, baru src
+        val poster = fixUrlNull(document.selectFirst("img.film-poster-img")?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
+        })
+        
         val bgStyle = document.selectFirst("div.cover_follow")?.attr("style")
         val background = fixUrlNull(bgStyle?.substringAfter("url(")?.substringBefore(")"))
         val description = document.selectFirst("div.description")?.text()?.replace("Overview:", "")?.trim()
@@ -112,11 +120,18 @@ class Sflix : MainAPI() {
         val recommendations = document.select(".film_list-wrap .flw-item").mapNotNull { it.toSearchResult() }
 
         val watchDiv = document.selectFirst(".detail_page-watch")
-        val dataId = watchDiv?.attr("data-id") ?: return null
-        val isMovie = watchDiv.attr("data-type") == "1"
+        
+        // 🛡️ Fallback Cerdas: Jika div disembunyikan SFlix, ambil ID dari buntut URL!
+        val dataId = watchDiv?.attr("data-id")?.ifEmpty { null } ?: url.substringAfterLast("-")
+        
+        // 🛡️ Fallback Cerdas: Penentuan tipe Movie/TV dari URL jika div lenyap
+        val isMovie = if (watchDiv != null && watchDiv.hasAttr("data-type")) {
+            watchDiv.attr("data-type") == "1"
+        } else {
+            url.contains("/movie/")
+        }
 
         if (isMovie) {
-            // KEMBALI KE ASAL: Jangan lakukan app.get di sini agar tidak error loading!
             val dataUrl = "$mainUrl/ajax/episode/list/$dataId"
             
             return newMovieLoadResponse(title, url, TvType.Movie, dataUrl) {
@@ -177,14 +192,13 @@ class Sflix : MainAPI() {
         
         var serversUrl = data
 
-        // FIX: Jika data dari Movie (/episode/list/...), kita harus request epId-nya dulu di sini!
+        // FIX: Karena Movie mengirim link "list", kita wajib ambil "epId" nya dulu
         if (data.contains("/episode/list/")) {
             val epListDoc = app.get(data, headers = ajaxHeaders).document
             val epId = epListDoc.selectFirst("a.nav-link")?.attr("data-id") ?: return false
             serversUrl = "$mainUrl/ajax/episode/servers/$epId"
         }
 
-        // Sekarang kita mengeksekusi link servers yang sudah pasti benar
         val serversResponse = app.get(serversUrl, headers = ajaxHeaders).document
         
         serversResponse.select("a.nav-link").forEach { serverNode ->
@@ -202,7 +216,7 @@ class Sflix : MainAPI() {
                         fixedUrl = "https:$fixedUrl"
                     }
                     
-                    // Trik Ninja Termux: Ganti host videostr.net jadi rabbitstream.net 
+                    // Trik Ninja Termux!
                     if (fixedUrl.contains("videostr.net")) {
                         fixedUrl = fixedUrl.replace("videostr.net", "rabbitstream.net")
                     }
