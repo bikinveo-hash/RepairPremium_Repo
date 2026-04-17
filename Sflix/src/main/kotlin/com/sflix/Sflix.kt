@@ -6,10 +6,7 @@ import com.lagradost.cloudstream3.utils.*
 class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
     override var name = "Sflix"
-    
-    // 1. Mengaktifkan halaman utama agar muncul di beranda
     override val hasMainPage = true 
-    
     override var lang = "en"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
@@ -17,19 +14,17 @@ class Sflix : MainAPI() {
         TvType.TvSeries
     )
 
-    // 2. PERBAIKAN: Format yang benar adalah "URL" to "Nama Menu"
     override val mainPage = mainPageOf(
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending" to "Trending"
     )
 
     // ==========================================
-    // 3. FUNGSI HALAMAN UTAMA (GET MAIN PAGE)
+    // 1. FUNGSI HALAMAN UTAMA (GET MAIN PAGE)
     // ==========================================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Menambahkan paginasi ke URL
         val url = "${request.data}?page=$page&perPage=18"
         
         val response = app.get(
@@ -41,7 +36,6 @@ class Sflix : MainAPI() {
             )
         ).parsedSafe<SflixTrendingResponse>()
 
-        // Mengurai data menjadi item poster di beranda
         val homeItems = response?.data?.subjectList?.mapNotNull { item ->
             val title = item.title ?: return@mapNotNull null
             val urlPath = item.detailPath ?: return@mapNotNull null
@@ -69,7 +63,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 4. FUNGSI PENCARIAN (SEARCH)
+    // 2. FUNGSI PENCARIAN (SEARCH)
     // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
@@ -117,7 +111,7 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // 5. FUNGSI DETAIL (LOAD)
+    // 3. FUNGSI DETAIL (LOAD)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
@@ -151,7 +145,8 @@ class Sflix : MainAPI() {
         val trailerUrl = subject.trailer?.videoAddress?.url
 
         if (subject.subjectType == 1) {
-            val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
+            // PERBAIKAN 1: Menggunakan h5-api untuk URL Play agar tidak gagal DNS
+            val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
             
             return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
@@ -162,8 +157,9 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
+                // PERBAIKAN 2: raw = true agar trailer langsung (.mp4) bisa diputar
                 if (!trailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
+                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
                 }
             }
         } else {
@@ -174,7 +170,8 @@ class Sflix : MainAPI() {
                 val maxEp = season.maxEp ?: 0
                 
                 for (epNum in 1..maxEp) {
-                    val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$seasonNum&ep=$epNum&detailPath=$url"
+                    // PERBAIKAN 1: Menggunakan h5-api untuk URL Play Serial
+                    val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$seasonNum&ep=$epNum&detailPath=$url"
                     
                     episodeList.add(
                         newEpisode(playUrl) {
@@ -195,15 +192,16 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
+                // PERBAIKAN 2: raw = true untuk trailer serial
                 if (!trailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
+                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
                 }
             }
         }
     }
 
     // ==========================================
-    // 6. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
+    // 4. FUNGSI PEMUTAR VIDEO (LOAD LINKS)
     // ==========================================
     override suspend fun loadLinks(
         data: String,
