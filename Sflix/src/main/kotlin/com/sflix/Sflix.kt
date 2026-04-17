@@ -28,6 +28,9 @@ class Sflix : MainAPI() {
         @JsonProperty("link") val link: String?
     )
 
+    // ==========================================
+    // FUNGSI BANTUAN: EKSTRAK ITEM FILM
+    // ==========================================
     private fun Element.toSearchResult(): SearchResponse? {
         val href = fixUrlNull(this.selectFirst("a.film-poster-ahref")?.attr("href")) ?: return null
         val title = this.selectFirst(".film-name a")?.text() ?: return null
@@ -63,6 +66,9 @@ class Sflix : MainAPI() {
         }
     }
 
+    // ==========================================
+    // HALAMAN UTAMA (HOME)
+    // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data).document
         val homeList = arrayListOf<HomePageList>()
@@ -77,12 +83,18 @@ class Sflix : MainAPI() {
         return newHomePageResponse(homeList)
     }
 
+    // ==========================================
+    // PENCARIAN (SEARCH)
+    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search/${query.replace(" ", "-")}"
         val document = app.get(url).document
         return document.select(".flw-item").mapNotNull { it.toSearchResult() }
     }
 
+    // ==========================================
+    // HALAMAN INFO FILM & DAFTAR EPISODE (LOAD)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         
@@ -95,7 +107,7 @@ class Sflix : MainAPI() {
         val duration = document.selectFirst("span.duration")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         val tags = document.select("div.row-line:contains(Genre) a").map { it.text() }
         
-        // 💥 FIX ERROR AKTOR: Aturan baru CS3 wajib pakai ActorData
+        // Aturan baru CS3: Wajib pakai ActorData
         val actors = document.select("div.row-line:contains(Casts) a").map { 
             ActorData(Actor(it.text())) 
         }
@@ -107,13 +119,10 @@ class Sflix : MainAPI() {
         val isMovie = watchDiv.attr("data-type") == "1"
 
         if (isMovie) {
-            // 💥 FIX ERROR EPISODE: Aturan baru CS3 wajib pakai newEpisode
-            val episodeList = listOf(
-                newEpisode("$mainUrl/ajax/episode/list/$dataId") {
-                    this.name = "Movie"
-                }
-            )
-            return newMovieLoadResponse(title, url, TvType.Movie, episodeList) {
+            // 💥 FIX UTAMA: Movie pakai dataUrl langsung (String murni)
+            val dataUrl = "$mainUrl/ajax/episode/list/$dataId"
+            
+            return newMovieLoadResponse(title, url, TvType.Movie, dataUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.year = year
@@ -137,7 +146,7 @@ class Sflix : MainAPI() {
                     val epNum = ep.selectFirst("strong")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
                     val epTitle = ep.attr("title").ifEmpty { ep.text() }
                     
-                    // 💥 FIX ERROR EPISODE: Aturan baru CS3 wajib pakai newEpisode
+                    // Aturan baru CS3: Wajib pakai newEpisode
                     episodeList.add(
                         newEpisode("$mainUrl/ajax/episode/servers/$epId") {
                             this.name = epTitle
@@ -160,12 +169,16 @@ class Sflix : MainAPI() {
         }
     }
 
+    // ==========================================
+    // EKSTRAK LINK VIDEO (.M3U8) 
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Ambil daftar server
         val serversResponse = app.get(data, headers = ajaxHeaders).document
         
         serversResponse.select("a.nav-link").forEach { serverNode ->
@@ -176,6 +189,7 @@ class Sflix : MainAPI() {
                 
                 val iframeUrl = sourceJson?.link
                 if (!iframeUrl.isNullOrBlank()) {
+                    // Serahkan ke Extractor Bawaan CS3 buat ngebobol Iframe-nya!
                     loadExtractor(iframeUrl, mainUrl, subtitleCallback, callback)
                 }
             }
