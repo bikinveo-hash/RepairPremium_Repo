@@ -7,7 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class SflixPlugin : Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan class Sflix sebagai MainAPI ke dalam CloudStream
-        registerMainAPI(Sflix())
+        // Mendaftarkan provider kita ke sistem
+        registerMainAPI(SflixProvider())
     }
 }
