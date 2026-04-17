@@ -1,16 +1,13 @@
 package com.sflix
 
+// 1. Perbaikan Impor: Kita gunakan wildcard (*) agar semua fungsi builder dan utilitas terbaca
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parsedSafe
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.utils.*
 
 class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
     override var name = "Sflix"
-    override val hasMainPage = false // Ubah ke true nanti jika kita sudah buat getMainPage
+    override val hasMainPage = false
     override var lang = "en"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
@@ -30,6 +27,7 @@ class Sflix : MainAPI() {
             "subjectType" to 0
         )
 
+        // parsedSafe() sekarang akan terbaca karena kita sudah mengimpor utils.*
         val response = app.post(
             url = searchUrl,
             headers = mapOf(
@@ -47,7 +45,6 @@ class Sflix : MainAPI() {
             val rating = item.imdbRatingValue
             val year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
 
-            // subjectType: 1 = Movie, 2 = Series
             if (item.subjectType == 1) {
                 newMovieSearchResponse(title, urlPath, TvType.Movie) {
                     this.posterUrl = poster
@@ -92,7 +89,7 @@ class Sflix : MainAPI() {
         val rating = subject.imdbRatingValue
         val year = subject.releaseDate?.substringBefore("-")?.toIntOrNull()
         val tags = subject.genre?.split(",")?.map { it.trim() }
-        val duration = subject.duration?.let { it / 60 } // Cloudstream menggunakan hitungan menit
+        val duration = subject.duration?.let { it / 60 } 
 
         val actorsList = responseData.stars?.mapNotNull { star ->
             val actorName = star.name ?: return@mapNotNull null
@@ -101,7 +98,6 @@ class Sflix : MainAPI() {
 
         val trailerUrl = subject.trailer?.videoAddress?.url
 
-        // Cek tipe: 1 = Movie, 2 = Series
         if (subject.subjectType == 1) {
             val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
             
@@ -113,7 +109,11 @@ class Sflix : MainAPI() {
                 this.duration = duration
                 this.score = Score.from10(rating)
                 this.actors = actorsList
-                if (!trailerUrl.isNullOrEmpty()) this.addTrailer(trailerUrl)
+                
+                // 2. Perbaikan addTrailer: Kita gunakan TrailerData secara langsung agar bebas error
+                if (!trailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
+                }
             }
         } else {
             val episodeList = mutableListOf<Episode>()
@@ -143,7 +143,11 @@ class Sflix : MainAPI() {
                 this.duration = duration
                 this.score = Score.from10(rating)
                 this.actors = actorsList
-                if (!trailerUrl.isNullOrEmpty()) this.addTrailer(trailerUrl)
+                
+                // Perbaikan addTrailer yang sama untuk tipe Series
+                if (!trailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
+                }
             }
         }
     }
@@ -157,7 +161,6 @@ class Sflix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 'data' berisi 'playUrl' dari fungsi load()
         val response = app.get(
             url = data,
             headers = mapOf(
@@ -172,6 +175,7 @@ class Sflix : MainAPI() {
             val resolution = stream.resolutions ?: ""
             val quality = getQualityFromName("${resolution}p")
             
+            // 3. newExtractorLink sekarang akan terbaca karena utils.* sudah diimpor
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
