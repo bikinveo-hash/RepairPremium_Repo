@@ -15,17 +15,19 @@ class Sflix : MainAPI() {
     )
 
     // ==========================================
-    // DAFTAR KATEGORI HALAMAN UTAMA (Diperbarui dengan Platform)
+    // DAFTAR KATEGORI HALAMAN UTAMA
     // ==========================================
     override val mainPage = mainPageOf(
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=872031290915189720" to "Trending",
-        // Platform Populer
+        
+        // Kategori Platform
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Netflix" to "Netflix",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=PrimeVideo" to "Prime Video",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Disney" to "Disney+",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=AppleTV" to "Apple TV+",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Viu" to "Viu",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?platform=Hulu" to "Hulu",
+        
         // Kategori Genre
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=6528093688173053896" to "IndoMovie",
         "https://h5-api.aoneroom.com/wefeed-h5api-bff/ranking-list/content?id=5283462032510044280" to "IndoDrama",
@@ -90,20 +92,27 @@ class Sflix : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val separator = if (request.data.contains("?")) "&" else "?"
-        val url = "${request.data}${separator}page=$page&perPage=18"
+        val isPlatform = request.data.contains("platform/play-list")
+        
+        // Logika merakit URL dengan hati-hati
+        val url = if (isPlatform) {
+            val platformName = request.data.substringAfter("platform=")
+            // CATATAN: perPage diset ke 3 (bulan), bukan 18. Jika 18, server akan timeout!
+            "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?page=$page&perPage=3&platform=$platformName"
+        } else {
+            val separator = if (request.data.contains("?")) "&" else "?"
+            "${request.data}${separator}page=$page&perPage=18"
+        }
         
         var hasNext = false
         
-        // Logika percabangan untuk membaca format JSON yang berbeda
-        val itemsList = if (url.contains("platform/play-list")) {
-            // Membaca JSON tipe Platform (bersarang di dalam monthList)
+        // Logika membaca respons JSON
+        val itemsList = if (isPlatform) {
             val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixPlatformResponse>()
             hasNext = response?.data?.pager?.hasMore ?: false
-            // flatMap digunakan untuk meleburkan semua "subjects" dari berbagai "monthList" menjadi satu daftar list
+            // Meleburkan semua subjects dari beberapa bulan menjadi 1 daftar
             response?.data?.monthList?.flatMap { it.subjects ?: emptyList() } ?: emptyList()
         } else {
-            // Membaca JSON tipe Kategori Biasa
             val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixTrendingResponse>()
             hasNext = response?.data?.pager?.hasMore ?: false
             response?.data?.subjectList ?: emptyList()
@@ -338,7 +347,7 @@ class Sflix : MainAPI() {
     data class SflixTrendingResponse(val data: SflixTrendingData? = null)
     data class SflixTrendingData(val pager: SflixPager? = null, val subjectList: List<SflixSubjectItem>? = null)
 
-    // 2. Data Class untuk Kategori Platform (Baru ditambahkan)
+    // 2. Data Class untuk Kategori Platform
     data class SflixPlatformResponse(val data: SflixPlatformData? = null)
     data class SflixPlatformData(val pager: SflixPager? = null, val monthList: List<SflixMonth>? = null)
     data class SflixMonth(val subjects: List<SflixSubjectItem>? = null)
@@ -348,7 +357,7 @@ class Sflix : MainAPI() {
     
     data class SflixPager(val hasMore: Boolean? = null)
     
-    // SflixSubjectItem ini dipakai bersama oleh Trending, Search, dan Platform
+    // SflixSubjectItem dipakai bersama oleh Trending, Search, dan Platform
     data class SflixSubjectItem(
         val subjectType: Int? = null,
         val title: String? = null,
