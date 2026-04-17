@@ -1,6 +1,5 @@
 package com.sflix
 
-// 1. Perbaikan Impor: Kita gunakan wildcard (*) agar semua fungsi builder dan utilitas terbaca
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
@@ -27,7 +26,6 @@ class Sflix : MainAPI() {
             "subjectType" to 0
         )
 
-        // parsedSafe() sekarang akan terbaca karena kita sudah mengimpor utils.*
         val response = app.post(
             url = searchUrl,
             headers = mapOf(
@@ -110,7 +108,7 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
-                // 2. Perbaikan addTrailer: Kita gunakan TrailerData secara langsung agar bebas error
+                // Menggunakan TrailerData agar aman dari error
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
                 }
@@ -144,7 +142,6 @@ class Sflix : MainAPI() {
                 this.score = Score.from10(rating)
                 this.actors = actorsList
                 
-                // Perbaikan addTrailer yang sama untuk tipe Series
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = false))
                 }
@@ -173,18 +170,19 @@ class Sflix : MainAPI() {
         response?.streams?.forEach { stream ->
             val videoUrl = stream.url ?: return@forEach
             val resolution = stream.resolutions ?: ""
-            val quality = getQualityFromName("${resolution}p")
+            val videoQuality = getQualityFromName("${resolution}p")
             
-            // 3. newExtractorLink sekarang akan terbaca karena utils.* sudah diimpor
+            // newExtractorLink menggunakan format builder terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
                     name = "Sflix ${stream.format ?: "MP4"}",
                     url = videoUrl,
-                    referer = "$mainUrl/",
-                    quality = quality,
                     type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                )
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = videoQuality
+                }
             )
         }
         return true
