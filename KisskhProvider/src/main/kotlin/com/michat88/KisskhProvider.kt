@@ -2,6 +2,7 @@ package com.michat88
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer // <-- PERBAIKAN: Import khusus agar fungsi addTrailer terbaca
 import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -229,7 +230,7 @@ class KisskhProvider : MainAPI() {
             this.plot = res.description ?: tmdbOverview
             this.tags = listOf("${res.country}", "${res.status}", "${res.type}")
             this.actors = tmdbActors
-            addTrailer(tmdbTrailer) // PERBAIKAN: Menggunakan fungsi addTrailer() dari Cloudstream
+            addTrailer(tmdbTrailer)
             this.showStatus = when (res.status) {
                 "Completed" -> ShowStatus.Completed
                 "Ongoing" -> ShowStatus.Ongoing
