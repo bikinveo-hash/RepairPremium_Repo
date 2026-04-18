@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.URLEncoder
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv8.lk21official.cc"
@@ -17,11 +18,14 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR BARU: Pembersih URL Poster untuk mendapatkan kualitas HD
+    // FITUR: Pembersih URL Poster yang lebih kuat
     private fun fixPosterUrl(url: String?): String? {
         if (url.isNullOrBlank()) return null
-        // Menghapus embel-embel resize bawaan WordPress seperti "-150x225" atau "-300x400"
-        return url.replace(Regex("-\\d{2,4}x\\d{2,4}(?=\\.(jpg|jpeg|png|webp|gif)$)", RegexOption.IGNORE_CASE), "")
+        var cleanUrl = url
+        if (cleanUrl.startsWith("//")) cleanUrl = "https:$cleanUrl"
+        cleanUrl = cleanUrl.substringBefore("?") // Buang parameter query
+        // Buang resize bawaan wordpress (-150x225 dll)
+        return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}(?=\\.(jpg|jpeg|png|webp|gif)$)", RegexOption.IGNORE_CASE), "")
     }
 
     // --- MAIN PAGE ---
@@ -62,7 +66,6 @@ class LayarKacaProvider : MainAPI() {
                 val title = item.title
                 val href = fixUrl(item.slug)
                 
-                // Mengambil URL asli lalu dibersihkan agar HD
                 val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
                 val posterUrl = fixPosterUrl(rawPoster)
                 
@@ -93,7 +96,6 @@ class LayarKacaProvider : MainAPI() {
         if (title.isEmpty()) return null
         val href = fixUrl(element.select("a").first()?.attr("href") ?: return null)
         
-        // Memprioritaskan data-src agar melewati lazy-load thumbnail, lalu bersihkan ke HD
         val imgElement = element.select("img").first()
         val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: imgElement?.attr("src")
         val posterUrl = fixPosterUrl(rawPoster)
@@ -113,6 +115,16 @@ class LayarKacaProvider : MainAPI() {
             }
         }
     }
+
+    // --- DATA CLASS UNTUK TMDB ---
+    data class TmdbSearchResponse(val results: List<TmdbResult>?)
+    data class TmdbResult(
+        val backdrop_path: String?,
+        val poster_path: String?,
+        val release_date: String?,
+        val first_air_date: String?
+    )
+    // -----------------------------
 
     // --- LOAD DETAIL ---
     data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
@@ -135,7 +147,6 @@ class LayarKacaProvider : MainAPI() {
         val title = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
         
-        // Bersihkan Poster di halaman detail agar HD juga
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
         val poster = fixPosterUrl(rawPoster)
         
@@ -145,24 +156,6 @@ class LayarKacaProvider : MainAPI() {
         val tags = document.select("div.tag-list a, div.genre a").map { it.text() }
         val actors = document.select("div.detail p:contains(Bintang Film) a, div.cast a").map { ActorData(Actor(it.text(), "")) }
         val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
-
-        // ==============================================
-        // FITUR TRAILER EXTRACTION
-        // ==============================================
-        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
-        if (trailerUrl.isNullOrEmpty()) {
-            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
-        }
-        if (trailerUrl.isNullOrEmpty()) {
-            // Fallback: Tarik paksa ID Youtube dari HTML mentah jika disembunyikan
-            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        }
-        
-        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
-        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
-        
-        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
-        // ==============================================
 
         val episodes = ArrayList<Episode>()
         val jsonScript = document.select("script#season-data").html()
@@ -187,31 +180,76 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
+        // ==============================================
+        // FITUR TMDB BACKDROP & POSTER HD
+        // ==============================================
+        var tmdbPoster: String? = null
+        var tmdbBackdrop: String? = null
+        try {
+            val encodedTitle = URLEncoder.encode(title.replace(Regex("""(?i)\bseason\s*\d+.*"""), "").trim(), "UTF-8")
+            val tmdbSearchUrl = "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
+            val tmdbRes = app.get(tmdbSearchUrl).parsedSafe<TmdbSearchResponse>()
+            
+            // Cari yang tahunnya sama, atau ambil yang pertama jika tidak ada tahun
+            val match = tmdbRes?.results?.firstOrNull { 
+                val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
+                year == null || resYear == null || resYear == year
+            } ?: tmdbRes?.results?.firstOrNull()
+
+            if (match != null) {
+                tmdbPoster = match.poster_path?.let { "https://image.tmdb.org/t/p/original$it" }
+                tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
+            }
+        } catch (e: Exception) {}
+        // ==============================================
+
+        // ==============================================
+        // FITUR TRAILER EXTRACTION
+        // ==============================================
+        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
+        }
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
+        }
+        
+        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
+        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
+        // ==============================================
+
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from(ratingScore, 10); this.tags = tags; this.actors = actors; this.recommendations = recommendations
+                this.posterUrl = tmdbPoster ?: poster
+                this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags
+                this.actors = actors
+                this.recommendations = recommendations
                 
-                // Memasukkan Trailer ke Movie Response
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl,
-                        referer = null,
-                        raw = false 
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
                     ))
                 }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from(ratingScore, 10); this.tags = tags; this.actors = actors; this.recommendations = recommendations
+                this.posterUrl = tmdbPoster ?: poster
+                this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags
+                this.actors = actors
+                this.recommendations = recommendations
                 
-                // Memasukkan Trailer ke Series Response
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl,
-                        referer = null,
-                        raw = false
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false
                     ))
                 }
             }
@@ -251,13 +289,11 @@ class LayarKacaProvider : MainAPI() {
                         loadExtractor(fixUrl(it.attr("src")), wrapperUrl, subtitleCallback, callback) 
                     }
                     
-                    // Manual Unwrap (Kalau Extractor di atas gagal)
+                    // Manual Unwrap
                     val scriptHtml = iframePage.html().replace("\\/", "/")
                     Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                         val streamUrl = match.value
                         val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                        
-                        // Origin dynamic sesuai wrapper
                         val originUrl = try { URI(wrapperUrl).let { "${it.scheme}://${it.host}" } } catch(e:Exception) { "https://playeriframe.sbs" }
                         
                         val headers = mapOf(
