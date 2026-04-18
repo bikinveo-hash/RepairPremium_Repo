@@ -43,10 +43,6 @@ class KisskhProvider : MainAPI() {
         "&type=2&sub=3&country=0&status=0&order=2" to "Movies", 
         "&type=2&sub=3&country=3&status=0&order=2" to "Film Thailand",
         "&type=2&sub=3&country=8&status=0&order=2" to "Film Filipina",
-        "&type=1&sub=0&country=2&status=0&order=1" to "TVSeries Popular",
-        "&type=1&sub=0&country=2&status=0&order=2" to "TVSeries Last Update",
-        "&type=4&sub=0&country=0&status=0&order=1" to "Hollywood Popular",
-        "&type=4&sub=0&country=0&status=0&order=2" to "Hollywood Last Update"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
