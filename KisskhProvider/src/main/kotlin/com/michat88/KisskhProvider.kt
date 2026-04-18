@@ -101,6 +101,9 @@ class KisskhProvider : MainAPI() {
         val year = res.releaseDate?.take(4)?.toIntOrNull()
         val type = res.type?.lowercase()
 
+        // DETEKSI STATUS UPCOMING
+        val isUpcoming = res.status.equals("Upcoming", ignoreCase = true)
+
         val tmdbId = if (type == "anime") {
             null
         } else {
@@ -129,42 +132,47 @@ class KisskhProvider : MainAPI() {
             }
         }
 
-        val episodes = res.episodes?.map { eps ->
-            var epName: String? = null
-            var epOverview: String? = null
-            var epThumb: String? = null
-            var epAir: String? = null
-            var epRating: Double? = null
-            val season = Regex("""(?i)\bseason\s*(\d+)""").find(res.title.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        // LOGIKA PENYEMBUNYIAN EPISODE UNTUK UPCOMING
+        val episodes = if (isUpcoming) {
+            emptyList() // Kosongkan daftar episode jika belum rilis agar tombol play tidak muncul
+        } else {
+            res.episodes?.map { eps ->
+                var epName: String? = null
+                var epOverview: String? = null
+                var epThumb: String? = null
+                var epAir: String? = null
+                var epRating: Double? = null
+                val season = Regex("""(?i)\bseason\s*(\d+)""").find(res.title.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
 
-            tmdbSeasonCache[season]?.optJSONArray("episodes")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val epObj = arr.optJSONObject(i) ?: continue
-                    val targetEp = eps.number?.toInt()
-                    if (targetEp != null && epObj.optInt("episode_number") == targetEp) {
-                        epName = epObj.optString("name").takeIf { it.isNotBlank() }
-                        epOverview = epObj.optString("overview").takeIf { it.isNotBlank() }
-                        epThumb = epObj.optString("still_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
-                        epAir = epObj.optString("air_date").takeIf { it.isNotBlank() }
-                        epRating = epObj.optDouble("vote_average").takeIf { !it.isNaN() && it > 0.0 }
-                        break
+                tmdbSeasonCache[season]?.optJSONArray("episodes")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val epObj = arr.optJSONObject(i) ?: continue
+                        val targetEp = eps.number?.toInt()
+                        if (targetEp != null && epObj.optInt("episode_number") == targetEp) {
+                            epName = epObj.optString("name").takeIf { it.isNotBlank() }
+                            epOverview = epObj.optString("overview").takeIf { it.isNotBlank() }
+                            epThumb = epObj.optString("still_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
+                            epAir = epObj.optString("air_date").takeIf { it.isNotBlank() }
+                            epRating = epObj.optDouble("vote_average").takeIf { !it.isNaN() && it > 0.0 }
+                            break
+                        }
                     }
                 }
-            }
 
-            val displayNumber = eps.number?.let { num ->
-                if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
-            } ?: ""
+                val displayNumber = eps.number?.let { num ->
+                    if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
+                } ?: ""
 
-            newEpisode(Data(res.title, eps.number?.toInt(), res.id, eps.id).toJson()) {
-                this.name = epName ?: "Episode $displayNumber"
-                this.episode = eps.number?.toInt()
-                this.description = epOverview
-                this.posterUrl = epThumb
-                this.score = Score.from10(epRating)
-                addDate(epAir)
-            }
-        } ?: throw ErrorLoadingException("No Episode")
+                newEpisode(Data(res.title, eps.number?.toInt(), res.id, eps.id).toJson()) {
+                    this.name = epName ?: "Episode $displayNumber"
+                    this.episode = eps.number?.toInt()
+                    this.description = epOverview
+                    this.posterUrl = epThumb
+                    this.score = Score.from10(epRating)
+                    addDate(epAir)
+                }
+            } ?: throw ErrorLoadingException("No Episode")
+        }
 
         if (tmdbId != null) {
             val resType = if (res.type == "Movie" ) "movie" else "tv"
@@ -198,11 +206,14 @@ class KisskhProvider : MainAPI() {
             }
         }
 
+        // LOGIKA PENENTUAN TIPE (HINDARI TIPE 'MOVIE' JIKA UPCOMING AGAR TOMBOL PLAY HILANG)
+        val finalType = if (isUpcoming) TvType.TvSeries else if (res.type == "Movie" || episodes.size == 1) TvType.Movie else TvType.TvSeries
+
         return newTvSeriesLoadResponse(
             res.title ?: return null,
             url,
-            if (res.type == "Movie" || episodes.size == 1) TvType.Movie else TvType.TvSeries,
-            episodes.reversed()
+            finalType,
+            if (isUpcoming) emptyList() else episodes.reversed()
         ) {
             this.posterUrl = tmdbPoster ?: res.thumbnail
             this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: res.thumbnail
@@ -231,7 +242,6 @@ class KisskhProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // PERBAIKAN: URL Google Script sudah ditukar ke posisi yang benar
         val KisskhAPI = "https://script.google.com/macros/s/AKfycbzn8B31PuDxzaMa9_CQ0VGEDasFqfzI5bXvjaIZH4DM8DNq9q6xj1ALvZNz_JT3jF0suA/exec?id="
         val KisskhSub = "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
         
@@ -239,7 +249,6 @@ class KisskhProvider : MainAPI() {
         val kkey = app.get("$KisskhAPI${loadData.epsId}&version=2.8.10", timeout = 10000).parsedSafe<Key>()?.key ?:""
         
         app.get(
-            // PERBAIKAN: Mengubah ts=&time= menjadi ts=null&time=null agar diterima oleh server
             "$mainUrl/api/DramaList/Episode/${loadData.epsId}.png?err=false&ts=null&time=null&kkey=$kkey",
             referer = "$mainUrl/Drama/${getTitle("${loadData.title}")}/Episode-${loadData.eps}?id=${loadData.id}&ep=${loadData.epsId}&page=0&pageSize=100"
         ).parsedSafe<Sources>()?.let { source ->
