@@ -21,9 +21,10 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR PREMIUM 1: Pembersih Judul agar UI terlihat mahal (Hapus "Nonton Serial", "Sub Indo", dll)
+    // FITUR PREMIUM 1: Pembersih Judul Ultra (Hapus "Nonton", "Sub Indo", "di Lk21", dll)
     private fun getCleanTitle(title: String): String {
-        var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo)"), "")
+        // PERBAIKAN: Menambahkan "di lk21", "lk21", dan "layarkaca21" ke dalam daftar yang dihapus
+        var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
         clean = clean.replace(Regex("\\(\\d{4}\\)"), "") // Hapus tahun di dalam kurung
         return clean.trim()
@@ -52,7 +53,6 @@ class LayarKacaProvider : MainAPI() {
         val document = app.get(mainUrl).document
         val items = ArrayList<HomePageList>()
 
-        // Menggunakan Coroutine Async agar pencarian gambar HD ke TMDB berjalan kilat secara bersamaan
         suspend fun addWidget(sectionTitle: String, selector: String) {
             val elements = document.select(selector).toList()
             val list = coroutineScope {
@@ -84,7 +84,7 @@ class LayarKacaProvider : MainAPI() {
         val yearText = element.select("div.year, span.year").text()
         val year = yearText.toIntOrNull() ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull()
 
-        // FITUR PREMIUM 2: Injeksi Poster HD dari TMDB untuk Halaman Depan (w500 agar load cepat)
+        // FITUR PREMIUM 2: Injeksi Poster HD dari TMDB untuk Halaman Depan
         var hdPoster: String? = null
         try {
             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
@@ -132,7 +132,6 @@ class LayarKacaProvider : MainAPI() {
             val response = app.get(searchUrl, headers = headers).text
             val json = tryParseJson<Lk21SearchResponse>(response)
 
-            // Menggunakan Async agar pencarian juga mendapatkan Poster HD secara paralel
             return coroutineScope {
                 json?.data?.map { item ->
                     async {
@@ -198,7 +197,7 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
-        val title = getCleanTitle(rawTitle) // Judul yang sudah 100% bersih dari teks promosi web
+        val title = getCleanTitle(rawTitle) 
         
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
@@ -207,7 +206,6 @@ class LayarKacaProvider : MainAPI() {
         val ratingText = document.select("span.rating-value").text().ifEmpty { document.select("div.info-tag").text() }
         val ratingScore = Regex("(\\d\\.\\d)").find(ratingText)?.value
         
-        // Membaca tahun dengan lebih cerdas
         val year = document.select("span.year").text().toIntOrNull() 
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -240,7 +238,7 @@ class LayarKacaProvider : MainAPI() {
         }
 
         // ==============================================
-        // FITUR TMDB BACKDROP & POSTER HD (KUALITAS ORIGINAL UNTUK DETAIL)
+        // FITUR TMDB BACKDROP & POSTER HD 
         // ==============================================
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
@@ -255,7 +253,6 @@ class LayarKacaProvider : MainAPI() {
             } ?: tmdbRes?.results?.firstOrNull()
 
             if (match != null) {
-                // Di halaman detail, kita tarik kualitas "original" yang sangat besar
                 tmdbPoster = match.poster_path?.let { "https://image.tmdb.org/t/p/original$it" }
                 tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
             }
