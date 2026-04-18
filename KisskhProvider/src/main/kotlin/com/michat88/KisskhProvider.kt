@@ -1,7 +1,6 @@
 package com.michat88
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -25,6 +24,7 @@ class KisskhProvider : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     
+    // PERBARUAN: Fokus pada Drama, Movie, dan TV Series
     override val supportedTypes = setOf(
         TvType.AsianDrama,
         TvType.Movie,
@@ -35,6 +35,7 @@ class KisskhProvider : MainAPI() {
         const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
     }
 
+    // REVISI: Hanya menampilkan kategori yang kamu minta
     override val mainPage = mainPageOf(
         "LAST_UPDATE" to "Last Update",
         "MOST_VIEW_C2" to "Most Viewed K-Drama",
@@ -59,6 +60,7 @@ class KisskhProvider : MainAPI() {
                               request.data == "MOST_VIEW_C1" ||
                               request.data == "TOP_RATING"
 
+        // Perbaikan pembacaan tipe data Array untuk mencegah LinkedHashMap error
         val mediaList = if (isArrayResponse) {
             app.get(url).parsedSafe<Array<Media>>()?.toList()
         } else {
@@ -80,7 +82,7 @@ class KisskhProvider : MainAPI() {
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        // PERBAIKAN: Menggunakan safe call (?) agar tidak crash saat label bernilai null
+        // PERBAIKAN: Safe call (?) agar tidak crash jika label null
         if (!settingsForProvider.enableAdult && this.label?.contains("RAW", ignoreCase = true) == true) {
             return null
         }
@@ -98,7 +100,7 @@ class KisskhProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val searchResponse =
             app.get("$mainUrl/api/DramaList/Search?q=$query&type=0", referer = "$mainUrl/").text
-        return tryParseJson<ArrayList<Media>>(searchResponse)?.mapNotNull { media ->
+        return tryParseJson<Array<Media>>(searchResponse)?.mapNotNull { media ->
             media.toSearchResponse()
         } ?: throw ErrorLoadingException("Invalid Json reponse")
     }
@@ -127,13 +129,11 @@ class KisskhProvider : MainAPI() {
             }.getOrNull()
         }
 
-        var tmdbTitle: String? = null
         var tmdbOverview: String? = null
-        var tmdbYear: Int? = null
-        var tmdbRating: Double? = null
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         var tmdbActors: List<ActorData> = emptyList()
+        var tmdbTrailer: String? = null // Penampung link trailer
 
         val tmdbSeasonCache = mutableMapOf<Int, JSONObject?>()
 
@@ -187,16 +187,13 @@ class KisskhProvider : MainAPI() {
             val resType = if (res.type == "Movie" ) "movie" else "tv"
             val tmdbJson = runCatching {
                 JSONObject(
-                    app.get("${TMDBAPI}/$resType/$tmdbId?api_key=1865f43a0549ca50d341dd9ab8b29f49&append_to_response=credits").text
+                    // FITUR: Menambahkan videos ke dalam response TMDB
+                    app.get("${TMDBAPI}/$resType/$tmdbId?api_key=1865f43a0549ca50d341dd9ab8b29f49&append_to_response=credits,videos").text
                 )
             }.getOrNull()
 
             if (tmdbJson != null) {
-                tmdbTitle = tmdbJson.optString("title").ifBlank { tmdbJson.optString("name").ifBlank { null } }
                 tmdbOverview = tmdbJson.optString("overview").takeIf { it.isNotBlank() }
-                val date = tmdbJson.optString("release_date").ifBlank { tmdbJson.optString("first_air_date") }
-                tmdbYear = date.takeIf { it.isNotBlank() }?.substringBefore("-")?.toIntOrNull()
-                tmdbRating = tmdbJson.optDouble("vote_average").takeIf { it != 0.0 }
                 tmdbPoster = tmdbJson.optString("poster_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
                 tmdbBackdrop = tmdbJson.optString("backdrop_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
 
@@ -209,6 +206,17 @@ class KisskhProvider : MainAPI() {
                             val profile = obj.optString("profile_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
                             val character = obj.optString("character").takeIf { it.isNotBlank() }
                             add(ActorData(Actor(name, profile), roleString = character))
+                        }
+                    }
+                }
+
+                // FITUR: Mencari trailer YouTube dari TMDB
+                tmdbJson.optJSONObject("videos")?.optJSONArray("results")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val vObj = arr.optJSONObject(i) ?: continue
+                        if (vObj.optString("type") == "Trailer" && vObj.optString("site") == "YouTube") {
+                            tmdbTrailer = "https://www.youtube.com/watch?v=${vObj.optString("key")}"
+                            break
                         }
                     }
                 }
@@ -227,6 +235,7 @@ class KisskhProvider : MainAPI() {
             this.plot = res.description ?: tmdbOverview
             this.tags = listOf("${res.country}", "${res.status}", "${res.type}")
             this.actors = tmdbActors
+            this.trailerUrl = tmdbTrailer // PASANG TRAILER DISINI
             this.showStatus = when (res.status) {
                 "Completed" -> ShowStatus.Completed
                 "Ongoing" -> ShowStatus.Ongoing
