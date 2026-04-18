@@ -17,6 +17,13 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    // FITUR BARU: Pembersih URL Poster untuk mendapatkan kualitas HD
+    private fun fixPosterUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        // Menghapus embel-embel resize bawaan WordPress seperti "-150x225" atau "-300x400"
+        return url.replace(Regex("-\\d{2,4}x\\d{2,4}(?=\\.(jpg|jpeg|png|webp|gif)$)", RegexOption.IGNORE_CASE), "")
+    }
+
     // --- MAIN PAGE ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(mainUrl).document
@@ -54,7 +61,11 @@ class LayarKacaProvider : MainAPI() {
             return json?.data?.mapNotNull { item ->
                 val title = item.title
                 val href = fixUrl(item.slug)
-                val posterUrl = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
+                
+                // Mengambil URL asli lalu dibersihkan agar HD
+                val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
+                val posterUrl = fixPosterUrl(rawPoster)
+                
                 val quality = getQualityFromString(item.quality)
                 val isSeries = item.type?.contains("series", ignoreCase = true) == true
 
@@ -81,8 +92,12 @@ class LayarKacaProvider : MainAPI() {
         val title = element.select("h3.poster-title, h2.entry-title, h1.page-title, div.title").text().trim()
         if (title.isEmpty()) return null
         val href = fixUrl(element.select("a").first()?.attr("href") ?: return null)
+        
+        // Memprioritaskan data-src agar melewati lazy-load thumbnail, lalu bersihkan ke HD
         val imgElement = element.select("img").first()
-        val posterUrl = imgElement?.attr("src") ?: imgElement?.attr("data-src")
+        val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: imgElement?.attr("src")
+        val posterUrl = fixPosterUrl(rawPoster)
+        
         val quality = getQualityFromString(element.select("span.label").text())
         val isSeries = element.select("span.episode").isNotEmpty() || element.select("span.duration").text().contains("S.")
 
@@ -119,7 +134,11 @@ class LayarKacaProvider : MainAPI() {
 
         val title = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
-        val poster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
+        
+        // Bersihkan Poster di halaman detail agar HD juga
+        val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
+        val poster = fixPosterUrl(rawPoster)
+        
         val ratingText = document.select("span.rating-value").text().ifEmpty { document.select("div.info-tag").text() }
         val ratingScore = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year = document.select("span.year").text().toIntOrNull() ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
