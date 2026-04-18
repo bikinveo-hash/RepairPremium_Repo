@@ -24,7 +24,6 @@ class KisskhProvider : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     
-    // PERBARUAN: Fokus pada Drama, Movie, dan TV Series
     override val supportedTypes = setOf(
         TvType.AsianDrama,
         TvType.Movie,
@@ -35,7 +34,6 @@ class KisskhProvider : MainAPI() {
         const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
     }
 
-    // REVISI: Hanya menampilkan kategori yang kamu minta
     override val mainPage = mainPageOf(
         "LAST_UPDATE" to "Last Update",
         "MOST_VIEW_C2" to "Most Viewed K-Drama",
@@ -60,7 +58,6 @@ class KisskhProvider : MainAPI() {
                               request.data == "MOST_VIEW_C1" ||
                               request.data == "TOP_RATING"
 
-        // Perbaikan pembacaan tipe data Array untuk mencegah LinkedHashMap error
         val mediaList = if (isArrayResponse) {
             app.get(url).parsedSafe<Array<Media>>()?.toList()
         } else {
@@ -82,7 +79,6 @@ class KisskhProvider : MainAPI() {
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        // PERBAIKAN: Safe call (?) agar tidak crash jika label null
         if (!settingsForProvider.enableAdult && this.label?.contains("RAW", ignoreCase = true) == true) {
             return null
         }
@@ -133,7 +129,7 @@ class KisskhProvider : MainAPI() {
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         var tmdbActors: List<ActorData> = emptyList()
-        var tmdbTrailer: String? = null // Penampung link trailer
+        var tmdbTrailer: String? = null
 
         val tmdbSeasonCache = mutableMapOf<Int, JSONObject?>()
 
@@ -187,7 +183,6 @@ class KisskhProvider : MainAPI() {
             val resType = if (res.type == "Movie" ) "movie" else "tv"
             val tmdbJson = runCatching {
                 JSONObject(
-                    // FITUR: Menambahkan videos ke dalam response TMDB
                     app.get("${TMDBAPI}/$resType/$tmdbId?api_key=1865f43a0549ca50d341dd9ab8b29f49&append_to_response=credits,videos").text
                 )
             }.getOrNull()
@@ -210,7 +205,6 @@ class KisskhProvider : MainAPI() {
                     }
                 }
 
-                // FITUR: Mencari trailer YouTube dari TMDB
                 tmdbJson.optJSONObject("videos")?.optJSONArray("results")?.let { arr ->
                     for (i in 0 until arr.length()) {
                         val vObj = arr.optJSONObject(i) ?: continue
@@ -235,7 +229,7 @@ class KisskhProvider : MainAPI() {
             this.plot = res.description ?: tmdbOverview
             this.tags = listOf("${res.country}", "${res.status}", "${res.type}")
             this.actors = tmdbActors
-            this.trailerUrl = tmdbTrailer // PASANG TRAILER DISINI
+            addTrailer(tmdbTrailer) // PERBAIKAN: Menggunakan fungsi addTrailer() dari Cloudstream
             this.showStatus = when (res.status) {
                 "Completed" -> ShowStatus.Completed
                 "Ongoing" -> ShowStatus.Ongoing
