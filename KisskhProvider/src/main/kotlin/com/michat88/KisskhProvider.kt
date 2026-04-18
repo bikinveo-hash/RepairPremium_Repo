@@ -64,7 +64,6 @@ class KisskhProvider : MainAPI() {
                               request.data == "MOST_VIEW_C1" ||
                               request.data == "TOP_RATING"
 
-        // Perbaikan menggunakan Array<Media> untuk mencegah error ClassCastException
         val mediaList = if (isArrayResponse) {
             app.get(url).parsedSafe<Array<Media>>()?.toList()
         } else {
@@ -86,7 +85,8 @@ class KisskhProvider : MainAPI() {
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        if (!settingsForProvider.enableAdult && this.label!!.contains("RAW")) {
+        // PERBAIKAN: Menggunakan safe call (?) agar tidak crash saat label bernilai null
+        if (!settingsForProvider.enableAdult && this.label?.contains("RAW", ignoreCase = true) == true) {
             return null
         }
 
