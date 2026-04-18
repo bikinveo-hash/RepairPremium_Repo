@@ -94,10 +94,8 @@ class Sflix : MainAPI() {
     ): HomePageResponse {
         val isPlatform = request.data.contains("platform/play-list")
         
-        // Logika merakit URL dengan hati-hati
         val url = if (isPlatform) {
             val platformName = request.data.substringAfter("platform=")
-            // CATATAN: perPage diset ke 3 (bulan), bukan 18. Jika 18, server akan timeout!
             "https://h5-api.aoneroom.com/wefeed-h5api-bff/platform/play-list?page=$page&perPage=3&platform=$platformName"
         } else {
             val separator = if (request.data.contains("?")) "&" else "?"
@@ -106,11 +104,9 @@ class Sflix : MainAPI() {
         
         var hasNext = false
         
-        // Logika membaca respons JSON
         val itemsList = if (isPlatform) {
             val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixPlatformResponse>()
             hasNext = response?.data?.pager?.hasMore ?: false
-            // Meleburkan semua subjects dari beberapa bulan menjadi 1 daftar
             response?.data?.monthList?.flatMap { it.subjects ?: emptyList() } ?: emptyList()
         } else {
             val response = app.get(url, headers = getSflixHeaders()).parsedSafe<SflixTrendingResponse>()
@@ -188,14 +184,16 @@ class Sflix : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI DETAIL (LOAD)
+    // FUNGSI DETAIL & REKOMENDASI (LOAD)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
+        val headersData = getSflixHeaders()
         val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$url"
         
+        // 1. Mengambil data detail utama
         val responseData = app.get(
             url = detailUrl,
-            headers = getSflixHeaders()
+            headers = headersData
         ).parsedSafe<SflixDetailResponse>()?.data
             ?: throw ErrorLoadingException("Gagal mengambil detail dari Sflix")
 
@@ -217,6 +215,26 @@ class Sflix : MainAPI() {
 
         val trailerUrl = subject.trailer?.videoAddress?.url
 
+        // 2. Mengambil data Saran Film (Recommendations) menggunakan API yang baru ditemukan
+        val recUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/detail-rec?subjectId=$subjectId&page=1&perPage=12"
+        val recResponse = app.get(recUrl, headers = headersData).parsedSafe<SflixSearchResponse>()
+        val recommendationsList = recResponse?.data?.items?.mapNotNull { item ->
+            val recTitle = item.title ?: return@mapNotNull null
+            val recUrlPath = item.detailPath ?: return@mapNotNull null
+            val recPoster = item.cover?.url
+
+            if (item.subjectType == 1) {
+                newMovieSearchResponse(recTitle, recUrlPath, TvType.Movie) {
+                    this.posterUrl = recPoster
+                }
+            } else {
+                newTvSeriesSearchResponse(recTitle, recUrlPath, TvType.TvSeries) {
+                    this.posterUrl = recPoster
+                }
+            }
+        }
+
+        // 3. Merakit dan mengembalikan data lengkap ke Cloudstream
         if (subject.subjectType == 1) {
             val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=0&ep=0&detailPath=$url"
             
@@ -228,6 +246,8 @@ class Sflix : MainAPI() {
                 this.duration = duration
                 this.score = Score.from10(rating)
                 this.actors = actorsList
+                // Menambahkan saran film
+                this.recommendations = recommendationsList
                 
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
@@ -261,6 +281,8 @@ class Sflix : MainAPI() {
                 this.duration = duration
                 this.score = Score.from10(rating)
                 this.actors = actorsList
+                // Menambahkan saran film
+                this.recommendations = recommendationsList
                 
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, referer = null, raw = true))
@@ -357,7 +379,7 @@ class Sflix : MainAPI() {
     
     data class SflixPager(val hasMore: Boolean? = null)
     
-    // SflixSubjectItem dipakai bersama oleh Trending, Search, dan Platform
+    // SflixSubjectItem dipakai bersama oleh Trending, Search, Platform, dan Saran
     data class SflixSubjectItem(
         val subjectType: Int? = null,
         val title: String? = null,
