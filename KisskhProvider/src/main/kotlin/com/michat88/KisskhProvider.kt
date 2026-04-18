@@ -25,7 +25,6 @@ class KisskhProvider : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     
-    // PERBARUAN: Menyesuaikan tipe dukungan karena Anime sudah dihapus
     override val supportedTypes = setOf(
         TvType.AsianDrama,
         TvType.Movie,
@@ -36,14 +35,11 @@ class KisskhProvider : MainAPI() {
         const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
     }
 
-    // PERBARUAN: Daftar menu yang lebih rapi dan lengkap dengan endpoint baru
     override val mainPage = mainPageOf(
         "LAST_UPDATE" to "Last Update",
         "MOST_VIEW_C2" to "Most Viewed K-Drama",
         "MOST_VIEW_C1" to "Most Viewed C-Drama",
         "TOP_RATING" to "Top Rating",
-        "&type=0&sub=0&country=2&status=0&order=1" to "Top K-Drama",
-        "&type=0&sub=0&country=1&status=0&order=1" to "Top C-Drama",
         "&type=2&sub=3&country=0&status=0&order=2" to "Movies",
         "&type=2&sub=3&country=0&status=0&order=2" to "Update Jepang", 
         "&type=2&sub=3&country=3&status=0&order=2" to "Film Thailand",
@@ -54,7 +50,6 @@ class KisskhProvider : MainAPI() {
         "&type=4&sub=0&country=0&status=0&order=2" to "Hollywood Last Update"
     )
 
-    // PERBARUAN: Logika pintar untuk menangani multi-endpoint JSON
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = when (request.data) {
             "LAST_UPDATE" -> "$mainUrl/api/DramaList/LastUpdate?ispc=false"
@@ -69,8 +64,9 @@ class KisskhProvider : MainAPI() {
                               request.data == "MOST_VIEW_C1" ||
                               request.data == "TOP_RATING"
 
+        // Perbaikan menggunakan Array<Media> untuk mencegah error ClassCastException
         val mediaList = if (isArrayResponse) {
-            app.get(url).parsedSafe<ArrayList<Media>>()
+            app.get(url).parsedSafe<Array<Media>>()?.toList()
         } else {
             app.get(url).parsedSafe<Responses>()?.data
         }
