@@ -43,8 +43,7 @@ class KisskhProvider : MainAPI() {
         "&type=3&sub=0&country=0&status=0&order=1" to "Anime Popular",
         "&type=3&sub=0&country=0&status=0&order=2" to "Anime Latest Update",
         "&type=4&sub=0&country=0&status=0&order=1" to "Hollywood Popular",
-        "&type=4&sub=0&country=0&status=0&order=2" to "Hollywood Last Update",
-        "&type=0&sub=0&country=0&status=3&order=2" to "Upcoming"
+        "&type=4&sub=0&country=0&status=0&order=2" to "Hollywood Last Update"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -64,7 +63,14 @@ class KisskhProvider : MainAPI() {
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        if (!settingsForProvider.enableAdult && this.label!!.contains("RAW")) {
+        if (!settingsForProvider.enableAdult && this.label?.contains("RAW") == true) {
+            return null
+        }
+
+        // BLOKIR TOTAL UPCOMING: Jika statusnya Upcoming, angka 3, atau labelnya Upcoming, langsung hapus dari UI
+        if (this.status?.equals("Upcoming", ignoreCase = true) == true || 
+            this.status == "3" || 
+            this.label?.contains("Upcoming", ignoreCase = true) == true) {
             return null
         }
 
@@ -101,7 +107,6 @@ class KisskhProvider : MainAPI() {
         val year = res.releaseDate?.take(4)?.toIntOrNull()
         val type = res.type?.lowercase()
 
-        // DETEKSI STATUS UPCOMING
         val isUpcoming = res.status.equals("Upcoming", ignoreCase = true)
 
         val tmdbId = if (type == "anime") {
@@ -132,9 +137,8 @@ class KisskhProvider : MainAPI() {
             }
         }
 
-        // LOGIKA PENYEMBUNYIAN EPISODE UNTUK UPCOMING
         val episodes = if (isUpcoming) {
-            emptyList() // Kosongkan daftar episode jika belum rilis agar tombol play tidak muncul
+            emptyList() 
         } else {
             res.episodes?.map { eps ->
                 var epName: String? = null
@@ -206,7 +210,6 @@ class KisskhProvider : MainAPI() {
             }
         }
 
-        // LOGIKA PENENTUAN TIPE (HINDARI TIPE 'MOVIE' JIKA UPCOMING AGAR TOMBOL PLAY HILANG)
         val finalType = if (isUpcoming) TvType.TvSeries else if (res.type == "Movie" || episodes.size == 1) TvType.Movie else TvType.TvSeries
 
         return newTvSeriesLoadResponse(
@@ -362,12 +365,14 @@ class KisskhProvider : MainAPI() {
         @JsonProperty("data") val data: ArrayList<Media>? = arrayListOf(),
     )
 
+    // FITUR BARU: Menambahkan field "status" agar bisa kita saring
     data class Media(
         @JsonProperty("episodesCount") val episodesCount: Int?,
         @JsonProperty("thumbnail") val thumbnail: String?,
         @JsonProperty("label") val label: String?,
         @JsonProperty("id") val id: Int?,
         @JsonProperty("title") val title: String?,
+        @JsonProperty("status") val status: String? = null
     )
 
     data class Episodes(
