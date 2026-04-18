@@ -24,53 +24,73 @@ class KisskhProvider : MainAPI() {
     override var name = "Kisskh"
     override val hasMainPage = true
     override val hasDownloadSupport = true
+    
+    // PERBARUAN: Menyesuaikan tipe dukungan karena Anime sudah dihapus
     override val supportedTypes = setOf(
         TvType.AsianDrama,
-        TvType.Anime
+        TvType.Movie,
+        TvType.TvSeries
     )
+    
     companion object {
         const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
     }
 
+    // PERBARUAN: Daftar menu yang lebih rapi dan lengkap dengan endpoint baru
     override val mainPage = mainPageOf(
-        "&type=0&sub=0&country=0&status=0&order=2" to "Latest",
+        "LAST_UPDATE" to "Last Update",
+        "MOST_VIEW_C2" to "Most Viewed K-Drama",
+        "MOST_VIEW_C1" to "Most Viewed C-Drama",
+        "TOP_RATING" to "Top Rating",
         "&type=0&sub=0&country=2&status=0&order=1" to "Top K-Drama",
         "&type=0&sub=0&country=1&status=0&order=1" to "Top C-Drama",
-        "&type=2&sub=0&country=2&status=0&order=1" to "Movie Popular",
-        "&type=2&sub=0&country=2&status=0&order=2" to "Movie Last Update",
+        "&type=2&sub=3&country=0&status=0&order=2" to "Movies",
+        "&type=2&sub=3&country=0&status=0&order=2" to "Update Jepang", 
+        "&type=2&sub=3&country=3&status=0&order=2" to "Film Thailand",
+        "&type=2&sub=3&country=8&status=0&order=2" to "Film Filipina",
         "&type=1&sub=0&country=2&status=0&order=1" to "TVSeries Popular",
         "&type=1&sub=0&country=2&status=0&order=2" to "TVSeries Last Update",
-        "&type=3&sub=0&country=0&status=0&order=1" to "Anime Popular",
-        "&type=3&sub=0&country=0&status=0&order=2" to "Anime Latest Update",
         "&type=4&sub=0&country=0&status=0&order=1" to "Hollywood Popular",
         "&type=4&sub=0&country=0&status=0&order=2" to "Hollywood Last Update"
     )
 
+    // PERBARUAN: Logika pintar untuk menangani multi-endpoint JSON
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val home = app.get("$mainUrl/api/DramaList/List?page=$page${request.data}")
-            .parsedSafe<Responses>()?.data
-            ?.mapNotNull { media ->
-                media.toSearchResponse()
-            } ?: throw ErrorLoadingException("Invalid Json reponse")
+        val url = when (request.data) {
+            "LAST_UPDATE" -> "$mainUrl/api/DramaList/LastUpdate?ispc=false"
+            "MOST_VIEW_C2" -> "$mainUrl/api/DramaList/MostView?ispc=false&c=2"
+            "MOST_VIEW_C1" -> "$mainUrl/api/DramaList/MostView?ispc=false&c=1"
+            "TOP_RATING" -> "$mainUrl/api/DramaList/TopRating?ispc=false"
+            else -> "$mainUrl/api/DramaList/List?page=$page${request.data}"
+        }
+
+        val isArrayResponse = request.data == "LAST_UPDATE" || 
+                              request.data == "MOST_VIEW_C2" || 
+                              request.data == "MOST_VIEW_C1" ||
+                              request.data == "TOP_RATING"
+
+        val mediaList = if (isArrayResponse) {
+            app.get(url).parsedSafe<ArrayList<Media>>()
+        } else {
+            app.get(url).parsedSafe<Responses>()?.data
+        }
+
+        val home = mediaList?.mapNotNull { media ->
+            media.toSearchResponse()
+        } ?: throw ErrorLoadingException("Invalid Json reponse")
+
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
                 list = home,
                 isHorizontalImages = true
             ),
-            hasNext = true
+            hasNext = !isArrayResponse
         )
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        if (!settingsForProvider.enableAdult && this.label?.contains("RAW") == true) {
-            return null
-        }
-
-        // BLOKIR TOTAL UPCOMING: Jika statusnya Upcoming, angka 3, atau labelnya Upcoming, langsung hapus dari UI
-        if (this.status?.equals("Upcoming", ignoreCase = true) == true || 
-            this.status == "3" || 
-            this.label?.contains("Upcoming", ignoreCase = true) == true) {
+        if (!settingsForProvider.enableAdult && this.label!!.contains("RAW")) {
             return null
         }
 
@@ -107,8 +127,6 @@ class KisskhProvider : MainAPI() {
         val year = res.releaseDate?.take(4)?.toIntOrNull()
         val type = res.type?.lowercase()
 
-        val isUpcoming = res.status.equals("Upcoming", ignoreCase = true)
-
         val tmdbId = if (type == "anime") {
             null
         } else {
@@ -137,46 +155,42 @@ class KisskhProvider : MainAPI() {
             }
         }
 
-        val episodes = if (isUpcoming) {
-            emptyList() 
-        } else {
-            res.episodes?.map { eps ->
-                var epName: String? = null
-                var epOverview: String? = null
-                var epThumb: String? = null
-                var epAir: String? = null
-                var epRating: Double? = null
-                val season = Regex("""(?i)\bseason\s*(\d+)""").find(res.title.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val episodes = res.episodes?.map { eps ->
+            var epName: String? = null
+            var epOverview: String? = null
+            var epThumb: String? = null
+            var epAir: String? = null
+            var epRating: Double? = null
+            val season = Regex("""(?i)\bseason\s*(\d+)""").find(res.title.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
 
-                tmdbSeasonCache[season]?.optJSONArray("episodes")?.let { arr ->
-                    for (i in 0 until arr.length()) {
-                        val epObj = arr.optJSONObject(i) ?: continue
-                        val targetEp = eps.number?.toInt()
-                        if (targetEp != null && epObj.optInt("episode_number") == targetEp) {
-                            epName = epObj.optString("name").takeIf { it.isNotBlank() }
-                            epOverview = epObj.optString("overview").takeIf { it.isNotBlank() }
-                            epThumb = epObj.optString("still_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
-                            epAir = epObj.optString("air_date").takeIf { it.isNotBlank() }
-                            epRating = epObj.optDouble("vote_average").takeIf { !it.isNaN() && it > 0.0 }
-                            break
-                        }
+            tmdbSeasonCache[season]?.optJSONArray("episodes")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val epObj = arr.optJSONObject(i) ?: continue
+                    val targetEp = eps.number?.toInt()
+                    if (targetEp != null && epObj.optInt("episode_number") == targetEp) {
+                        epName = epObj.optString("name").takeIf { it.isNotBlank() }
+                        epOverview = epObj.optString("overview").takeIf { it.isNotBlank() }
+                        epThumb = epObj.optString("still_path").takeIf { it.isNotBlank() }?.let { TMDBIMAGEBASEURL + it }
+                        epAir = epObj.optString("air_date").takeIf { it.isNotBlank() }
+                        epRating = epObj.optDouble("vote_average").takeIf { !it.isNaN() && it > 0.0 }
+                        break
                     }
                 }
+            }
 
-                val displayNumber = eps.number?.let { num ->
-                    if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
-                } ?: ""
+            val displayNumber = eps.number?.let { num ->
+                if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
+            } ?: ""
 
-                newEpisode(Data(res.title, eps.number?.toInt(), res.id, eps.id).toJson()) {
-                    this.name = epName ?: "Episode $displayNumber"
-                    this.episode = eps.number?.toInt()
-                    this.description = epOverview
-                    this.posterUrl = epThumb
-                    this.score = Score.from10(epRating)
-                    addDate(epAir)
-                }
-            } ?: throw ErrorLoadingException("No Episode")
-        }
+            newEpisode(Data(res.title, eps.number?.toInt(), res.id, eps.id).toJson()) {
+                this.name = epName ?: "Episode $displayNumber"
+                this.episode = eps.number?.toInt()
+                this.description = epOverview
+                this.posterUrl = epThumb
+                this.score = Score.from10(epRating)
+                addDate(epAir)
+            }
+        } ?: throw ErrorLoadingException("No Episode")
 
         if (tmdbId != null) {
             val resType = if (res.type == "Movie" ) "movie" else "tv"
@@ -210,13 +224,11 @@ class KisskhProvider : MainAPI() {
             }
         }
 
-        val finalType = if (isUpcoming) TvType.TvSeries else if (res.type == "Movie" || episodes.size == 1) TvType.Movie else TvType.TvSeries
-
         return newTvSeriesLoadResponse(
             res.title ?: return null,
             url,
-            finalType,
-            if (isUpcoming) emptyList() else episodes.reversed()
+            if (res.type == "Movie" || episodes.size == 1) TvType.Movie else TvType.TvSeries,
+            episodes.reversed()
         ) {
             this.posterUrl = tmdbPoster ?: res.thumbnail
             this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: res.thumbnail
@@ -365,14 +377,12 @@ class KisskhProvider : MainAPI() {
         @JsonProperty("data") val data: ArrayList<Media>? = arrayListOf(),
     )
 
-    // FITUR BARU: Menambahkan field "status" agar bisa kita saring
     data class Media(
         @JsonProperty("episodesCount") val episodesCount: Int?,
         @JsonProperty("thumbnail") val thumbnail: String?,
         @JsonProperty("label") val label: String?,
         @JsonProperty("id") val id: Int?,
         @JsonProperty("title") val title: String?,
-        @JsonProperty("status") val status: String? = null
     )
 
     data class Episodes(
