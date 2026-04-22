@@ -18,27 +18,22 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengambil ID Video dari akhir URL iframe
             val videoId = url.split("/").lastOrNull() ?: return
             
-            // Menembak API Token Majorplay
             val response = app.get(
                 url = "$mainUrl/api/token/viewer?videoId=$videoId", 
                 referer = url, 
                 headers = mapOf("Origin" to mainUrl)
             ).parsedSafe<MajorplayResponse>()
             
-            // Mengirimkan semua subtitle yang ditemukan ke aplikasi
             response?.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
                 subtitleCallback.invoke(SubtitleFile(lang, subUrl))
             }
 
-            // Mengambil link video utama
             val videoUrl = response?.hlsUrl ?: response?.primaryUrl ?: return
             
-            // Mengirimkan link video M3U8 ke ExoPlayer Cloudstream
             callback.invoke(
                 ExtractorLink(
                     source = name, 
@@ -54,7 +49,6 @@ class Majorplay : ExtractorApi() {
         }
     }
 
-    // --- Struktur Data JSON dari Majorplay ---
     data class MajorplayResponse(
         @JsonProperty("hlsUrl") val hlsUrl: String? = null, 
         @JsonProperty("primaryUrl") val primaryUrl: String? = null, 
