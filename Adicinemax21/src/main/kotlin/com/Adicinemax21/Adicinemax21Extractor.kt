@@ -110,47 +110,31 @@ object Adicinemax21Extractor : Adicinemax21() {
             val fullEmbedUrl = if (embedPath.startsWith("/")) "$idlixApi$embedPath" else embedPath
 
             // 6. 🔥 GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE DI EMBED
-            val jeniusRegex = """(jeniusplay\.com/(?:video|player)/[a-zA-Z0-9]+)""".toRegex()
+            val playerRegex = """((?:majorplay\.net|jeniusplay\.com)/(?:embed|video|player)/[a-zA-Z0-9]+)""".toRegex()
             
             val embedResponse = app.get(
                 fullEmbedUrl, 
                 headers = mapOf("Referer" to "$idlixApi/"),
-                interceptor = WebViewResolver(jeniusRegex)
+                interceptor = WebViewResolver(playerRegex)
             )
             
             val finalUrl = embedResponse.url
-            val embedText = embedResponse.text 
-
-            // Apabila request langsung di-redirect ke jeniusplay
-            if (finalUrl.contains("jeniusplay", true)) {
-                Jeniusplay().getUrl(finalUrl, fullEmbedUrl, subtitleCallback, callback)
+            
+            // Panggil Majorplay
+            if (finalUrl.contains("majorplay.net") || finalUrl.contains("jeniusplay.com")) {
+                Majorplay().getUrl(finalUrl, fullEmbedUrl, subtitleCallback, callback)
             } else {
-                // Cari link jeniusplay di dalam teks balasan JSON/HTML
-                var matchUrl = jeniusRegex.find(embedText)?.groupValues?.get(1)
-
-                // Fallback: Apabila Idlix memblokir GET murni, coba tembak menggunakan POST
-                if (matchUrl == null) {
-                    val embedPostResponse = app.post(fullEmbedUrl, headers = mapOf("Referer" to "$idlixApi/"))
-                    matchUrl = jeniusRegex.find(embedPostResponse.text)?.groupValues?.get(1)
-                }
-
-                if (matchUrl != null) {
-                    val iframeSrc = "https://$matchUrl"
-                    Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                } else {
-                    // Fallback kalau pakai iframe biasa
-                    var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
-                    if (!iframeSrc.isNullOrEmpty()) {
-                        if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
-                        if (iframeSrc.contains("jeniusplay", true)) {
-                            Jeniusplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                        } else {
-                            loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                        }
+                // Fallback kalau pakai iframe biasa
+                var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
+                if (!iframeSrc.isNullOrEmpty()) {
+                    if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
+                    if (iframeSrc.contains("majorplay.net") || iframeSrc.contains("jeniusplay.com")) {
+                        Majorplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
+                    } else {
+                        loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
                     }
                 }
             }
-
         } catch (e: Exception) {
             e.printStackTrace()
         }
