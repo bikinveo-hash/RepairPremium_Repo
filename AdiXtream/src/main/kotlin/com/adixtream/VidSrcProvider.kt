@@ -18,19 +18,22 @@ class VidSrcProvider : MainAPI() {
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    // 1. Kategori Beranda dengan ID Network akurat dari hasil pencarian kita
+    // 1. Kategori Beranda Update: Menghapus Movie Viu/WeTV & Menambah Netflix Barat (West)
     override val mainPage = mainPageOf(
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=id" to "Netflix Indonesia Movies",
         "discover/tv?with_networks=213&with_original_language=id" to "Netflix Indonesia Series",
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=ko" to "Netflix Korea Movies",
         "discover/tv?with_networks=213&with_original_language=ko" to "Netflix Korea Series",
-        "discover/movie?with_watch_providers=100&watch_region=ID&with_original_language=id" to "Viu Indonesia Movies",
+        "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=en" to "Netflix West Movies",
+        "discover/tv?with_networks=213&with_original_language=en" to "Netflix West Series",
+        
+        // Viu & WeTV sekarang hanya menampilkan Series sesuai permintaanmu
         "discover/tv?with_networks=7237&with_original_language=id" to "Viu Indonesia Series",
-        "discover/movie?with_companies=15615|3268|49" to "HBO Movies",
-        "discover/tv?with_networks=49" to "HBO Series",
-        "discover/movie?with_watch_providers=309|1060&watch_region=ID&with_original_language=id" to "WeTV Indonesia Movies",
         "discover/tv?with_networks=3732&with_original_language=id" to "WeTV Indonesia Series",
         "discover/tv?with_networks=3732&with_original_language=ko" to "WeTV Korea Series",
+        
+        "discover/movie?with_companies=15615|3268|49" to "HBO Movies",
+        "discover/tv?with_networks=49" to "HBO Series",
         "discover/movie?with_companies=2" to "Disney Movies",
         "discover/tv?with_networks=2739" to "Disney Series",
         "discover/movie?with_genres=27&with_original_language=id" to "Horror Indonesia"
@@ -88,7 +91,6 @@ class VidSrcProvider : MainAPI() {
         }
     }
 
-    // 2. Fungsi Load Super Lengkap (Trailer diperbaiki, Cast, Recommendations, Episode Thumbnails)
     override suspend fun load(url: String): LoadResponse {
         val isTvSeries = url.contains("/tv/")
         
@@ -126,7 +128,6 @@ class VidSrcProvider : MainAPI() {
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
                 
-                // PERBAIKAN TRAILER SERIES
                 val trailer = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
                 if (trailer != null) {
                     this.trailers.add(TrailerData(
@@ -159,7 +160,6 @@ class VidSrcProvider : MainAPI() {
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
                 
-                // PERBAIKAN TRAILER MOVIE
                 val trailer = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
                 if (trailer != null) {
                     this.trailers.add(TrailerData(
@@ -199,7 +199,6 @@ class VidSrcProvider : MainAPI() {
             baseUrl = "$mainUrl/embed/movie/$tmdbId"
         }
 
-        // --- 3. TAHAP SUBTITLE (OpenSubtitles -> Cloudnestra) ---
         try {
             val mediaTypePath = if (isTvSeries) "tv" else "movie"
             val extRes = app.get("https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey").text
@@ -222,7 +221,6 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // --- 4. TAHAP VIDEO (WebView Resolver Bypass) ---
         val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
@@ -252,7 +250,7 @@ class VidSrcProvider : MainAPI() {
     }
 }
 
-// 5. DATA CLASSES (Konsololidasi)
+// DATA CLASSES
 data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
 data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String?, @JsonProperty("name") val name: String?, @JsonProperty("poster_path") val posterPath: String?, @JsonProperty("vote_average") val voteAverage: Double?, @JsonProperty("media_type") val mediaType: String?)
 data class TmdbGenre(@JsonProperty("name") val name: String)
