@@ -3,6 +3,7 @@ package com.adixtream
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.WebViewResolver // Import penting untuk Cloudflare!
 import org.jsoup.Jsoup
 import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -123,7 +124,6 @@ class VidSrcProvider : MainAPI() {
         }
 
         // --- 2. TAHAP BUKA VIDEO ---
-        // KITA GUNAKAN CLOUDFLARE INTERCEPTOR (Bawaan Cloudstream) DI SINI
         val response1 = app.get(baseUrl, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
         var iframeUrl1 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
         if (iframeUrl1 == null) {
@@ -139,7 +139,6 @@ class VidSrcProvider : MainAPI() {
         // --- 3. DETEKSI PINTAR: VSEMBED ATAU CLOUDNESTRA? ---
         if (iframeUrl1.contains("cloudnestra") || iframeUrl1.contains("rcp")) {
             finalReferer = iframeUrl1
-            // Panggil WebViewResolver lagi saat masuk ke Cloudnestra
             finalHtml = app.get(iframeUrl1, referer = baseUrl, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
         } else {
             val response2 = app.get(iframeUrl1, referer = baseUrl).text
@@ -151,7 +150,6 @@ class VidSrcProvider : MainAPI() {
             if (!iframeUrl2.isNullOrEmpty()) {
                 iframeUrl2 = if (iframeUrl2.startsWith("//")) "https:$iframeUrl2" else iframeUrl2
                 finalReferer = iframeUrl2
-                // Panggil WebViewResolver lagi saat masuk ke Cloudnestra
                 finalHtml = app.get(iframeUrl2, referer = iframeUrl1, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
             } else {
                 finalHtml = response2
@@ -173,7 +171,6 @@ class VidSrcProvider : MainAPI() {
                 
                 val hiddenUrl = domain + hiddenPath
                 
-                // Gunakan WebViewResolver untuk mengeksekusi link rahasia JS!
                 finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
                 finalReferer = hiddenUrl
             } else {
@@ -190,7 +187,7 @@ class VidSrcProvider : MainAPI() {
         val matchResult = hashRegex.find(finalHtml)
 
         if (matchResult == null) {
-            throw ErrorLoadingException("Error: Link video tidak ditemukan atau diblokir oleh Cloudflare.")
+            throw ErrorLoadingException("Error: Link video tidak ditemukan atau diblokir Cloudflare.")
         }
 
         val teksRahasia = matchResult.value.replace("\\/", "/")
@@ -202,7 +199,6 @@ class VidSrcProvider : MainAPI() {
         
         val m3u8Url = "$dynamicHost$teksRahasia"
 
-        // KIRIM VIDEO
         callback.invoke(
             newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                 this.referer = finalReferer
@@ -212,3 +208,15 @@ class VidSrcProvider : MainAPI() {
         return true
     }
 }
+
+// ==========================================
+// DATA CLASS (JANGAN DIHAPUS LAGI YA BRO! 😂)
+// ==========================================
+data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
+data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?)
+data class TmdbDetailResponse(
+    @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?,
+    @JsonProperty("backdrop_path") val backdropPath: String?, @JsonProperty("overview") val overview: String?,
+    @JsonProperty("release_date") val releaseDate: String?, @JsonProperty("runtime") val runtime: Int?,
+    @JsonProperty("vote_average") val voteAverage: Double?
+)
