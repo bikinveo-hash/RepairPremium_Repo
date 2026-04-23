@@ -1,16 +1,22 @@
 package com.adixtream
 
 import com.fasterxml.jackson.annotation.JsonProperty
-// IMPORT YANG BENAR:
-import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* class VidSrcProvider : MainAPI() {
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.* // Import penting agar ExtractorLink dikenali
+
+class VidSrcProvider : MainAPI() {
     override var name = "VidSrc AdiXtream"
     override var mainUrl = "https://vidsrc.net"
-    override var supportedTypes = setOf(TvType.Movie)
+    override var supportedTypes = setOf(TvType.Movie) // Fokus ke film
     override var lang = "en"
     override val hasMainPage = true
 
+    // API Key TMDB milikmu
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
+    /**
+     * FUNGSI 1: HALAMAN DEPAN
+     */
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -23,7 +29,7 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         val filmList = response.results.map { movie ->
             newMovieSearchResponse(
                 name = movie.title,
-                url = movie.id.toString(),
+                url = movie.id.toString(), // Menyimpan ID TMDB
                 type = TvType.Movie
             ) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -34,6 +40,9 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         return newHomePageResponse(homePageLists)
     }
 
+    /**
+     * FUNGSI 2: PENCARIAN
+     */
     override suspend fun search(query: String): List<SearchResponse> {
         val safeQuery = query.replace(" ", "%20")
         val url = "https://api.themoviedb.org/3/search/movie?api_key=$tmdbApiKey&query=$safeQuery&language=en-US"
@@ -43,7 +52,7 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         return response.results.map { movie ->
             newMovieSearchResponse(
                 name = movie.title,
-                url = movie.id.toString(),
+                url = movie.id.toString(), // Menyimpan ID TMDB
                 type = TvType.Movie
             ) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -51,8 +60,15 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         }
     }
 
+    /**
+     * FUNGSI 3: HALAMAN DETAIL (LOAD)
+     * Sudah diperbaiki agar memotong awalan https://vidsrc.net/
+     */
     override suspend fun load(url: String): LoadResponse {
-        val tmdbId = url 
+        // url yang masuk bentuknya: "https://vidsrc.net/83533"
+        // Kita potong untuk mengambil angka murninya saja
+        val tmdbId = url.substringAfterLast("/") 
+        
         val detailUrl = "https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&language=en-US"
         
         val movieDetail = app.get(detailUrl).parsedSafe<TmdbDetailResponse>() 
@@ -60,9 +76,9 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
 
         return newMovieLoadResponse(
             name = movieDetail.title,
-            url = tmdbId, 
+            url = url, // Biarkan pakai url asli untuk riwayat
             type = TvType.Movie,
-            dataUrl = tmdbId
+            dataUrl = tmdbId // ID MURNI dilempar ke fungsi loadLinks
         ) {
             this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
             this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
@@ -73,22 +89,29 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         }
     }
 
+    /**
+     * FUNGSI 4: PEMUTARAN VIDEO (LOAD LINKS)
+     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val tmdbId = data
+        // data berisi ID TMDB murni dari dataUrl fungsi load
+        val tmdbId = data 
         val baseUrl = "$mainUrl/embed/movie?tmdb=$tmdbId"
 
+        // --- BUKA LAPISAN 1 (VidSrc) ---
         val response1 = app.get(baseUrl).text
         val iframe1 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1) ?: return false
         val iframeUrl1 = if (iframe1.startsWith("//")) "https:$iframe1" else iframe1
 
+        // --- BUKA LAPISAN 2 (vsembed.ru) ---
         val response2 = app.get(iframeUrl1, referer = baseUrl).text
         val iframe2 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response2)?.groupValues?.get(1)
         
+        // --- BUKA LAPISAN 3 (cloudnestra.com) ---
         var finalReferer = iframeUrl1
         val finalHtml = if (iframe2 != null) {
             val iframeUrl2 = if (iframe2.startsWith("//")) "https:$iframe2" else iframe2
@@ -98,6 +121,7 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
             response2 
         }
 
+        // --- EKSTRAK SUBTITLE (.vtt) ---
         val subRegex = Regex("""(https?://[^"'\s]+\.vtt[^"'\s]*)""")
         subRegex.findAll(finalHtml).forEach { match ->
             subtitleCallback.invoke(
@@ -108,6 +132,7 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
             )
         }
 
+        // --- EKSTRAK VIDEO (H4sI...m3u8) ---
         val hashRegex = Regex("""(H4sI[^"'\s]+m3u8)""")
         val matchResult = hashRegex.find(finalHtml)
 
@@ -132,6 +157,10 @@ import com.lagradost.cloudstream3.* import com.lagradost.cloudstream3.utils.* cl
         return false
     }
 }
+
+// ==========================================
+// DATA CLASS UNTUK MEMBACA JSON DARI TMDB
+// ==========================================
 
 data class TmdbResponse(
     @JsonProperty("results") val results: List<TmdbMovie>
