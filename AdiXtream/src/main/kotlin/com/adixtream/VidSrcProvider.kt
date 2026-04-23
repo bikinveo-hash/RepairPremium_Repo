@@ -18,7 +18,7 @@ class VidSrcProvider : MainAPI() {
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    // 1. Kategori Beranda dengan filter yang sudah disempurnakan (mirip adicinemax21)
+    // 1. Kategori Beranda dengan filter yang sudah disempurnakan
     override val mainPage = mainPageOf(
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=id" to "Netflix Indonesia Movies",
         "discover/tv?with_networks=213&with_original_language=id" to "Netflix Indonesia Series",
@@ -88,7 +88,7 @@ class VidSrcProvider : MainAPI() {
         }
     }
 
-    // 2. Fungsi Load Super Lengkap (Trailer, Cast, Recommendations, Episode Thumbnails)
+    // 2. Fungsi Load Super Lengkap (Trailer diperbaiki, Cast, Recommendations, Episode Thumbnails)
     override suspend fun load(url: String): LoadResponse {
         val isTvSeries = url.contains("/tv/")
         
@@ -125,8 +125,17 @@ class VidSrcProvider : MainAPI() {
                 this.actors = tvDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
+                
+                // PERBAIKAN TRAILER SERIES
                 val trailer = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) addTrailer("https://www.youtube.com/watch?v=${trailer.key}")
+                if (trailer != null) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
+                        referer = null,
+                        raw = false
+                    ))
+                }
+                
                 this.recommendations = tvDetail.recommendations?.results?.map { rec ->
                     newTvSeriesSearchResponse(rec.name ?: rec.title ?: "Tanpa Judul", "$mainUrl/tv/${rec.id}", TvType.TvSeries) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -149,8 +158,17 @@ class VidSrcProvider : MainAPI() {
                 this.actors = movieDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
+                
+                // PERBAIKAN TRAILER MOVIE
                 val trailer = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) addTrailer("https://www.youtube.com/watch?v=${trailer.key}")
+                if (trailer != null) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
+                        referer = null,
+                        raw = false
+                    ))
+                }
+                
                 this.recommendations = movieDetail.recommendations?.results?.map { rec ->
                     newMovieSearchResponse(rec.title ?: rec.name ?: "Tanpa Judul", "$mainUrl/movie/${rec.id}", TvType.Movie) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
