@@ -1,0 +1,24 @@
+name: Bersihkan Cache Sistem
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  hapus-cache:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write 
+      contents: read 
+    steps:
+      - name: 📥 Tarik Kode (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 🧹 Proses Hapus Semua Cache (Sapu Jagat)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Mencari dan menghancurkan semua cache dari database GitHub..."
+          gh api repos/${{ github.repository }}/actions/caches \
+            --paginate \
+            -q '.actions_caches[].id' \
+            | xargs -I {} gh api -X DELETE repos/${{ github.repository }}/actions/caches/{} || echo "Selesai membersihkan semua cache!"
