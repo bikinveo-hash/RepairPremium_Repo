@@ -34,16 +34,35 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response?.hlsUrl ?: response?.primaryUrl ?: return
             
-            callback.invoke(
-                ExtractorLink(
-                    source = name, 
-                    name = name, 
-                    url = videoUrl, 
-                    referer = url, 
-                    quality = Qualities.Unknown.value, 
-                    type = ExtractorLinkType.M3U8
-                )
+            val streamHeaders = mapOf(
+                "Origin" to mainUrl,
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+                "Accept" to "*/*"
             )
+
+            if (videoUrl.contains(".m3u8")) {
+                M3u8Helper.generateM3u8(
+                    source = name,
+                    streamUrl = videoUrl,
+                    referer = url,
+                    headers = streamHeaders
+                ).forEach { parsedLink ->
+                    callback.invoke(parsedLink)
+                }
+            } else {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = videoUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                        this.headers = streamHeaders
+                    }
+                )
+            }
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
