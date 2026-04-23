@@ -3,7 +3,7 @@ package com.adixtream
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver // Import penting untuk Cloudflare!
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.Jsoup
 import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -47,7 +47,7 @@ class VidSrcProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val tmdbId = url.substringAfterLast("/") 
         val detailUrl = "https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&language=en-US"
-        val movieDetail = app.get(detailUrl).parsedSafe<TmdbDetailResponse>() ?: throw ErrorLoadingException("Gagal TMDB")
+        val movieDetail = app.get(detailUrl).parsedSafe<TmdbDetailResponse>() ?: throw ErrorLoadingException("Gagal mengambil data dari TMDB")
 
         return newMovieLoadResponse(movieDetail.title, url, TvType.Movie, tmdbId) {
             this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
@@ -68,7 +68,7 @@ class VidSrcProvider : MainAPI() {
         val tmdbId = data.substringAfterLast("/") 
         val baseUrl = "$mainUrl/embed/movie/$tmdbId"
 
-        // --- 1. TAHAP SUBTITLE ---
+        // --- 1. TAHAP SUBTITLE (ANTI CLASS-CAST EXCEPTION) ---
         try {
             val extUrl = "https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=$tmdbApiKey"
             val extRes = app.get(extUrl).text
@@ -186,8 +186,9 @@ class VidSrcProvider : MainAPI() {
         val hashRegex = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""")
         val matchResult = hashRegex.find(finalHtml)
 
+        // Pesan Error Spesifik Jika Cloudflare Gagal Ditembus
         if (matchResult == null) {
-            throw ErrorLoadingException("Error: Link video tidak ditemukan atau diblokir Cloudflare.")
+            throw ErrorLoadingException("Video diblokir Cloudflare. Coba putar ulang, atau ganti IP/VPN.")
         }
 
         val teksRahasia = matchResult.value.replace("\\/", "/")
@@ -199,6 +200,7 @@ class VidSrcProvider : MainAPI() {
         
         val m3u8Url = "$dynamicHost$teksRahasia"
 
+        // KIRIM VIDEO
         callback.invoke(
             newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                 this.referer = finalReferer
@@ -209,9 +211,6 @@ class VidSrcProvider : MainAPI() {
     }
 }
 
-// ==========================================
-// DATA CLASS (JANGAN DIHAPUS LAGI YA BRO! 😂)
-// ==========================================
 data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
 data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?)
 data class TmdbDetailResponse(
