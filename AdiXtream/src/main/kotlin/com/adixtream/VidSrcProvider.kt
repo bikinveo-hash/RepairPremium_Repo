@@ -12,14 +12,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class VidSrcProvider : MainAPI() {
     override var name = "VidSrc AdiXtream"
     override var mainUrl = "https://vidsrc.net"
-    // Tambahkan TvType.TvSeries agar Series bisa diklik
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override var lang = "en"
     override val hasMainPage = true
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    // Mendaftarkan semua kategori yang kamu minta dengan kode rahasia TMDB
     override val mainPage = mainPageOf(
         "discover/movie?with_watch_providers=8&watch_region=ID&with_origin_country=ID" to "Netflix Indonesia Movies",
         "discover/tv?with_networks=213&with_origin_country=ID" to "Netflix Indonesia Series",
@@ -38,54 +36,106 @@ class VidSrcProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Menggabungkan request kategori yang dipilih CloudStream dengan API TMDB
         val url = "https://api.themoviedb.org/3/${request.data}&api_key=$tmdbApiKey&language=en-US&page=$page"
         val response = app.get(url).parsedSafe<TmdbResponse>() ?: return newHomePageResponse(emptyList())
 
-        // Cek apakah ini API tv atau movie
         val isTvSeries = request.data.contains("discover/tv")
         val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
+        
+        // Bikin penanda URL khusus untuk membedakan Movie dan TV
+        val urlPrefix = if (isTvSeries) "tv" else "movie"
 
         val filmList = response.results.map { movie ->
-            // TMDB menggunakan "title" untuk film, dan "name" untuk TV Series
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
+            val targetUrl = "$mainUrl/$urlPrefix/${movie.id}" // Contoh: https://vidsrc.net/tv/12345
             
-            newMovieSearchResponse(titleText, movie.id.toString(), tvType) {
-                this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
-                // Menerapkan Score skala 10 menggunakan data voteAverage dari TMDB
-                this.score = Score.from10(movie.voteAverage) 
+            if (isTvSeries) {
+                newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                    this.score = Score.from10(movie.voteAverage)
+                }
+            } else {
+                newMovieSearchResponse(titleText, targetUrl, tvType) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                    this.score = Score.from10(movie.voteAverage)
+                }
             }
         }
-        
         return newHomePageResponse(listOf(HomePageList(request.name, filmList)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "https://api.themoviedb.org/3/search/movie?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
+        // Pindah ke endpoint multi search agar Movie dan TV Series sama-sama muncul
+        val url = "https://api.themoviedb.org/3/search/multi?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
         val response = app.get(url).parsedSafe<TmdbResponse>() ?: return emptyList()
         
-        return response.results.map { movie ->
+        return response.results.filter { it.mediaType == "movie" || it.mediaType == "tv" }.map { movie ->
+            val isTvSeries = movie.mediaType == "tv"
+            val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
+            val urlPrefix = if (isTvSeries) "tv" else "movie"
+            val targetUrl = "$mainUrl/$urlPrefix/${movie.id}"
+            
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
-            newMovieSearchResponse(titleText, movie.id.toString(), TvType.Movie) {
-                this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
-                // Menerapkan Score di hasil pencarian
-                this.score = Score.from10(movie.voteAverage)
+            
+            if (isTvSeries) {
+                newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                    this.score = Score.from10(movie.voteAverage)
+                }
+            } else {
+                newMovieSearchResponse(titleText, targetUrl, tvType) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                    this.score = Score.from10(movie.voteAverage)
+                }
             }
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val tmdbId = url.substringAfterLast("/") 
-        val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal TMDB")
+        val isTvSeries = url.contains("/tv/")
+        
+        if (isTvSeries) {
+            // PROSES UNTUK TV SERIES
+            val tmdbId = url.substringAfter("/tv/").substringBefore("/")
+            val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>() 
+                ?: throw ErrorLoadingException("Gagal mengambil data Series dari TMDB")
 
-        return newMovieLoadResponse(movieDetail.title, url, TvType.Movie, tmdbId) {
-            this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
-            this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
-            this.year = movieDetail.releaseDate?.take(4)?.toIntOrNull()
-            this.plot = movieDetail.overview
-            this.duration = movieDetail.runtime
-            this.score = Score.from10(movieDetail.voteAverage)
+            // Looping untuk membuat daftar Season dan Episode
+            val episodes = mutableListOf<Episode>()
+            tvDetail.seasons?.forEach { season ->
+                if (season.seasonNumber > 0) { // Lewati season 0 (Biasanya Special)
+                    for (ep in 1..season.episodeCount) {
+                        episodes.add(newEpisode("$mainUrl/tv/$tmdbId/${season.seasonNumber}/$ep") {
+                            this.name = "Episode $ep"
+                            this.season = season.seasonNumber
+                            this.episode = ep
+                        })
+                    }
+                }
+            }
+
+            return newTvSeriesLoadResponse(tvDetail.name ?: "Tanpa Judul", url, TvType.TvSeries, episodes) {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${tvDetail.posterPath}"
+                this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${tvDetail.backdropPath}"
+                this.year = tvDetail.firstAirDate?.take(4)?.toIntOrNull()
+                this.plot = tvDetail.overview
+                this.score = Score.from10(tvDetail.voteAverage)
+            }
+            
+        } else {
+            // PROSES UNTUK MOVIE (Seperti aslinya)
+            val tmdbId = url.substringAfter("/movie/").substringBefore("/")
+            val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>() 
+                ?: throw ErrorLoadingException("Gagal mengambil data Movie dari TMDB")
+
+            return newMovieLoadResponse(movieDetail.title ?: "Tanpa Judul", url, TvType.Movie, tmdbId) {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
+                this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
+                this.year = movieDetail.releaseDate?.take(4)?.toIntOrNull()
+                this.plot = movieDetail.overview
+                this.duration = movieDetail.runtime
+                this.score = Score.from10(movieDetail.voteAverage)
+            }
         }
     }
 
@@ -95,12 +145,28 @@ class VidSrcProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val tmdbId = data.substringAfterLast("/") 
-        val baseUrl = "$mainUrl/embed/movie/$tmdbId"
+        
+        val isTvSeries = data.contains("/tv/")
+        
+        // Membedakan Base URL dan ID untuk Player
+        val baseUrl: String
+        val tmdbId: String
+        
+        if (isTvSeries) {
+            val parts = data.split("/")
+            val ep = parts.last()
+            val season = parts[parts.size - 2]
+            tmdbId = parts[parts.size - 3]
+            baseUrl = "$mainUrl/embed/tv/$tmdbId/$season/$ep" // Link VidSrc untuk series
+        } else {
+            tmdbId = data.substringAfter("/movie/").substringBefore("/")
+            baseUrl = "$mainUrl/embed/movie/$tmdbId" // Link VidSrc untuk movie
+        }
 
-        // --- 1. TAHAP SUBTITLE (INI SUDAH BERHASIL DI LOG!) ---
+        // --- 1. TAHAP SUBTITLE ---
         try {
-            val extRes = app.get("https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=$tmdbApiKey").text
+            val mediaTypePath = if (isTvSeries) "tv" else "movie"
+            val extRes = app.get("https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey").text
             val imdbId = Regex(""""imdb_id"\s*:\s*"([^"]+)"""").find(extRes)?.groupValues?.get(1)?.removePrefix("tt")
             
             if (imdbId != null) {
@@ -124,11 +190,8 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // --- 2. TAHAP VIDEO (SISTEM BYPASS CLOUDFLARE DIPERKUAT) ---
-        // Regex diperluas agar mencakup vidsrc, cloudnestra, vsembed, dan rcp
+        // --- 2. TAHAP VIDEO (SISTEM BYPASS CLOUDFLARE) ---
         val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
-
-        // Request pertama ke vidsrc.net sekarang JALAN lewat WebView Interceptor
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
         
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
@@ -148,7 +211,6 @@ class VidSrcProvider : MainAPI() {
                 val domain = "https://" + (if (finalReferer.contains("vsembed.ru")) "cloudnestra.com" else finalReferer.substringAfter("://").substringBefore("/"))
                 val hiddenUrl = domain + hiddenMatch.groupValues[1]
                 
-                // Tembak link tersembunyi
                 finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = universalBypass).text
                 finalReferer = hiddenUrl
             }
@@ -176,18 +238,35 @@ data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
 
 data class TmdbMovie(
     @JsonProperty("id") val id: Int, 
-    @JsonProperty("title") val title: String?, // Bisa null jika ini adalah Series
-    @JsonProperty("name") val name: String?,   // Digunakan untuk judul Series
+    @JsonProperty("title") val title: String?, 
+    @JsonProperty("name") val name: String?,   
     @JsonProperty("poster_path") val posterPath: String?,
-    @JsonProperty("vote_average") val voteAverage: Double? // Mengambil nilai Score untuk Rating Bintang
+    @JsonProperty("vote_average") val voteAverage: Double?,
+    @JsonProperty("media_type") val mediaType: String? // Diperlukan untuk multi-search
 )
 
 data class TmdbDetailResponse(
-    @JsonProperty("title") val title: String, 
+    @JsonProperty("title") val title: String?, 
     @JsonProperty("poster_path") val posterPath: String?,
     @JsonProperty("backdrop_path") val backdropPath: String?, 
     @JsonProperty("overview") val overview: String?,
     @JsonProperty("release_date") val releaseDate: String?, 
     @JsonProperty("runtime") val runtime: Int?,
     @JsonProperty("vote_average") val voteAverage: Double?
+)
+
+// TAMBAHAN DATA CLASS KHUSUS TV SERIES
+data class TmdbTvDetailResponse(
+    @JsonProperty("name") val name: String?,
+    @JsonProperty("poster_path") val posterPath: String?,
+    @JsonProperty("backdrop_path") val backdropPath: String?,
+    @JsonProperty("overview") val overview: String?,
+    @JsonProperty("first_air_date") val firstAirDate: String?,
+    @JsonProperty("vote_average") val voteAverage: Double?,
+    @JsonProperty("seasons") val seasons: List<TmdbSeason>?
+)
+
+data class TmdbSeason(
+    @JsonProperty("season_number") val seasonNumber: Int,
+    @JsonProperty("episode_count") val episodeCount: Int
 )
