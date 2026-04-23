@@ -18,7 +18,7 @@ class VidSrcProvider : MainAPI() {
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    // 1. Kategori Beranda Update: Menghapus Movie Viu/WeTV & Menambah Netflix Barat (West)
+    // Kategori Beranda Terbaru (Update: Prime Video & HBO Max Provider Filter)
     override val mainPage = mainPageOf(
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=id" to "Netflix Indonesia Movies",
         "discover/tv?with_networks=213&with_original_language=id" to "Netflix Indonesia Series",
@@ -27,13 +27,16 @@ class VidSrcProvider : MainAPI() {
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=en" to "Netflix West Movies",
         "discover/tv?with_networks=213&with_original_language=en" to "Netflix West Series",
         
-        // Viu & WeTV sekarang hanya menampilkan Series sesuai permintaanmu
         "discover/tv?with_networks=7237&with_original_language=id" to "Viu Indonesia Series",
         "discover/tv?with_networks=3732&with_original_language=id" to "WeTV Indonesia Series",
         "discover/tv?with_networks=3732&with_original_language=ko" to "WeTV Korea Series",
         
-        "discover/movie?with_companies=15615|3268|49" to "HBO Movies",
+        "discover/movie?with_watch_providers=119&watch_region=ID" to "Prime Video",
+        "discover/tv?with_watch_providers=119&watch_region=ID" to "Prime Video Series",
+        
+        "discover/movie?with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies",
         "discover/tv?with_networks=49" to "HBO Series",
+        
         "discover/movie?with_companies=2" to "Disney Movies",
         "discover/tv?with_networks=2739" to "Disney Series",
         "discover/movie?with_genres=27&with_original_language=id" to "Horror Indonesia"
