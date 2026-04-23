@@ -20,20 +20,31 @@ class Majorplay : ExtractorApi() {
         try {
             val videoId = url.split("/").lastOrNull() ?: return
             
+            // 1. Dapatkan Token dan URL Video
             val response = app.get(
                 url = "$mainUrl/api/token/viewer?videoId=$videoId", 
                 referer = url, 
                 headers = mapOf("Origin" to mainUrl)
             ).parsedSafe<MajorplayResponse>()
             
+            // 2. Ambil Subtitle
             response?.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
                 subtitleCallback.invoke(SubtitleFile(lang, subUrl))
             }
 
+            // 3. Ambil Video URL
             val videoUrl = response?.hlsUrl ?: response?.primaryUrl ?: return
             
+            // 4. [BARU] Buat Header khusus untuk ExoPlayer
+            val streamHeaders = mapOf(
+                "Origin" to mainUrl,
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+                "Accept" to "*/*"
+            )
+            
+            // 5. Kembalikan ExtractorLink dengan header tersemat
             callback.invoke(
                 ExtractorLink(
                     source = name, 
@@ -41,7 +52,8 @@ class Majorplay : ExtractorApi() {
                     url = videoUrl, 
                     referer = url, 
                     quality = Qualities.Unknown.value, 
-                    type = ExtractorLinkType.M3U8
+                    type = ExtractorLinkType.M3U8,
+                    headers = streamHeaders // <-- Ini kunci untuk mengatasi Error 2004
                 )
             )
         } catch (e: Exception) { 
