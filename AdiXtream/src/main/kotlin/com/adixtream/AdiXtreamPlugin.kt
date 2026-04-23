@@ -13,7 +13,7 @@ class AdiXtreamPlugin : Plugin() {
      */
     override fun load(context: Context) {
         // Mendaftarkan provider VidSrcProvider yang sudah kita buat sebelumnya
-        registerMainAPI(VidSrcProvider())
+        registerMainAPI(AdiXtreamProvider())
         
         // Catatan: Jika suatu saat nanti kamu membuat file provider lain 
         // (misalnya NontonGratisProvider.kt), kamu tinggal menambahkannya di bawah ini:
