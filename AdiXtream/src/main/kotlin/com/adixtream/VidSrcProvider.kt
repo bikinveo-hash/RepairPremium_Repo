@@ -12,45 +12,98 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class VidSrcProvider : MainAPI() {
     override var name = "VidSrc AdiXtream"
     override var mainUrl = "https://vidsrc.net"
-    override var supportedTypes = setOf(TvType.Movie)
+    override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries) // Sekarang support Series!
     override var lang = "en"
     override val hasMainPage = true
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "https://api.themoviedb.org/3/movie/popular?api_key=$tmdbApiKey&language=en-US&page=$page"
-        val response = app.get(url).parsedSafe<TmdbResponse>() ?: return newHomePageResponse(emptyList())
-        val filmList = response.results.map { movie ->
-            newMovieSearchResponse(movie.title, movie.id.toString(), TvType.Movie) {
-                this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+    // Helper fungsi untuk memanggil API TMDB berdasarkan kategori
+    private suspend fun getTmdbContent(type: String, country: String? = null, network: Int? = null, page: Int): List<SearchResponse> {
+        val typePath = if (type == "movie") "movie" else "tv"
+        var url = "https://api.themoviedb.org/3/discover/$typePath?api_key=$tmdbApiKey&page=$page&sort_by=popularity.desc"
+        
+        if (country != null) url += "&with_origin_country=$country"
+        if (network != null) url += "&with_networks=$network"
+        
+        val res = app.get(url).parsedSafe<TmdbResponse>()
+        return res?.results?.map { movie ->
+            val name = movie.title ?: movie.name ?: "Unknown"
+            if (type == "movie") {
+                newMovieSearchResponse(name, movie.id.toString(), TvType.Movie) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                }
+            } else {
+                newTvSeriesSearchResponse(name, movie.id.toString(), TvType.TvSeries) {
+                    this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
+                }
             }
-        }
-        return newHomePageResponse(listOf(HomePageList("Populer di VidSrc", filmList)))
+        } ?: emptyList()
+    }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val items = ArrayList<HomePageList>()
+
+        // Menambahkan Baris Kategori Sesuai Permintaan
+        items.add(HomePageList("Netflix Indonesia (Movies)", getTmdbContent("movie", "ID", 213, page)))
+        items.add(HomePageList("Netflix Indonesia (Series)", getTmdbContent("tv", "ID", 213, page)))
+        
+        items.add(HomePageList("Netflix Korea (Movies)", getTmdbContent("movie", "KR", 213, page)))
+        items.add(HomePageList("Netflix Korea (Series)", getTmdbContent("tv", "KR", 213, page)))
+        
+        items.add(HomePageList("Disney+ Originals", getTmdbContent("movie", null, 2739, page)))
+        items.add(HomePageList("Disney+ Series", getTmdbContent("tv", null, 2739, page)))
+        
+        items.add(HomePageList("HBO Collection", getTmdbContent("movie", null, 49, page)))
+        
+        items.add(HomePageList("Viu Indonesia (Series)", getTmdbContent("tv", "ID", 1595, page)))
+        
+        items.add(HomePageList("WeTV Indonesia", getTmdbContent("tv", "ID", 3354, page)))
+        items.add(HomePageList("WeTV Korea", getTmdbContent("tv", "KR", 3354, page)))
+
+        return newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "https://api.themoviedb.org/3/search/movie?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
-        val response = app.get(url).parsedSafe<TmdbResponse>() ?: return emptyList()
-        return response.results.map { movie ->
-            newMovieSearchResponse(movie.title, movie.id.toString(), TvType.Movie) {
-                this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
-            }
+        val movieRes = app.get("https://api.themoviedb.org/3/search/movie?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}").parsedSafe<TmdbResponse>()
+        val tvRes = app.get("https://api.themoviedb.org/3/search/tv?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}").parsedSafe<TmdbResponse>()
+        
+        val results = ArrayList<SearchResponse>()
+        movieRes?.results?.forEach { 
+            results.add(newMovieSearchResponse(it.title ?: "Movie", it.id.toString(), TvType.Movie) { this.posterUrl = "https://image.tmdb.org/t/p/w500${it.posterPath}" })
         }
+        tvRes?.results?.forEach { 
+            results.add(newTvSeriesSearchResponse(it.name ?: "Series", it.id.toString(), TvType.TvSeries) { this.posterUrl = "https://image.tmdb.org/t/p/w500${it.posterPath}" })
+        }
+        return results
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val tmdbId = url.substringAfterLast("/") 
-        val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal TMDB")
+        val tmdbId = url.substringAfterLast("/")
+        // Cek apakah ini film atau series
+        val isMovie = !url.contains("tv") // Sederhana: jika tidak ada tag tv, anggap movie
 
-        return newMovieLoadResponse(movieDetail.title, url, TvType.Movie, tmdbId) {
-            this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
-            this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
-            this.year = movieDetail.releaseDate?.take(4)?.toIntOrNull()
-            this.plot = movieDetail.overview
-            this.duration = movieDetail.runtime
-            this.score = Score.from10(movieDetail.voteAverage)
+        return if (url.contains("movie") || !url.contains("tv")) {
+            val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()!!
+            newMovieLoadResponse(movieDetail.title ?: "", url, TvType.Movie, "movie/$tmdbId") {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
+                this.plot = movieDetail.overview
+                this.year = movieDetail.releaseDate?.take(4)?.toIntOrNull()
+            }
+        } else {
+            val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()!!
+            val seasons = tvDetail.seasons?.map { s ->
+                val epRes = app.get("https://api.themoviedb.org/3/tv/$tmdbId/season/${s.seasonNumber}?api_key=$tmdbApiKey").parsedSafe<TmdbSeasonResponse>()
+                epRes?.episodes?.map { e ->
+                    Episode("tv/$tmdbId/${s.seasonNumber}/${e.episodeNumber}", e.name, s.seasonNumber, e.episodeNumber)
+                } ?: emptyList()
+            }?.flatten() ?: emptyList()
+
+            newTvSeriesLoadResponse(tvDetail.name ?: "", url, TvType.TvSeries, seasons) {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${tvDetail.posterPath}"
+                this.plot = tvDetail.overview
+                this.year = tvDetail.firstAirDate?.take(4)?.toIntOrNull()
+            }
         }
     }
 
@@ -60,28 +113,25 @@ class VidSrcProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val tmdbId = data.substringAfterLast("/") 
-        val baseUrl = "$mainUrl/embed/movie/$tmdbId"
+        // data berbentuk: "movie/ID" atau "tv/ID/S/E"
+        val baseUrl = "$mainUrl/embed/$data"
 
-        // --- 1. TAHAP SUBTITLE (INI SUDAH BERHASIL DI LOG!) ---
+        // --- 1. TAHAP SUBTITLE (TIDAK DIOTAK-ATIK) ---
         try {
-            val extRes = app.get("https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=$tmdbApiKey").text
+            val idOnly = data.substringAfter("/").substringBefore("/")
+            val extRes = app.get("https://api.themoviedb.org/3/movie/$idOnly/external_ids?api_key=$tmdbApiKey").text
             val imdbId = Regex(""""imdb_id"\s*:\s*"([^"]+)"""").find(extRes)?.groupValues?.get(1)?.removePrefix("tt")
-            
             if (imdbId != null) {
-                val opsRes = app.get("https://rest.opensubtitles.org/search/imdbid-$imdbId/sublanguageid-ind", 
-                    headers = mapOf("X-User-Agent" to "trailers.to-UA")).text
+                val opsRes = app.get("https://rest.opensubtitles.org/search/imdbid-$imdbId/sublanguageid-ind", headers = mapOf("X-User-Agent" to "trailers.to-UA")).text
                 val subUrl = Regex(""""SubDownloadLink"\s*:\s*"([^"]+)"""").find(opsRes)?.groupValues?.get(1)?.replace("\\/", "/")
                 val subId = Regex(""""IDSubtitleFile"\s*:\s*"([^"]+)"""").find(opsRes)?.groupValues?.get(1)
-
                 if (subUrl != null && subId != null) {
-                    val gzBytes = app.get(subUrl, headers = mapOf("User-Agent" to "Mozilla/5.0")).okhttpResponse.body?.bytes()
+                    val gzBytes = app.get(subUrl).okhttpResponse.body?.bytes()
                     if (gzBytes != null) {
                         val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
                             .addFormDataPart("sub_data", "blob", gzBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
                             .addFormDataPart("sub_id", subId).addFormDataPart("sub_enc", "UTF-8")
-                            .addFormDataPart("sub_src", "ops")
-                            .addFormDataPart("subformat", "srt").build()
+                            .addFormDataPart("sub_src", "ops").addFormDataPart("subformat", "srt").build()
                         val extractRes = app.post("https://cloudnestra.com/get_sub_url", requestBody = requestBody).text
                         if (extractRes.startsWith("/sub/")) subtitleCallback.invoke(newSubtitleFile("Indonesia", "https://cloudnestra.com$extractRes"))
                     }
@@ -89,59 +139,40 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // --- 2. TAHAP VIDEO (SISTEM BYPASS CLOUDFLARE DIPERKUAT) ---
-        // Regex diperluas agar mencakup vidsrc, cloudnestra, vsembed, dan rcp
+        // --- 2. TAHAP VIDEO (TIDAK DIOTAK-ATIK - DENGAN WEBVIEW BYPASS) ---
         val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
-
-        // Request pertama ke vidsrc.net sekarang JALAN lewat WebView Interceptor
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
-        
-        var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
-            ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
-            ?: throw ErrorLoadingException("Server sibuk. Coba klik play lagi dalam 5 detik.")
-
+        var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1) ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src") ?: throw ErrorLoadingException("Link Gagal")
         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
 
-        // Buka Iframe Cloudnestra/Vsembed
         var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = universalBypass).text
         var finalReferer = iframeUrl
 
-        // --- 3. BONGKAR JEBAKAN JAVASCRIPT ---
         if (!finalHtml.contains("H4sI")) {
             val hiddenMatch = Regex("""['"](/prorcp/[^'"]+|/rcp/[^'"]+)['"]""").find(finalHtml)
             if (hiddenMatch != null) {
                 val domain = "https://" + (if (finalReferer.contains("vsembed.ru")) "cloudnestra.com" else finalReferer.substringAfter("://").substringBefore("/"))
                 val hiddenUrl = domain + hiddenMatch.groupValues[1]
-                
-                // Tembak link tersembunyi
                 finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = universalBypass).text
                 finalReferer = hiddenUrl
             }
         }
 
-        // --- 4. EKSTRAKSI HASIL AKHIR ---
-        val hashMatch = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""").find(finalHtml)
-            ?: throw ErrorLoadingException("Gagal memuat video. Pastikan internet stabil dan coba lagi.")
-
+        val hashMatch = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""").find(finalHtml) ?: throw ErrorLoadingException("Gagal Cloudflare")
         val teksRahasia = hashMatch.groupValues[1].replace("\\/", "/")
-        val host = "https://tmstr2.neonhorizonworkshops.com/pl/" 
-        val m3u8Url = "$host$teksRahasia"
-
-        callback.invoke(
-            newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
-                this.referer = finalReferer
-            }
-        )
+        callback.invoke(newExtractorLink(this.name, "VidSrc HD", "https://tmstr2.neonhorizonworkshops.com/pl/$teksRahasia", ExtractorLinkType.M3U8) { this.referer = finalReferer })
         return true
     }
 }
 
-// DATA CLASSES UTAMA
-data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
-data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?)
+// DATA CLASSES
+data class TmdbResponse(@JsonProperty("results") val results: List<TmdbItem>)
+data class TmdbItem(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String?, @JsonProperty("name") val name: String?, @JsonProperty("poster_path") val posterPath: String?)
 data class TmdbDetailResponse(
-    @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?,
-    @JsonProperty("backdrop_path") val backdropPath: String?, @JsonProperty("overview") val overview: String?,
-    @JsonProperty("release_date") val releaseDate: String?, @JsonProperty("runtime") val runtime: Int?,
-    @JsonProperty("vote_average") val voteAverage: Double?
+    @JsonProperty("title") val title: String?, @JsonProperty("name") val name: String?, @JsonProperty("poster_path") val posterPath: String?,
+    @JsonProperty("overview") val overview: String?, @JsonProperty("release_date") val releaseDate: String?, @JsonProperty("first_air_date") val firstAirDate: String?,
+    @JsonProperty("seasons") val seasons: List<TmdbSeason>?
 )
+data class TmdbSeason(@JsonProperty("season_number") val seasonNumber: Int, @JsonProperty("episode_count") val episodeCount: Int)
+data class TmdbSeasonResponse(@JsonProperty("episodes") val episodes: List<TmdbEpisode>)
+data class TmdbEpisode(@JsonProperty("episode_number") val episodeNumber: Int, @JsonProperty("name") val name: String)
