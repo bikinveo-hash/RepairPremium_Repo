@@ -2,21 +2,18 @@ package com.adixtream
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.* // Import penting agar ExtractorLink dikenali
+import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup // Import tambahan untuk membongkar HTML
 
 class VidSrcProvider : MainAPI() {
     override var name = "VidSrc AdiXtream"
     override var mainUrl = "https://vidsrc.net"
-    override var supportedTypes = setOf(TvType.Movie) // Fokus ke film
+    override var supportedTypes = setOf(TvType.Movie)
     override var lang = "en"
     override val hasMainPage = true
 
-    // API Key TMDB milikmu
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    /**
-     * FUNGSI 1: HALAMAN DEPAN
-     */
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -29,7 +26,7 @@ class VidSrcProvider : MainAPI() {
         val filmList = response.results.map { movie ->
             newMovieSearchResponse(
                 name = movie.title,
-                url = movie.id.toString(), // Menyimpan ID TMDB
+                url = movie.id.toString(),
                 type = TvType.Movie
             ) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -40,9 +37,6 @@ class VidSrcProvider : MainAPI() {
         return newHomePageResponse(homePageLists)
     }
 
-    /**
-     * FUNGSI 2: PENCARIAN
-     */
     override suspend fun search(query: String): List<SearchResponse> {
         val safeQuery = query.replace(" ", "%20")
         val url = "https://api.themoviedb.org/3/search/movie?api_key=$tmdbApiKey&query=$safeQuery&language=en-US"
@@ -52,7 +46,7 @@ class VidSrcProvider : MainAPI() {
         return response.results.map { movie ->
             newMovieSearchResponse(
                 name = movie.title,
-                url = movie.id.toString(), // Menyimpan ID TMDB
+                url = movie.id.toString(),
                 type = TvType.Movie
             ) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -60,15 +54,8 @@ class VidSrcProvider : MainAPI() {
         }
     }
 
-    /**
-     * FUNGSI 3: HALAMAN DETAIL (LOAD)
-     * Sudah diperbaiki agar memotong awalan https://vidsrc.net/
-     */
     override suspend fun load(url: String): LoadResponse {
-        // url yang masuk bentuknya: "https://vidsrc.net/83533"
-        // Kita potong untuk mengambil angka murninya saja
         val tmdbId = url.substringAfterLast("/") 
-        
         val detailUrl = "https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&language=en-US"
         
         val movieDetail = app.get(detailUrl).parsedSafe<TmdbDetailResponse>() 
@@ -76,9 +63,9 @@ class VidSrcProvider : MainAPI() {
 
         return newMovieLoadResponse(
             name = movieDetail.title,
-            url = url, // Biarkan pakai url asli untuk riwayat
+            url = url, 
             type = TvType.Movie,
-            dataUrl = tmdbId // ID MURNI dilempar ke fungsi loadLinks
+            dataUrl = tmdbId 
         ) {
             this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
             this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
@@ -89,78 +76,95 @@ class VidSrcProvider : MainAPI() {
         }
     }
 
-    /**
-     * FUNGSI 4: PEMUTARAN VIDEO (LOAD LINKS)
-     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data berisi ID TMDB murni dari dataUrl fungsi load
-        val tmdbId = data 
-        val baseUrl = "$mainUrl/embed/movie?tmdb=$tmdbId"
+        // Ambil ID TMDB dengan aman
+        val tmdbId = data.substringAfterLast("/") 
+        
+        // Gunakan format URL terbaru VidSrc
+        val baseUrl = "$mainUrl/embed/movie/$tmdbId"
 
         // --- BUKA LAPISAN 1 (VidSrc) ---
         val response1 = app.get(baseUrl).text
-        val iframe1 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1) ?: return false
+        var iframe1 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
+        if (iframe1 == null) {
+             iframe1 = Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
+        }
+        if (iframe1.isNullOrEmpty()) throw ErrorLoadingException("Server Error: Iframe VidSrc (Lapis 1) tidak ditemukan.")
+        
         val iframeUrl1 = if (iframe1.startsWith("//")) "https:$iframe1" else iframe1
 
-        // --- BUKA LAPISAN 2 (vsembed.ru) ---
+        // --- BUKA LAPISAN 2 (vsembed.ru dll) ---
         val response2 = app.get(iframeUrl1, referer = baseUrl).text
-        val iframe2 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response2)?.groupValues?.get(1)
+        var iframe2 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response2)?.groupValues?.get(1)
+        if (iframe2 == null) {
+             iframe2 = Jsoup.parse(response2).selectFirst("iframe")?.attr("src")
+        }
         
-        // --- BUKA LAPISAN 3 (cloudnestra.com) ---
         var finalReferer = iframeUrl1
-        val finalHtml = if (iframe2 != null) {
+        var finalHtml = response2
+        
+        if (!iframe2.isNullOrEmpty()) {
             val iframeUrl2 = if (iframe2.startsWith("//")) "https:$iframe2" else iframe2
             finalReferer = iframeUrl2
-            app.get(iframeUrl2, referer = iframeUrl1).text
-        } else {
-            response2 
+            finalHtml = app.get(iframeUrl2, referer = iframeUrl1).text
         }
 
-        // --- EKSTRAK SUBTITLE (.vtt) ---
+        // Jika Lapisan 2 (Cloudnestra) disembunyikan menggunakan Javascript
+        if (!finalHtml.contains("H4sI")) {
+            val hiddenUrl = Regex("""(https?://[^"'\s]*(?:cloudnestra|rcp|prorcp)[^"'\s]*)""").find(finalHtml)?.groupValues?.get(1)
+            if (hiddenUrl != null) {
+                finalReferer = hiddenUrl
+                finalHtml = app.get(hiddenUrl, referer = iframeUrl1).text
+            }
+        }
+
+        // --- EKSTRAKSI SUBTITLE (.vtt) ---
         val subRegex = Regex("""(https?://[^"'\s]+\.vtt[^"'\s]*)""")
         subRegex.findAll(finalHtml).forEach { match ->
             subtitleCallback.invoke(
                 newSubtitleFile(
                     lang = "English",
-                    url = match.value
+                    url = match.value.replace("\\/", "/") // Bersihkan URL jika ada escape character
                 )
             )
         }
 
-        // --- EKSTRAK VIDEO (H4sI...m3u8) ---
-        val hashRegex = Regex("""(H4sI[^"'\s]+m3u8)""")
+        // --- EKSTRAKSI VIDEO (H4sI...m3u8) ---
+        val hashRegex = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""")
         val matchResult = hashRegex.find(finalHtml)
 
-        if (matchResult != null) {
-            val teksRahasia = matchResult.value
-            val host = "https://tmstr2.neonhorizonworkshops.com/pl/"
-            val m3u8Url = "$host$teksRahasia"
-
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = "VidSrc HD",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = finalReferer
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            return true
+        if (matchResult == null) {
+            // Tampilkan error cerdas ke layar jika gagal
+            throw ErrorLoadingException("Enkripsi gagal dibongkar (H4sI tidak ditemukan). Coba film lain.")
         }
-        return false
+
+        val teksRahasia = matchResult.value.replace("\\/", "/")
+        
+        // Pelacak Otomatis Domain Host (Mengantisipasi kalau neonhorizonworkshops diubah oleh mereka)
+        val hostRegex = Regex("""(https?://[^"'\s]+/pl/)""")
+        val dynamicHost = hostRegex.find(finalHtml)?.groupValues?.get(1) ?: "https://tmstr2.neonhorizonworkshops.com/pl/"
+        
+        val m3u8Url = "$dynamicHost$teksRahasia"
+
+        callback.invoke(
+            newExtractorLink(
+                source = this.name,
+                name = "VidSrc HD",
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = finalReferer
+                this.quality = Qualities.Unknown.value
+            }
+        )
+        return true
     }
 }
-
-// ==========================================
-// DATA CLASS UNTUK MEMBACA JSON DARI TMDB
-// ==========================================
 
 data class TmdbResponse(
     @JsonProperty("results") val results: List<TmdbMovie>
