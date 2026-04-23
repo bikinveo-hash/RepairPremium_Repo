@@ -15,7 +15,6 @@ class VidSrcProvider : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
 
-    // API Key TMDB 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -68,129 +67,142 @@ class VidSrcProvider : MainAPI() {
         val tmdbId = data.substringAfterLast("/") 
         val baseUrl = "$mainUrl/embed/movie/$tmdbId"
 
-        // --- 1. AMBIL SUBTITLE INDONESIA DARI OPENSUBTITLES + CLOUDNESTRA ---
-        // Kita bungkus try-catch agar jika server subtitle down, video tetap bisa diputar
+        // --- 1. TAHAP SUBTITLE ---
         try {
-            // A. Dapatkan IMDB ID dari TMDB
             val extUrl = "https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=$tmdbApiKey"
-            val extRes = app.get(extUrl).parsedSafe<TmdbExternalIds>()
-            val imdbIdFull = extRes?.imdbId
+            val extRes = app.get(extUrl).text
             
-            if (imdbIdFull != null) {
-                val imdbIdNum = imdbIdFull.removePrefix("tt") // Hapus 'tt' di awal
+            val imdbIdMatch = Regex(""""imdb_id"\s*:\s*"([^"]+)"""").find(extRes)
+            val imdbIdFull = imdbIdMatch?.groupValues?.get(1)
+            
+            if (imdbIdFull != null && imdbIdFull.startsWith("tt")) {
+                val imdbIdNum = imdbIdFull.removePrefix("tt") 
                 
-                // B. Cari Subtitle Indonesia di OpenSubtitles
                 val opsUrl = "https://rest.opensubtitles.org/search/imdbid-$imdbIdNum/sublanguageid-ind"
                 val opsHeaders = mapOf("User-Agent" to "Mozilla/5.0", "X-User-Agent" to "trailers.to-UA")
-                val opsRes = app.get(opsUrl, headers = opsHeaders).parsedSafe<List<OpsSub>>()
+                val opsResText = app.get(opsUrl, headers = opsHeaders).text
                 
-                if (!opsRes.isNullOrEmpty()) {
-                    val sub = opsRes.first()
-                    val subUrl = sub.subDownloadLink
-                    val subId = sub.idSubtitleFile
-                    val subEnc = sub.subEncoding ?: "UTF-8"
+                val subUrlMatch = Regex(""""SubDownloadLink"\s*:\s*"([^"]+)"""").find(opsResText)
+                val subIdMatch = Regex(""""IDSubtitleFile"\s*:\s*"([^"]+)"""").find(opsResText)
+                val subEncMatch = Regex(""""SubEncoding"\s*:\s*"([^"]+)"""").find(opsResText)
+                
+                if (subUrlMatch != null && subIdMatch != null) {
+                    val subUrl = subUrlMatch.groupValues[1].replace("\\/", "/")
+                    val subId = subIdMatch.groupValues[1]
+                    val subEnc = subEncMatch?.groupValues?.get(1) ?: "UTF-8"
                     
-                    if (subUrl != null && subId != null) {
-                        // C. Download file .gz biner
-                        val gzBytes = app.get(subUrl, headers = mapOf("User-Agent" to "Mozilla/5.0")).okhttpResponse.body?.bytes()
-                        
-                        if (gzBytes != null) {
-                            // D. Upload ke Cloudnestra untuk diekstrak (Jurus Rahasia)
-                            val requestBody = MultipartBody.Builder()
-                                .setType(MultipartBody.FORM)
-                                .addFormDataPart("sub_data", "blob", gzBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
-                                .addFormDataPart("sub_id", subId)
-                                .addFormDataPart("sub_enc", subEnc)
-                                .addFormDataPart("sub_src", "ops")
-                                .addFormDataPart("subformat", "srt")
-                                .build()
-                                
-                            val extractRes = app.post(
-                                "https://cloudnestra.com/get_sub_url",
-                                headers = mapOf("Origin" to "https://cloudnestra.com", "Referer" to "https://cloudnestra.com/"),
-                                requestBody = requestBody
-                            ).text
+                    val gzBytes = app.get(subUrl, headers = mapOf("User-Agent" to "Mozilla/5.0")).okhttpResponse.body?.bytes()
+                    
+                    if (gzBytes != null) {
+                        val requestBody = MultipartBody.Builder()
+                            .setType(MultipartBody.FORM)
+                            .addFormDataPart("sub_data", "blob", gzBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
+                            .addFormDataPart("sub_id", subId)
+                            .addFormDataPart("sub_enc", subEnc)
+                            .addFormDataPart("sub_src", "ops")
+                            .addFormDataPart("subformat", "srt")
+                            .build()
                             
-                            // E. Menangkap hasil /sub/ops-...srt dan mengirim ke Cloudstream
-                            if (extractRes.startsWith("/sub/")) {
-                                val finalSubUrl = "https://cloudnestra.com$extractRes"
-                                subtitleCallback.invoke(
-                                    newSubtitleFile("Indonesia", finalSubUrl)
-                                )
-                            }
+                        val extractRes = app.post(
+                            "https://cloudnestra.com/get_sub_url",
+                            headers = mapOf("Origin" to "https://cloudnestra.com", "Referer" to "https://cloudnestra.com/"),
+                            requestBody = requestBody
+                        ).text
+                        
+                        if (extractRes.startsWith("/sub/")) {
+                            val finalSubUrl = "https://cloudnestra.com$extractRes"
+                            subtitleCallback.invoke(
+                                newSubtitleFile("Indonesia", finalSubUrl)
+                            )
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace() // Abaikan jika error agar video tetap jalan
+            e.printStackTrace() 
         }
 
-        // --- 2. BUKA LAPISAN VIDEO (VidSrc) ---
-        val response1 = app.get(baseUrl).text
+        // --- 2. TAHAP BUKA VIDEO ---
+        // KITA GUNAKAN CLOUDFLARE INTERCEPTOR (Bawaan Cloudstream) DI SINI
+        val response1 = app.get(baseUrl, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
         var iframeUrl1 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
-        if (iframeUrl1 == null) iframeUrl1 = Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
-        if (iframeUrl1.isNullOrEmpty()) throw ErrorLoadingException("Server Error: Iframe VidSrc (Lapis 1) tidak ditemukan.")
+        if (iframeUrl1 == null) {
+            iframeUrl1 = Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
+        }
+        
+        if (iframeUrl1.isNullOrEmpty()) throw ErrorLoadingException("Server Error: Iframe Lapis 1 tidak ditemukan.")
         iframeUrl1 = if (iframeUrl1.startsWith("//")) "https:$iframeUrl1" else iframeUrl1
 
         var finalHtml = ""
         var finalReferer = baseUrl
 
-        // --- 3. DETEKSI PINTAR: VSEMBED ATAU LANGSUNG CLOUDNESTRA? ---
+        // --- 3. DETEKSI PINTAR: VSEMBED ATAU CLOUDNESTRA? ---
         if (iframeUrl1.contains("cloudnestra") || iframeUrl1.contains("rcp")) {
             finalReferer = iframeUrl1
-            finalHtml = app.get(iframeUrl1, referer = baseUrl).text
+            // Panggil WebViewResolver lagi saat masuk ke Cloudnestra
+            finalHtml = app.get(iframeUrl1, referer = baseUrl, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
         } else {
             val response2 = app.get(iframeUrl1, referer = baseUrl).text
             var iframeUrl2 = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response2)?.groupValues?.get(1)
-            if (iframeUrl2 == null) iframeUrl2 = Jsoup.parse(response2).selectFirst("iframe")?.attr("src")
+            if (iframeUrl2 == null) {
+                iframeUrl2 = Jsoup.parse(response2).selectFirst("iframe")?.attr("src")
+            }
 
             if (!iframeUrl2.isNullOrEmpty()) {
                 iframeUrl2 = if (iframeUrl2.startsWith("//")) "https:$iframeUrl2" else iframeUrl2
                 finalReferer = iframeUrl2
-                finalHtml = app.get(iframeUrl2, referer = iframeUrl1).text
+                // Panggil WebViewResolver lagi saat masuk ke Cloudnestra
+                finalHtml = app.get(iframeUrl2, referer = iframeUrl1, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
             } else {
                 finalHtml = response2
                 finalReferer = iframeUrl1
             }
         }
 
-        // --- 4. BONGKAR JEBAKAN TOMBOL PLAY (JAVASCRIPT LAZY LOAD) ---
+        // --- 4. BONGKAR JEBAKAN JAVASCRIPT ---
         if (!finalHtml.contains("H4sI")) {
             val hiddenPathMatch = Regex("""['"](/prorcp/[^'"]+|/rcp/[^'"]+)['"]""").find(finalHtml)
+            
             if (hiddenPathMatch != null) {
                 val hiddenPath = hiddenPathMatch.groupValues[1]
-                val domain = finalReferer.substringBefore("/rcp").substringBefore("/prorcp")
+                val domain = if (finalReferer.contains("cloudnestra")) {
+                    finalReferer.substringBefore("/rcp").substringBefore("/prorcp")
+                } else {
+                    "https://cloudnestra.com"
+                }
+                
                 val hiddenUrl = domain + hiddenPath
+                
+                // Gunakan WebViewResolver untuk mengeksekusi link rahasia JS!
+                finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
                 finalReferer = hiddenUrl
-                finalHtml = app.get(hiddenUrl, referer = finalReferer).text
             } else {
                 val hiddenUrl = Regex("""(https?://[^"'\s]*(?:cloudnestra|rcp|prorcp)[^"'\s]*)""").find(finalHtml)?.groupValues?.get(1)
                 if (hiddenUrl != null) {
+                    finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = WebViewResolver(Regex("""cloudnestra\.com"""))).text
                     finalReferer = hiddenUrl
-                    finalHtml = app.get(hiddenUrl, referer = finalReferer).text
                 }
             }
         }
 
-        // Subtitle Inggris Bawaan (Opsional)
-        val subRegex = Regex("""(https?://[^"'\s]+\.vtt[^"'\s]*)""")
-        subRegex.findAll(finalHtml).forEach { match ->
-            subtitleCallback.invoke(newSubtitleFile("English (Auto)", match.value.replace("\\/", "/")))
-        }
-
-        // --- 5. EKSTRAKSI VIDEO (H4sI...m3u8) ---
+        // --- 5. EKSTRAKSI VIDEO (H4sI...) ---
         val hashRegex = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""")
         val matchResult = hashRegex.find(finalHtml)
-        if (matchResult == null) throw ErrorLoadingException("Error: Sandi Video (H4sI) tidak ditemukan.")
+
+        if (matchResult == null) {
+            throw ErrorLoadingException("Error: Link video tidak ditemukan atau diblokir oleh Cloudflare.")
+        }
 
         val teksRahasia = matchResult.value.replace("\\/", "/")
         var dynamicHost = Regex("""(https?://[^"'\s]+/pl/)""").find(finalHtml)?.groupValues?.get(1) ?: "https://tmstr2.neonhorizonworkshops.com/pl/"
-        if (dynamicHost.contains("{v1}")) dynamicHost = "https://tmstr2.neonhorizonworkshops.com/pl/"
+            
+        if (dynamicHost.contains("{v1}")) {
+            dynamicHost = "https://tmstr2.neonhorizonworkshops.com/pl/"
+        }
         
         val m3u8Url = "$dynamicHost$teksRahasia"
 
-        // KIRIM VIDEO KE CLOUDSTREAM!
+        // KIRIM VIDEO
         callback.invoke(
             newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                 this.referer = finalReferer
@@ -200,23 +212,3 @@ class VidSrcProvider : MainAPI() {
         return true
     }
 }
-
-// ==========================================
-// DATA CLASS (CETAKAN JSON)
-// ==========================================
-data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
-data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?)
-data class TmdbDetailResponse(
-    @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?,
-    @JsonProperty("backdrop_path") val backdropPath: String?, @JsonProperty("overview") val overview: String?,
-    @JsonProperty("release_date") val releaseDate: String?, @JsonProperty("runtime") val runtime: Int?,
-    @JsonProperty("vote_average") val voteAverage: Double?
-)
-
-// Data Class Baru untuk Konversi ID & OpenSubtitles
-data class TmdbExternalIds(@JsonProperty("imdb_id") val imdbId: String?)
-data class OpsSub(
-    @JsonProperty("SubDownloadLink") val subDownloadLink: String?,
-    @JsonProperty("IDSubtitleFile") val idSubtitleFile: String?,
-    @JsonProperty("SubEncoding") val subEncoding: String?
-)
