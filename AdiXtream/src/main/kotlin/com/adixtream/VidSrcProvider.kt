@@ -10,7 +10,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class VidSrcProvider : MainAPI() {
-    override var name = "VidSrc AdiXtream"
+    override var name = "AdiXtream"
     override var mainUrl = "https://vidsrc.net"
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override var lang = "en"
