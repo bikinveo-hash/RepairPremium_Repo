@@ -63,7 +63,7 @@ class VidSrcProvider : MainAPI() {
         val tmdbId = data.substringAfterLast("/") 
         val baseUrl = "$mainUrl/embed/movie/$tmdbId"
 
-        // --- 1. AMBIL SUBTITLE (LOGIKA TETAP SAMA) ---
+        // --- 1. TAHAP SUBTITLE (INI SUDAH BERHASIL DI LOG!) ---
         try {
             val extRes = app.get("https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=$tmdbApiKey").text
             val imdbId = Regex(""""imdb_id"\s*:\s*"([^"]+)"""").find(extRes)?.groupValues?.get(1)?.removePrefix("tt")
@@ -75,12 +75,13 @@ class VidSrcProvider : MainAPI() {
                 val subId = Regex(""""IDSubtitleFile"\s*:\s*"([^"]+)"""").find(opsRes)?.groupValues?.get(1)
 
                 if (subUrl != null && subId != null) {
-                    val gzBytes = app.get(subUrl).okhttpResponse.body?.bytes()
+                    val gzBytes = app.get(subUrl, headers = mapOf("User-Agent" to "Mozilla/5.0")).okhttpResponse.body?.bytes()
                     if (gzBytes != null) {
                         val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
                             .addFormDataPart("sub_data", "blob", gzBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
                             .addFormDataPart("sub_id", subId).addFormDataPart("sub_enc", "UTF-8")
-                            .addFormDataPart("sub_src", "ops").addFormDataPart("subformat", "srt").build()
+                            .addFormDataPart("sub_src", "ops")
+                            .addFormDataPart("subformat", "srt").build()
                         val extractRes = app.post("https://cloudnestra.com/get_sub_url", requestBody = requestBody).text
                         if (extractRes.startsWith("/sub/")) subtitleCallback.invoke(newSubtitleFile("Indonesia", "https://cloudnestra.com$extractRes"))
                     }
@@ -88,39 +89,42 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // --- 2. TAHAP VIDEO (WEBVIEW BYPASS CLOUDFLARE) ---
-        // Mencari Iframe pertama
-        val response1 = app.get(baseUrl).text
+        // --- 2. TAHAP VIDEO (SISTEM BYPASS CLOUDFLARE DIPERKUAT) ---
+        // Regex diperluas agar mencakup vidsrc, cloudnestra, vsembed, dan rcp
+        val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
+
+        // Request pertama ke vidsrc.net sekarang JALAN lewat WebView Interceptor
+        val response1 = app.get(baseUrl, interceptor = universalBypass).text
+        
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
             ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
-            ?: throw ErrorLoadingException("Iframe tidak ditemukan")
+            ?: throw ErrorLoadingException("Server sibuk. Coba klik play lagi dalam 5 detik.")
 
         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
 
-        // Bypass Cloudflare pada Iframe Cloudnestra/Vsembed
-        val cloudflareBypass = WebViewResolver(Regex("""cloudnestra\.com|vsembed\.ru"""))
-        var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = cloudflareBypass).text
+        // Buka Iframe Cloudnestra/Vsembed
+        var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = universalBypass).text
         var finalReferer = iframeUrl
 
-        // --- 3. BONGKAR JEBAKAN JAVASCRIPT (SESUAI HASIL KONSOL) ---
+        // --- 3. BONGKAR JEBAKAN JAVASCRIPT ---
         if (!finalHtml.contains("H4sI")) {
             val hiddenMatch = Regex("""['"](/prorcp/[^'"]+|/rcp/[^'"]+)['"]""").find(finalHtml)
             if (hiddenMatch != null) {
                 val domain = "https://" + (if (finalReferer.contains("vsembed.ru")) "cloudnestra.com" else finalReferer.substringAfter("://").substringBefore("/"))
                 val hiddenUrl = domain + hiddenMatch.groupValues[1]
                 
-                // Tembak link tersembunyi dengan referer yang benar
-                finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = cloudflareBypass).text
+                // Tembak link tersembunyi
+                finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = universalBypass).text
                 finalReferer = hiddenUrl
             }
         }
 
         // --- 4. EKSTRAKSI HASIL AKHIR ---
         val hashMatch = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""").find(finalHtml)
-            ?: throw ErrorLoadingException("Video gagal dimuat (Cloudflare Block)")
+            ?: throw ErrorLoadingException("Gagal memuat video. Pastikan internet stabil dan coba lagi.")
 
         val teksRahasia = hashMatch.groupValues[1].replace("\\/", "/")
-        val host = "https://tmstr2.neonhorizonworkshops.com/pl/" // Sesuai hasil BINGO konsolmu
+        val host = "https://tmstr2.neonhorizonworkshops.com/pl/" 
         val m3u8Url = "$host$teksRahasia"
 
         callback.invoke(
@@ -132,7 +136,7 @@ class VidSrcProvider : MainAPI() {
     }
 }
 
-// DATA CLASSES
+// DATA CLASSES UTAMA
 data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
 data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String, @JsonProperty("poster_path") val posterPath: String?)
 data class TmdbDetailResponse(
