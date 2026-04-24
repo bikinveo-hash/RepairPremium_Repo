@@ -19,9 +19,7 @@ class MovieboxProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FUNGSI TOKEN DIHAPUS - Server ternyata membiarkan kita memutar video walau tanpa token!
-    
-    // Header bersih dengan penyamaran Browser dan Referer dinamis
+    // Header dengan penyamaran Browser dan Referer dinamis
     private fun getApiHeaders(customReferer: String = "$mainUrl/"): Map<String, String> {
         return mapOf(
             "Accept" to "application/json",
@@ -119,12 +117,8 @@ class MovieboxProvider : MainAPI() {
         }
         
         return if (res.subjectType == 1) { 
-            // PERBAIKAN: Membaca parameter episode dan season secara dinamis dari server
-            val seasonData = wrapper.resource?.seasons?.firstOrNull()
-            val realSe = seasonData?.se ?: 0
-            val realEp = if (realSe == 0) 0 else 1 
-
-            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, realSe, realEp).toJson()) {
+            // FINAL FIX: Movie (Type 1) SELALU menggunakan 0, 0 sesuai hasil Termux
+            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 0, 0).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
@@ -178,10 +172,10 @@ class MovieboxProvider : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
         
-        // Rute Play ke netfilm.world (Domain utama)
+        // FINAL FIX: API Play ditembak ke mainUrl (netfilm.world)
         val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
-        // Referer Spesifik yang panjang (Mencegah penolakan server)
+        // FINAL FIX: Menggunakan Referer spesifik yang panjang agar server tidak menolak
         val specificReferer = "$mainUrl/spa/videoPlayPage/movies/${linkData.detailPath}?id=${linkData.subjectId}&type=/movie/detail&detailSe=&detailEp=&lang=en"
         val reqHeaders = getApiHeaders(specificReferer)
         
@@ -205,7 +199,7 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
-            // Subtitle di-host di apiBaseUrl (Domain khusus API)
+            // Subtitle tetap di apiBaseUrl (aoneroom)
             if (stream == streams.firstOrNull()) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
                 app.get(captionUrl, headers = reqHeaders).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
