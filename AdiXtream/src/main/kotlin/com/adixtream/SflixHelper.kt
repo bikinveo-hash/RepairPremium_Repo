@@ -79,15 +79,18 @@ object SflixHelper {
             playRes?.data?.streams?.forEach { stream ->
                 val videoUrl = stream.url ?: return@forEach
                 val qualityStr = stream.resolutions ?: ""
+                
+                // BAGIAN YANG DIPERBAIKI (referer dan quality masuk ke dalam {})
                 callback.invoke(
                     newExtractorLink(
                         source = "Sflix API",
                         name = "Sflix ${stream.format ?: "MP4"}",
                         url = videoUrl,
-                        referer = "$sflixMainUrl/",
-                        quality = getQualityFromName("${qualityStr}p"),
                         type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    )
+                    ) {
+                        this.referer = "$sflixMainUrl/"
+                        this.quality = getQualityFromName("${qualityStr}p")
+                    }
                 )
             }
 
