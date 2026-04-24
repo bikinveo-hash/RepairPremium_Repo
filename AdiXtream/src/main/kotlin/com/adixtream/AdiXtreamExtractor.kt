@@ -11,6 +11,13 @@ import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
+// Import penting untuk kriptografi Adimoviebox2
+import android.net.Uri
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import android.annotation.SuppressLint
+
 object AdiXtreamExtractor : AdiXtream() {
 
     // ================== EKSTRAKTOR VIDSRC ==================
@@ -118,6 +125,7 @@ object AdiXtreamExtractor : AdiXtream() {
         val apiUrl = "https://api3.aoneroom.com"
         val (brand, model) = Adimoviebox2Helper.randomBrandModel()
 
+        // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$title"}"""
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -133,6 +141,7 @@ object AdiXtreamExtractor : AdiXtream() {
 
         val mainSubjectId = matchedSubject.subjectId ?: return
         
+        // 2. Mengambil Detail dan Audio (Dubs)
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
@@ -160,6 +169,7 @@ object AdiXtreamExtractor : AdiXtream() {
         val s = season ?: 0
         val e = episode ?: 0
 
+        // 3. Mengambil Link Video
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
             val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
@@ -179,6 +189,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 })
 
                 if (stream.id != null) {
+                    // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -186,6 +197,7 @@ object AdiXtreamExtractor : AdiXtream() {
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
+                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -198,7 +210,7 @@ object AdiXtreamExtractor : AdiXtream() {
     }
 
     private object Adimoviebox2Helper {
-        private val secretKeyDefault = android.util.Base64.decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==", android.util.Base64.DEFAULT)
+        private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
         private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("") 
 
         fun randomBrandModel(): Pair<String, String> {
@@ -224,20 +236,21 @@ object AdiXtreamExtractor : AdiXtream() {
             )
         }
         
-        private fun md5(input: ByteArray): String { return java.security.MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
+        private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
         
         private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" }
         
-        @android.annotation.SuppressLint("UseKtx")
+        @SuppressLint("UseKtx")
         private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
-            val parsed = android.net.Uri.parse(url); val path = parsed.path ?: ""; 
+            val parsed = Uri.parse(url); val path = parsed.path ?: ""; 
             val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
             val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
             val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; val bodyLength = bodyBytes?.size?.toString() ?: ""
             val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
-            val mac = javax.crypto.Mac.getInstance("HmacMD5"); mac.init(javax.crypto.spec.SecretKeySpec(secretKeyDefault, "HmacMD5")); 
-            val signature = android.util.Base64.encodeToString(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)), android.util.Base64.NO_WRAP)
+            val secretBytes = base64DecodeArray(secretKeyDefault); val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
+            val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
+        private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
     }
 }
