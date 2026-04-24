@@ -24,6 +24,6 @@ cloudstream {
     )
 
 
-    iconUrl = "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png"
+    iconUrl = "https://raw.githubusercontent.com/michat88/Zaneta/main/Icons/AdiXtream.png"
 
 }
