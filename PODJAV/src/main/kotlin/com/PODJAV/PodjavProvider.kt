@@ -30,7 +30,6 @@ class PodjavProvider : MainAPI() {
 
     /**
      * HELPER: Mengubah elemen HTML daftar film menjadi SearchResponse
-     * (DIUPDATE UNTUK TEMA TAILWIND BARU)
      */
     private fun Element.toSearchResult(): SearchResponse? {
         // Abaikan elemen jika itu adalah iklan / banner
@@ -59,7 +58,6 @@ class PodjavProvider : MainAPI() {
 
     /**
      * 1. HALAMAN UTAMA & KATEGORI
-     * (DIUPDATE UNTUK TEMA TAILWIND BARU)
      */
     override suspend fun getMainPage(
         page: Int,
@@ -105,7 +103,6 @@ class PodjavProvider : MainAPI() {
 
     /**
      * 2. PENCARIAN
-     * (DIUPDATE UNTUK TEMA TAILWIND BARU)
      */
     override suspend fun search(query: String): List<SearchResponse>? {
         val url = "$mainUrl/?s=$query"
@@ -117,7 +114,6 @@ class PodjavProvider : MainAPI() {
 
     /**
      * 3. DETAIL FILM
-     * (DIUPDATE UNTUK TEMA TAILWIND BARU)
      */
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
@@ -166,7 +162,6 @@ class PodjavProvider : MainAPI() {
 
     /**
      * 4. EKSTRAKSI LINK VIDEO & SUBTITLE
-     * (DIUPDATE UNTUK TEMA TAILWIND BARU)
      */
     override suspend fun loadLinks(
         data: String,
@@ -177,43 +172,65 @@ class PodjavProvider : MainAPI() {
         val document = app.get(data).document
 
         // Cari elemen video utama
-        val videoElement = document.selectFirst("#podjavPlayer") ?: return false
+        val videoElement = document.selectFirst("#podjavPlayer")
+        var foundNativeVideo = false
 
-        // 1. Ekstrak Link Video langsung dari JSON data-sources di HTML
-        val dataSourcesRaw = videoElement.attr("data-sources")
-        if (dataSourcesRaw.isNotBlank()) {
-            val sources = AppUtils.parseJson<List<VideoSource>>(dataSourcesRaw)
-            
-            sources.forEach { source ->
-                if (source.url.isNotBlank()) {
-                    callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = source.label ?: "HD Stream",
-                            url = source.url,
-                            referer = mainUrl,
-                            quality = Qualities.P720.value,
-                            type = if (source.type == "m3u8" || source.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+        // RENCANA A: Coba ambil dari sistem JSON di tag HTML video
+        if (videoElement != null) {
+            val dataSourcesRaw = videoElement.attr("data-sources")
+            if (dataSourcesRaw.isNotBlank() && dataSourcesRaw != "[]") {
+                val sources = AppUtils.parseJson<List<VideoSource>>(dataSourcesRaw)
+                
+                sources.forEach { source ->
+                    if (source.url.isNotBlank()) {
+                        val isM3u8 = source.type == "m3u8" || source.url.contains(".m3u8", ignoreCase = true)
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                source = this.name,
+                                name = source.label ?: "HD Stream",
+                                url = source.url,
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.P720.value
+                            }
                         )
-                    )
+                        foundNativeVideo = true
+                    }
+                }
+            }
+
+            // Ekstrak Subtitle
+            val dataSubtitlesRaw = videoElement.attr("data-subtitles")
+            if (dataSubtitlesRaw.isNotBlank() && dataSubtitlesRaw != "[]") {
+                val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
+                
+                subtitles.forEach { sub ->
+                    if (sub.src.isNotBlank()) {
+                        subtitleCallback.invoke(
+                            SubtitleFile(
+                                lang = sub.label ?: "Indonesia",
+                                url = sub.src
+                            )
+                        )
+                    }
                 }
             }
         }
 
-        // 2. Ekstrak Subtitle langsung dari JSON data-subtitles di HTML
-        val dataSubtitlesRaw = videoElement.attr("data-subtitles")
-        if (dataSubtitlesRaw.isNotBlank()) {
-            val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
-            
-            subtitles.forEach { sub ->
-                if (sub.src.isNotBlank()) {
-                    subtitleCallback.invoke(
-                        SubtitleFile(
-                            lang = sub.label ?: "Indonesia",
-                            url = sub.src
-                        )
-                    )
-                }
+        // RENCANA B: Jika tidak ada video di Rencana A, cari Iframe
+        if (!foundNativeVideo) {
+            val iframeSrc = document.selectFirst("iframe#podjavEmbed")?.attr("src")
+                ?: document.selectFirst(".player-wrapper iframe")?.attr("src")
+                ?: document.selectFirst("iframe")?.attr("src")
+
+            if (iframeSrc != null && iframeSrc.isNotBlank()) {
+                var fixUrl = iframeSrc
+                if (fixUrl.startsWith("//")) fixUrl = "https:$fixUrl"
+                
+                // Load host eksternal
+                loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
             }
         }
 
@@ -222,7 +239,7 @@ class PodjavProvider : MainAPI() {
 }
 
 /**
- * DATA CLASS: Untuk parsing JSON dari data-sources dan data-subtitles di player baru Podjav
+ * DATA CLASS: Untuk parsing JSON dari data-sources dan data-subtitles
  */
 data class VideoSource(
     @JsonProperty("url") val url: String,
