@@ -9,63 +9,28 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 class MovieboxProvider : MainAPI() {
     override var name = "Moviebox"
     
-    // Domain Utama (Juga digunakan untuk rute API Video Play)
+    // Domain Utama
     override var mainUrl = "https://netfilm.world"
     
-    // Domain Khusus API (Untuk Home, Search, Detail, dan Subtitle)
+    // Domain Khusus API
     private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff" 
     
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private var rawToken: String? = null
-
-    // Fungsi otomatis mencuri token dari sesi Cloudstream
-    private suspend fun initSessionAndGetToken(): String? {
-        if (rawToken != null) return rawToken
-        
-        try {
-            val response = app.get(mainUrl)
-            
-            // 1. Ekstrak dari Cookie
-            val cookieToken = response.cookies["token"] ?: response.cookies["mb_token"]
-            if (!cookieToken.isNullOrBlank()) {
-                rawToken = cookieToken.replace("%22", "").replace("\"", "")
-                return rawToken
-            }
-            
-            // 2. Ekstrak dari HTML (Fallback)
-            val tokenRegex = """eyJhbGciOiJIUzI1NiI[a-zA-Z0-9\-_.]+""".toRegex()
-            val matchResult = tokenRegex.find(response.text)
-            if (matchResult != null) {
-                rawToken = matchResult.value
-                return rawToken
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return null
-    }
-
-    private suspend fun getApiHeaders(): Map<String, String> {
-        val token = initSessionAndGetToken()
-        val headers = mutableMapOf(
+    // FUNGSI TOKEN DIHAPUS - Server ternyata tidak butuh token!
+    
+    // Header bersih dengan penyamaran Browser
+    private fun getApiHeaders(customReferer: String = "$mainUrl/"): Map<String, String> {
+        return mapOf(
             "Accept" to "application/json",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-            "x-source" to "",
             "x-request-lang" to "en",
             "Origin" to mainUrl,
-            "Referer" to "$mainUrl/",
-            // Menyamar sebagai browser PC agar lolos deteksi Anti-Bot
+            "Referer" to customReferer,
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        
-        if (token != null) {
-            headers["Authorization"] = "Bearer $token"
-            headers["Cookie"] = "token=$token; mb_token=$token" 
-        }
-        return headers
     }
 
     // --- DATA CLASSES ---
@@ -154,7 +119,6 @@ class MovieboxProvider : MainAPI() {
         }
         
         return if (res.subjectType == 1) { 
-            // Default season 1 dan episode 1 untuk tipe Film
             newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 1, 1).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
@@ -209,20 +173,15 @@ class MovieboxProvider : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
         
-        // MISTERI TERPECAHKAN: API Play harus ditembak ke mainUrl, bukan apiBaseUrl
+        // Rute Play ke netfilm.world
         val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
-        val reqHeaders = getApiHeaders()
-        var response = app.get(playUrl, headers = reqHeaders)
-        var playRes = response.parsedSafe<PlayResponse>()
+        // Referer Spesifik seperti Termux
+        val specificReferer = "$mainUrl/spa/videoPlayPage/movies/${linkData.detailPath}?id=${linkData.subjectId}&type=/movie/detail&detailSe=&detailEp=&lang=en"
+        val reqHeaders = getApiHeaders(specificReferer)
         
-        // Auto-Retry jika token mati
-        if (playRes?.data?.streams.isNullOrEmpty()) {
-            rawToken = null // Reset token
-            val retryHeaders = getApiHeaders()
-            response = app.get(playUrl, headers = retryHeaders)
-            playRes = response.parsedSafe<PlayResponse>()
-        }
+        val response = app.get(playUrl, headers = reqHeaders)
+        val playRes = tryParseJson<PlayResponse>(response.text)
         
         val streams = playRes?.data?.streams
         if (streams.isNullOrEmpty()) return false
@@ -241,7 +200,7 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
-            // Subtitle di-host di apiBaseUrl
+            // Subtitle
             if (stream == streams.firstOrNull()) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
                 app.get(captionUrl, headers = reqHeaders).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
