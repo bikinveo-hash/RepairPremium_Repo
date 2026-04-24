@@ -2,7 +2,7 @@ package com.Moviebox
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parsedSafe
+import com.lagradost.cloudstream3.utils.* // Memuat ExtractorLink, Qualities, ExtractorLinkType, dll.
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
@@ -15,26 +15,21 @@ class MovieboxProvider : MainAPI() {
 
     private val apiUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
     
-    // Variabel untuk menyimpan token sementara agar tidak perlu request berkali-kali
     private var cachedToken: String? = null
 
-    // Fungsi untuk mengambil token dari Cookie atau HTML Web
     private suspend fun getAuthToken(): String {
-        cachedToken?.let { return it } // Gunakan cache jika sudah ada
+        cachedToken?.let { return it }
 
         try {
-            // Akses halaman utama untuk memancing pembuatan token
             val response = app.get(mainUrl)
-            
-            // 1. Coba ambil dari Cookie (mb_token) berdasarkan temuan kita
             val cookieToken = response.cookies["mb_token"]
+            
             if (cookieToken != null) {
                 val cleanToken = cookieToken.replace("%22", "").replace("\"", "")
                 cachedToken = "Bearer $cleanToken"
                 return cachedToken!!
             }
 
-            // 2. Fallback: Cari menggunakan Regex di dalam kode HTML Nuxt
             val htmlResponse = response.text
             val tokenRegex = """(eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)""".toRegex()
             val matchResult = tokenRegex.find(htmlResponse)
@@ -47,18 +42,16 @@ class MovieboxProvider : MainAPI() {
             e.printStackTrace()
         }
 
-        // 3. Fallback Terakhir: Token statis jika semuanya gagal
         return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMxMjI1Njk0MzU5NDYxNDAyNjQsImF0cCI6MywiZXh0IjoiMTc3NzAzMjk1OCIsImV4cCI6MTc4NDgwODk1OCwiaWF0IjoxNzc3MDMyNjU4fQ.7cMp7KjbAQy-VZMZGgIC2Z9KCHxkyL3Ib_UGhc6vFU8"
     }
 
-    // Fungsi untuk membuat Header secara dinamis
     private suspend fun getApiHeaders(): Map<String, String> {
         return mapOf(
             "accept" to "application/json",
             "x-request-lang" to "en",
             "origin" to mainUrl,
             "referer" to "$mainUrl/",
-            "authorization" to getAuthToken() // Panggil token otomatis di sini
+            "authorization" to getAuthToken() 
         )
     }
 
@@ -108,15 +101,30 @@ class MovieboxProvider : MainAPI() {
         val recs = app.get("$apiUrl/subject/detail-rec?subjectId=${res.subjectId}&page=1&perPage=12", headers = getApiHeaders()).parsedSafe<RecResponse>()?.data?.items?.mapNotNull { it.toSearchResponse() }
         
         return if (res.subjectType == 1) {
-            newMovieLoadResponse(res.title!!, url, TvType.Movie, LinkData(res.subjectId!!, url).toJson()) {
-                posterUrl = res.cover?.url; plot = res.description; year = res.releaseDate?.take(4)?.toIntOrNull(); recommendations = recs
-                res.imdbRatingValue?.let { addScore(it, 10) }
+            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", url).toJson()) {
+                this.posterUrl = res.cover?.url
+                this.plot = res.description
+                this.year = res.releaseDate?.take(4)?.toIntOrNull()
+                this.recommendations = recs
+                // Perbaikan 1: Gunakan properti score terbaru (Score.from)
+                res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
             }
         } else {
-            val episodes = res.episodes?.map { newEpisode(LinkData(res.subjectId!!, url, it.seasonNum ?: 1, it.episodeNum ?: 1).toJson()) { name = it.title; season = it.seasonNum; episode = it.episodeNum } } ?: emptyList()
-            newTvSeriesLoadResponse(res.title!!, url, TvType.TvSeries, episodes) {
-                posterUrl = res.cover?.url; plot = res.description; year = res.releaseDate?.take(4)?.toIntOrNull(); recommendations = recs
-                res.imdbRatingValue?.let { addScore(it, 10) }
+            val episodes = res.episodes?.map { 
+                newEpisode(LinkData(res.subjectId ?: "", url, it.seasonNum ?: 1, it.episodeNum ?: 1).toJson()) { 
+                    this.name = it.title
+                    this.season = it.seasonNum
+                    this.episode = it.episodeNum 
+                } 
+            } ?: emptyList()
+            
+            newTvSeriesLoadResponse(res.title ?: "", url, TvType.TvSeries, episodes) {
+                this.posterUrl = res.cover?.url
+                this.plot = res.description
+                this.year = res.releaseDate?.take(4)?.toIntOrNull()
+                this.recommendations = recs
+                // Perbaikan 1: Gunakan properti score terbaru (Score.from)
+                res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
             }
         }
     }
@@ -124,23 +132,61 @@ class MovieboxProvider : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
         val playRes = app.get("$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        
         playRes?.data?.streams?.forEach { stream ->
-            callback(newExtractorLink(this.name, "${this.name} ${stream.resolutions}p", stream.url!!, mainUrl, getQuality(stream.resolutions)))
+            val streamQuality = getQuality(stream.resolutions)
+            
+            // Perbaikan 2: Format newExtractorLink terbaru sesuai ExtractorApi.kt
+            callback(
+                newExtractorLink(
+                    source = this.name,
+                    name = "${this.name} ${stream.resolutions}p",
+                    url = stream.url ?: "",
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = streamQuality
+                    this.referer = mainUrl
+                }
+            )
+            
             if (stream == playRes.data.streams.firstOrNull()) {
                 app.get("$apiUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach {
-                    subtitleCallback.invoke(SubtitleFile(it.lanName ?: "Unknown", it.url!!))
+                    // Perbaikan 3: Menggunakan newSubtitleFile agar terhindar dari error deprecated
+                    subtitleCallback.invoke(
+                        newSubtitleFile(it.lanName ?: "Unknown", it.url ?: "")
+                    )
                 }
             }
         }
         return true
     }
 
-    private fun Subject.toSearchResponse() = (if (subjectType == 1) newMovieSearchResponse(title!!, detailPath!!) else newTvSeriesSearchResponse(title!!, detailPath!!)).apply { posterUrl = cover?.url; year = releaseDate?.take(4)?.toIntOrNull() }
+    // Perbaikan 4: Atur year di dalam builder karena interface dasar SearchResponse tidak memiliki atribut year
+    private fun Subject.toSearchResponse(): SearchResponse? {
+        val titleStr = title ?: return null
+        val pathStr = detailPath ?: return null
+        val yearInt = releaseDate?.take(4)?.toIntOrNull()
+        val poster = cover?.url
+
+        return if (subjectType == 1) {
+            newMovieSearchResponse(titleStr, pathStr) {
+                this.posterUrl = poster
+                this.year = yearInt
+            }
+        } else {
+            newTvSeriesSearchResponse(titleStr, pathStr) {
+                this.posterUrl = poster
+                this.year = yearInt
+            }
+        }
+    }
     
-    private fun getQuality(res: String?) = when { 
-        res?.contains("1080") == true -> Qualities.P1080.value
-        res?.contains("720") == true -> Qualities.P720.value
-        res?.contains("480") == true -> Qualities.P480.value
-        else -> Qualities.P360.value 
+    private fun getQuality(res: String?): Int { 
+        return when { 
+            res?.contains("1080") == true -> Qualities.P1080.value
+            res?.contains("720") == true -> Qualities.P720.value
+            res?.contains("480") == true -> Qualities.P480.value
+            else -> Qualities.P360.value 
+        }
     }
 }
