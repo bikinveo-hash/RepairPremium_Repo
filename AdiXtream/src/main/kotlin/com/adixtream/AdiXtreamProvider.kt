@@ -18,7 +18,7 @@ class VidSrcProvider : MainAPI() {
 
     private val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
-    // Kategori Beranda Terbaru (Update: Prime Video & HBO Max Provider Filter)
+    // Kategori Beranda menggunakan API TMDB
     override val mainPage = mainPageOf(
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=id" to "Netflix Indonesia Movies",
         "discover/tv?with_networks=213&with_original_language=id" to "Netflix Indonesia Series",
@@ -26,17 +26,13 @@ class VidSrcProvider : MainAPI() {
         "discover/tv?with_networks=213&with_original_language=ko" to "Netflix Korea Series",
         "discover/movie?with_watch_providers=8&watch_region=ID&with_original_language=en" to "Netflix West Movies",
         "discover/tv?with_networks=213&with_original_language=en" to "Netflix West Series",
-        
         "discover/tv?with_networks=7237&with_original_language=id" to "Viu Indonesia Series",
         "discover/tv?with_networks=3732&with_original_language=id" to "WeTV Indonesia Series",
         "discover/tv?with_networks=3732&with_original_language=ko" to "WeTV Korea Series",
-        
         "discover/movie?with_watch_providers=119&watch_region=ID" to "Prime Video",
         "discover/tv?with_watch_providers=119&watch_region=ID" to "Prime Video Series",
-        
         "discover/movie?with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies",
         "discover/tv?with_networks=49" to "HBO Series",
-        
         "discover/movie?with_companies=2" to "Disney Movies",
         "discover/tv?with_networks=2739" to "Disney Series",
         "discover/movie?with_genres=27&with_original_language=id" to "Horror Indonesia"
@@ -190,6 +186,8 @@ class VidSrcProvider : MainAPI() {
         val isTvSeries = data.contains("/tv/")
         val baseUrl: String
         val tmdbId: String
+        var seasonNum = 0
+        var epNum = 0
         
         if (isTvSeries) {
             val parts = data.split("/")
@@ -197,11 +195,29 @@ class VidSrcProvider : MainAPI() {
             val season = parts[parts.size - 2]
             tmdbId = parts[parts.size - 3]
             baseUrl = "$mainUrl/embed/tv/$tmdbId/$season/$ep"
+            
+            seasonNum = season.toIntOrNull() ?: 0
+            epNum = ep.toIntOrNull() ?: 0
         } else {
             tmdbId = data.substringAfter("/movie/").substringBefore("/")
             baseUrl = "$mainUrl/embed/movie/$tmdbId"
         }
 
+        // --- SOURCE 1: SFLIX HELPER ---
+        try {
+            val titleQuery = if (isTvSeries) {
+                app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()?.name
+            } else {
+                app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()?.title
+            }
+
+            if (titleQuery != null) {
+                // Memanggil asisten Sflix untuk mencari link video alternatif
+                SflixHelper.getLinks(titleQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback)
+            }
+        } catch (e: Exception) { }
+
+        // --- SOURCE 2: VIDSRC + OPENSUBTITLES ---
         try {
             val mediaTypePath = if (isTvSeries) "tv" else "movie"
             val extRes = app.get("https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey").text
@@ -224,11 +240,13 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
+        // Ekstraksi Link dari VidSrc (Embed)
         val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
             ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
-            ?: throw ErrorLoadingException("Server sibuk. Coba klik play lagi dalam 5 detik.")
+            ?: return true // Tetap true karena Sflix mungkin sudah berhasil memberikan link
+
         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
 
         var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = universalBypass).text
@@ -245,15 +263,16 @@ class VidSrcProvider : MainAPI() {
         }
 
         val hashMatch = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""").find(finalHtml)
-            ?: throw ErrorLoadingException("Gagal memuat video. Pastikan internet stabil.")
-        val m3u8Url = "https://tmstr2.neonhorizonworkshops.com/pl/${hashMatch.groupValues[1].replace("\\/", "/")}"
+        if (hashMatch != null) {
+            val m3u8Url = "https://tmstr2.neonhorizonworkshops.com/pl/${hashMatch.groupValues[1].replace("\\/", "/")}"
+            callback.invoke(newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) { this.referer = finalReferer })
+        }
 
-        callback.invoke(newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) { this.referer = finalReferer })
         return true
     }
 }
 
-// DATA CLASSES
+// TMDB DATA CLASSES
 data class TmdbResponse(@JsonProperty("results") val results: List<TmdbMovie>)
 data class TmdbMovie(@JsonProperty("id") val id: Int, @JsonProperty("title") val title: String?, @JsonProperty("name") val name: String?, @JsonProperty("poster_path") val posterPath: String?, @JsonProperty("vote_average") val voteAverage: Double?, @JsonProperty("media_type") val mediaType: String?)
 data class TmdbGenre(@JsonProperty("name") val name: String)
