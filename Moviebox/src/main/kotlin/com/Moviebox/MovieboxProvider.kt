@@ -8,9 +8,11 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class MovieboxProvider : MainAPI() {
     override var name = "Moviebox"
+    
+    // Domain Utama (Juga digunakan untuk rute API Video Play)
     override var mainUrl = "https://netfilm.world"
     
-    // API Utama yang kita temukan dari investigasi
+    // Domain Khusus API (Untuk Home, Search, Detail, dan Subtitle)
     private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff" 
     
     override var lang = "en"
@@ -24,7 +26,6 @@ class MovieboxProvider : MainAPI() {
         if (rawToken != null) return rawToken
         
         try {
-            // Membuka halaman utama untuk memancing server memberikan Cookie
             val response = app.get(mainUrl)
             
             // 1. Ekstrak dari Cookie
@@ -52,15 +53,16 @@ class MovieboxProvider : MainAPI() {
         val headers = mutableMapOf(
             "Accept" to "application/json",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-            "x-source" to "", // Perbaikan: String kosong agar sesuai request asli
+            "x-source" to "",
             "x-request-lang" to "en",
             "Origin" to mainUrl,
-            "Referer" to "$mainUrl/"
+            "Referer" to "$mainUrl/",
+            // Menyamar sebagai browser PC agar lolos deteksi Anti-Bot
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
         if (token != null) {
             headers["Authorization"] = "Bearer $token"
-            // Perbaikan: Format cookie bersih tanpa %22
             headers["Cookie"] = "token=$token; mb_token=$token" 
         }
         return headers
@@ -152,7 +154,7 @@ class MovieboxProvider : MainAPI() {
         }
         
         return if (res.subjectType == 1) { 
-            // Perbaikan: Mengatur default season 1 dan episode 1 untuk Film
+            // Default season 1 dan episode 1 untuk tipe Film
             newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 1, 1).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
@@ -206,14 +208,20 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
-        val playUrl = "$apiBaseUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
-        var playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        // MISTERI TERPECAHKAN: API Play harus ditembak ke mainUrl, bukan apiBaseUrl
+        val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
+        
+        val reqHeaders = getApiHeaders()
+        var response = app.get(playUrl, headers = reqHeaders)
+        var playRes = response.parsedSafe<PlayResponse>()
         
         // Auto-Retry jika token mati
         if (playRes?.data?.streams.isNullOrEmpty()) {
             rawToken = null // Reset token
-            playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
+            val retryHeaders = getApiHeaders()
+            response = app.get(playUrl, headers = retryHeaders)
+            playRes = response.parsedSafe<PlayResponse>()
         }
         
         val streams = playRes?.data?.streams
@@ -233,10 +241,10 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
-            // Tarik Subtitle hanya sekali di stream pertama untuk menghindari duplikasi
+            // Subtitle di-host di apiBaseUrl
             if (stream == streams.firstOrNull()) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
-                app.get(captionUrl, headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
+                app.get(captionUrl, headers = reqHeaders).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
                     subtitleCallback.invoke(
                         newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: "")
                     )
