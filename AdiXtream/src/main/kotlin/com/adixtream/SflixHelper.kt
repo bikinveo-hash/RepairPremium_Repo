@@ -2,6 +2,7 @@ package com.adixtream
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.fasterxml.jackson.annotation.JsonProperty // <-- INI IMPORT WAJIBNYA
 
 object SflixHelper {
     private var currentToken: String? = null
@@ -80,7 +81,6 @@ object SflixHelper {
                 val videoUrl = stream.url ?: return@forEach
                 val qualityStr = stream.resolutions ?: ""
                 
-                // BAGIAN YANG DIPERBAIKI (referer dan quality masuk ke dalam {})
                 callback.invoke(
                     newExtractorLink(
                         source = "Sflix API",
@@ -111,18 +111,18 @@ object SflixHelper {
     }
 
     // ==========================================
-    // DATA CLASSES SFLIX HANYA DISIMPAN DI SINI
+    // DATA CLASSES SFLIX DENGAN JSON PROPERTY Wajib
     // ==========================================
-    data class SflixSearchResponse(val data: SflixSearchData? = null)
-    data class SflixSearchData(val items: List<SflixSubjectItem>? = null)
-    data class SflixSubjectItem(val subjectType: Int? = null, val detailPath: String? = null)
-    data class SflixDetailResponse(val data: SflixDetailData? = null)
-    data class SflixDetailData(val subject: SflixSubject? = null)
-    data class SflixSubject(val subjectId: String? = null)
-    data class SflixPlayResponse(val data: SflixPlayData? = null)
-    data class SflixPlayData(val streams: List<SflixStream>? = null)
-    data class SflixStream(val id: String? = null, val format: String? = null, val url: String? = null, val resolutions: String? = null)
-    data class SflixCaptionResponse(val data: SflixCaptionData? = null)
-    data class SflixCaptionData(val captions: List<SflixCaption>? = null)
-    data class SflixCaption(val lanName: String? = null, val url: String? = null)
+    data class SflixSearchResponse(@JsonProperty("data") val data: SflixSearchData? = null)
+    data class SflixSearchData(@JsonProperty("items") val items: List<SflixSubjectItem>? = null)
+    data class SflixSubjectItem(@JsonProperty("subjectType") val subjectType: Int? = null, @JsonProperty("detailPath") val detailPath: String? = null)
+    data class SflixDetailResponse(@JsonProperty("data") val data: SflixDetailData? = null)
+    data class SflixDetailData(@JsonProperty("subject") val subject: SflixSubject? = null)
+    data class SflixSubject(@JsonProperty("subjectId") val subjectId: String? = null)
+    data class SflixPlayResponse(@JsonProperty("data") val data: SflixPlayData? = null)
+    data class SflixPlayData(@JsonProperty("streams") val streams: List<SflixStream>? = null)
+    data class SflixStream(@JsonProperty("id") val id: String? = null, @JsonProperty("format") val format: String? = null, @JsonProperty("url") val url: String? = null, @JsonProperty("resolutions") val resolutions: String? = null)
+    data class SflixCaptionResponse(@JsonProperty("data") val data: SflixCaptionData? = null)
+    data class SflixCaptionData(@JsonProperty("captions") val captions: List<SflixCaption>? = null)
+    data class SflixCaption(@JsonProperty("lanName") val lanName: String? = null, @JsonProperty("url") val url: String? = null)
 }
