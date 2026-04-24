@@ -12,10 +12,8 @@ class PodjavProvider : MainAPI() {
     override var lang = "id"
     override val hasMainPage = true
     
-    // Memberikan label NSFW agar konten dewasa terpisah di aplikasi
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Daftar kategori/genre yang akan muncul di halaman utama
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Baru Upload",
         "$mainUrl/genre/affair/" to "Perselingkuhan",
@@ -29,28 +27,16 @@ class PodjavProvider : MainAPI() {
         "$mainUrl/genre/step-mother/" to "Ibu Tiri"
     )
 
-    /**
-     * Mengubah elemen kotak film di website menjadi objek hasil pencarian
-     */
     private fun Element.toSearchResult(): SearchResponse? {
-        // Abaikan elemen jika itu adalah iklan (banner-card)
         if (this.hasClass("banner-card")) return null
 
         val url = this.attr("href")
-        // Pastikan URL valid dan mengarah ke situs podjav
         if (url.isBlank() || !url.startsWith("http")) return null
 
-        // Ambil judul dari class card-title atau data-title
-        val titleText = this.selectFirst(".card-title")?.text() 
-            ?: this.attr("data-title") 
-            ?: return null
-        
-        // Ambil gambar sampul/poster
+        val titleText = this.selectFirst(".card-title")?.text() ?: this.attr("data-title") ?: return null
         val posterUrl = this.selectFirst("img.thumb")?.attr("src")
 
-        // Mendeteksi label Uncensored dari class badge atau data genre
-        val isUncensored = this.selectFirst(".badge-uncen") != null || 
-                          this.attr("data-genre").contains("uncensored", ignoreCase = true)
+        val isUncensored = this.selectFirst(".badge-uncen") != null || this.attr("data-genre").contains("uncensored", ignoreCase = true)
         val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $titleText" else titleText
 
         return newMovieSearchResponse(finalTitle, url, TvType.NSFW) {
@@ -58,43 +44,24 @@ class PodjavProvider : MainAPI() {
         }
     }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val items = mutableListOf<HomePageList>()
-        
-        // Handle URL untuk pagination (halaman 1, 2, dst)
-        val url = if (page == 1) {
-            request.data
-        } else {
-            if (request.data == "$mainUrl/") "$mainUrl/page/$page/" else "${request.data}page/$page/"
-        }
+        val url = if (page == 1) request.data else if (request.data == "$mainUrl/") "$mainUrl/page/$page/" else "${request.data}page/$page/"
         
         val document = app.get(url).document
 
         if (request.name == "Baru Upload" && page == 1) {
-            // Mengambil semua section film di beranda (Trending, Terbaru, dll)
             document.select("section").forEach { section ->
                 val sectionTitle = section.selectFirst(".section-title")?.text() ?: return@forEach
-                
-                // Lewati section yang bukan berisi daftar film
-                if (sectionTitle.contains("Artis", true) || 
-                    sectionTitle.contains("TENTANG", true) || 
-                    sectionTitle.contains("FAQ", true)) return@forEach
+                if (sectionTitle.contains("Artis", true) || sectionTitle.contains("TENTANG", true) || sectionTitle.contains("FAQ", true)) return@forEach
                 
                 val list = section.select("a.video-card").mapNotNull { it.toSearchResult() }
-                if (list.isNotEmpty()) {
-                    items.add(HomePageList(sectionTitle, list))
-                }
+                if (list.isNotEmpty()) items.add(HomePageList(sectionTitle, list))
             }
         } else {
-            // Logika untuk halaman kategori/genre atau halaman 2 ke atas
             val elements = document.select("a.video-card")
             val list = elements.mapNotNull { it.toSearchResult() }
-            if (list.isNotEmpty()) {
-                items.add(HomePageList(request.name, list))
-            }
+            if (list.isNotEmpty()) items.add(HomePageList(request.name, list))
         }
 
         if (items.isEmpty()) return null
@@ -103,10 +70,7 @@ class PodjavProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         val url = "$mainUrl/?s=$query"
-        val document = app.get(url).document
-
-        // Mencari semua elemen a.video-card di halaman hasil pencarian
-        return document.select("a.video-card").mapNotNull { it.toSearchResult() }
+        return app.get(url).document.select("a.video-card").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -120,11 +84,9 @@ class PodjavProvider : MainAPI() {
         var year: Int? = null
         val actors = mutableListOf<ActorData>()
 
-        // Mengambil metadata dari tabel informasi film
         document.select(".info-row-item").forEach { row ->
             val label = row.selectFirst(".info-label")?.text()?.trim() ?: ""
             val values = row.select(".info-value a").map { it.text().trim() }
-            
             when {
                 label.contains("Genre", true) -> tags.addAll(values)
                 label.contains("Cast", true) -> values.forEach { actors.add(ActorData(Actor(it))) }
@@ -132,16 +94,11 @@ class PodjavProvider : MainAPI() {
             }
         }
 
-        // Mengambil daftar video rekomendasi
         val recommendations = document.select(".carousel-track a.reko-card").mapNotNull {
             val recUrl = it.attr("href") ?: return@mapNotNull null
-            val imgElem = it.selectFirst("img") ?: return@mapNotNull null
-            val recPoster = imgElem.attr("src")
+            val recPoster = it.selectFirst("img")?.attr("src")
             val recTitle = it.selectFirst(".reko-card-title")?.text() ?: return@mapNotNull null
-            
-            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) {
-                this.posterUrl = recPoster
-            }
+            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) { this.posterUrl = recPoster }
         }
 
         return newMovieLoadResponse(titleText, url, TvType.NSFW, url) {
@@ -154,6 +111,9 @@ class PodjavProvider : MainAPI() {
         }
     }
 
+    /**
+     * 4. EKSTRAKSI LINK (MENGGUNAKAN LOGIKA DOOPLAY AJAX LAMA)
+     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -162,141 +122,139 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Cari elemen video utama (Desain Baru Podjav)
-        val videoElement = document.selectFirst("#podjavPlayer")
-        var foundNativeVideo = false
+        // 1. CARI POST ID
+        // Desain baru Podjav biasanya menyimpan Post ID di tag body class (misal: "postid-13485") atau di star-rating
+        val bodyClass = document.selectFirst("body")?.attr("class") ?: ""
+        val postIdRegex = Regex("""postid-(\d+)""")
+        val postId = postIdRegex.find(bodyClass)?.groupValues?.get(1)
+            ?: document.selectFirst(".star-rating")?.attr("data-post-id")
+            ?: document.selectFirst(".dooplay_player_option")?.attr("data-post")
 
-        // RENCANA A: Coba ambil dari sistem JSON (Sistem Baru Podjav)
-        if (videoElement != null) {
-            val dataSourcesRaw = videoElement.attr("data-sources")
-            if (dataSourcesRaw.isNotBlank() && dataSourcesRaw != "[]") {
-                val sources = AppUtils.parseJson<List<VideoSource>>(dataSourcesRaw)
-                
-                sources.forEach { source ->
-                    if (source.url.isNotBlank()) {
-                        val isM3u8 = source.type == "m3u8" || source.url.contains(".m3u8", ignoreCase = true)
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = source.label ?: "HD Stream",
-                                url = source.url,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.P720.value
-                            }
-                        )
-                        foundNativeVideo = true
-                    }
-                }
-            }
-
-            // Ekstrak Subtitle Rencana A
-            val dataSubtitlesRaw = videoElement.attr("data-subtitles")
-            if (dataSubtitlesRaw.isNotBlank() && dataSubtitlesRaw != "[]") {
-                val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
-                
-                subtitles.forEach { sub ->
-                    if (sub.src.isNotBlank()) {
-                        subtitleCallback.invoke(
-                            SubtitleFile(
-                                lang = sub.label ?: "Indonesia",
-                                url = sub.src
-                            )
-                        )
-                    }
-                }
-            }
-        }
-
-        // RENCANA B: JIKA RENCANA A KOSONG, KITA EKSTRAK IFRAME MANUAL! (Solusi Error 3003)
-        if (!foundNativeVideo) {
-            val iframeSrc = document.selectFirst("iframe#podjavEmbed")?.attr("src")
-                ?: document.selectFirst(".player-wrapper iframe")?.attr("src")
-                ?: document.selectFirst("iframe")?.attr("src")
-
-            if (iframeSrc != null && iframeSrc.isNotBlank()) {
-                var fixUrl = iframeSrc
-                if (fixUrl.startsWith("//")) fixUrl = "https:$fixUrl"
-                
+        if (postId != null) {
+            // Kita lakukan brute force "nume" (Server 1 sampai 5) karena tombolnya mungkin tersembunyi
+            val numes = listOf("1", "2", "3", "4", "5")
+            
+            numes.forEach { nume ->
                 try {
-                    // 1. Kunjungi halaman Iframe tersebut
-                    val iframeResponse = app.get(fixUrl, referer = mainUrl).text
-                    
-                    // 2. Bongkar Javascript terenkripsi (Metode Filemoon/Vidhide Native Bypass)
-                    val unpacked = getAndUnpack(iframeResponse)
+                    // POST AJAX seperti di kodemu yang lama
+                    val ajaxResponse = app.post(
+                        "$mainUrl/wp-admin/admin-ajax.php",
+                        data = mapOf(
+                            "action" to "doo_player_ajax",
+                            "post" to postId,
+                            "nume" to nume,
+                            "type" to "movie"
+                        ),
+                        headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                    ).parsedSafe<DooplayAjaxResponse>()
 
-                    // 3. Ambil URL .m3u8 atau .mp4 yang berhasil dibongkar
-                    val linkRegex = Regex("""file:\s*["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
-                    val alternateLinkRegex = Regex("""["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
-                    
-                    var videoLink = linkRegex.find(unpacked)?.groupValues?.get(1)
-                        ?: alternateLinkRegex.find(unpacked)?.groupValues?.get(1)
-                        ?: linkRegex.find(iframeResponse)?.groupValues?.get(1)
-                        ?: alternateLinkRegex.find(iframeResponse)?.groupValues?.get(1)
+                    val embedUrl = ajaxResponse?.embedUrl
 
-                    if (videoLink != null) {
-                        // Perbaiki link relatif (yang diawali dengan garis miring "/")
-                        if (videoLink.startsWith("/")) {
-                            val uri = URI(fixUrl)
-                            videoLink = "${uri.scheme}://${uri.host}$videoLink"
-                        }
+                    if (embedUrl != null && embedUrl.isNotBlank()) {
+                        // CEK JIKA PAKAI FORMAT "source="
+                        if (embedUrl.contains("source=")) {
+                            val sourceRegex = Regex("""source=([^&]+)""")
+                            val match = sourceRegex.find(embedUrl)
 
-                        val isMp4 = videoLink.contains(".mp4", ignoreCase = true)
+                            if (match != null) {
+                                val finalLink = java.net.URLDecoder.decode(match.groupValues[1], "UTF-8")
+                                val isMp4 = finalLink.contains(".mp4")
 
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = "Server Eksternal " + if (isMp4) "(MP4)" else "(M3U8)",
-                                url = videoLink,
-                                type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                            ) {
-                                // Referer WAJIB pakai URL iframe agar video bisa didownload ExoPlayer
-                                this.referer = fixUrl
-                                this.quality = Qualities.P720.value
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "Server $nume " + if (isMp4) "(MP4)" else "(M3U8)",
+                                        url = finalLink,
+                                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = mainUrl
+                                        this.quality = Qualities.P720.value
+                                    }
+                                )
+
+                                // Ekstrak subtitle dari VOD
+                                if (!isMp4 && finalLink.contains("/master.m3u8")) {
+                                    val baseUrl = finalLink.substringBeforeLast("/")
+                                    val slug = baseUrl.substringAfterLast("/")
+                                    val currentTime = System.currentTimeMillis() / 1000
+                                    subtitleCallback.invoke(
+                                        SubtitleFile(lang = "Indonesia", url = "$baseUrl/$slug.srt?t=$currentTime")
+                                    )
+                                }
                             }
-                        )
+                        } 
+                        // DIRECT LINK ATAU IFRAME PIHAK KETIGA
+                        else {
+                            val iframeUrl = org.jsoup.Jsoup.parse(embedUrl).select("iframe").attr("src").takeIf { it.isNotBlank() } ?: embedUrl
 
-                        // Ambil Subtitle (Jika ada di dalam unpack iframe)
-                        val srtRegex = Regex("""["']((?:https?://|/)[^"']*\.srt[^"']*)["']""")
-                        var srtLink = srtRegex.find(unpacked)?.groupValues?.get(1)
-                            ?: srtRegex.find(iframeResponse)?.groupValues?.get(1)
-                            
-                        if (srtLink != null) {
-                            if (srtLink.startsWith("/")) {
-                                val uri = URI(fixUrl)
-                                srtLink = "${uri.scheme}://${uri.host}$srtLink"
+                            if (iframeUrl.startsWith("http")) {
+                                val isDirectMp4 = iframeUrl.contains(".mp4")
+                                val isDirectM3u8 = iframeUrl.contains(".m3u8")
+
+                                if (isDirectMp4 || isDirectM3u8) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "VOD Server $nume",
+                                            name = "Direct Stream " + if (isDirectMp4) "(MP4)" else "(M3U8)",
+                                            url = iframeUrl,
+                                            type = if (isDirectMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = mainUrl
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                } else {
+                                    // BONGKAR MANUAL SEPERTI JARING SAPU JAGAT LAMA
+                                    val isExtracted = loadExtractor(iframeUrl, mainUrl, subtitleCallback, callback)
+
+                                    if (!isExtracted) {
+                                        try {
+                                            val iframeResponse = app.get(iframeUrl, referer = mainUrl).text
+                                            val unpacked = getAndUnpack(iframeResponse)
+
+                                            val m3u8Regex = Regex("""["']((?:https?://|/)[^"']*\.m3u8[^"']*)["']""")
+                                            var m3u8Link = m3u8Regex.find(unpacked)?.groupValues?.get(1) 
+                                                ?: m3u8Regex.find(iframeResponse)?.groupValues?.get(1)
+
+                                            if (m3u8Link != null) {
+                                                if (m3u8Link.startsWith("/")) {
+                                                    val uri = URI(iframeUrl)
+                                                    m3u8Link = "${uri.scheme}://${uri.host}$m3u8Link"
+                                                }
+
+                                                callback.invoke(
+                                                    newExtractorLink(
+                                                        source = "Server $nume",
+                                                        name = "External (M3U8)",
+                                                        url = m3u8Link,
+                                                        type = ExtractorLinkType.M3U8
+                                                    ) {
+                                                        this.referer = iframeUrl 
+                                                        this.quality = Qualities.P720.value
+                                                    }
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            // Abaikan jika gagal
+                                        }
+                                    }
+                                }
                             }
-                            subtitleCallback.invoke(
-                                SubtitleFile(lang = "Indonesia", url = srtLink)
-                            )
                         }
-                    } else {
-                        // Jika gagal mengekstrak regex, biarkan Extractor API mencoba
-                        loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
-                    loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
+                    // Lanjut ke nume berikutnya jika AJAX gagal
                 }
             }
         }
-
         return true
     }
 }
 
 /**
- * Model data untuk membaca data-sources dan data-subtitles dari player baru
+ * DATA CLASS: Untuk parsing JSON response dari AJAX Dooplay
  */
-data class VideoSource(
-    @JsonProperty("url") val url: String,
-    @JsonProperty("type") val type: String?,
-    @JsonProperty("label") val label: String?
-)
-
-data class SubtitleSource(
-    @JsonProperty("src") val src: String,
-    @JsonProperty("srclang") val srclang: String?,
-    @JsonProperty("label") val label: String?
+data class DooplayAjaxResponse(
+    @JsonProperty("embed_url") val embedUrl: String?,
+    @JsonProperty("type") val type: String?
 )
