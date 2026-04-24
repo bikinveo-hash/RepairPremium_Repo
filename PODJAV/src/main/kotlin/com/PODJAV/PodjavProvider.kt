@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URI
 
 class PodjavProvider : MainAPI() {
     override var name = "PODJAV"
@@ -225,7 +226,7 @@ class PodjavProvider : MainAPI() {
                     if (videoLink != null) {
                         // Perbaiki link jika berupa URL relatif
                         if (videoLink.startsWith("/")) {
-                            val uri = java.net.URI(fixUrl)
+                            val uri = URI(fixUrl)
                             videoLink = "${uri.scheme}://${uri.host}$videoLink"
                         }
 
@@ -270,4 +271,3 @@ data class SubtitleSource(
     @JsonProperty("srclang") val srclang: String?,
     @JsonProperty("label") val label: String?
 )
-[cite_start]
