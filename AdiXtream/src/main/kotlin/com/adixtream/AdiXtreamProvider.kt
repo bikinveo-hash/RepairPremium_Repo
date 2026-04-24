@@ -203,17 +203,28 @@ class VidSrcProvider : MainAPI() {
             baseUrl = "$mainUrl/embed/movie/$tmdbId"
         }
 
-        // --- SOURCE 1: SFLIX HELPER ---
+        // --- SOURCE 1: SFLIX & ADIMOVIEBOX HELPERS ---
         try {
-            val titleQuery = if (isTvSeries) {
-                app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()?.name
+            var titleQuery: String? = null
+            var yearQuery: Int? = null
+
+            // Ambil info nama & tahun dari TMDB untuk pencarian di helper
+            if (isTvSeries) {
+                val tvRes = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
+                titleQuery = tvRes?.name
+                yearQuery = tvRes?.firstAirDate?.take(4)?.toIntOrNull()
             } else {
-                app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()?.title
+                val movieRes = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()
+                titleQuery = movieRes?.title
+                yearQuery = movieRes?.releaseDate?.take(4)?.toIntOrNull()
             }
 
             if (titleQuery != null) {
-                // Memanggil asisten Sflix untuk mencari link video alternatif
-                SflixHelper.getLinks(titleQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback)
+                // Tarik link dari Sflix API
+                try { SflixHelper.getLinks(titleQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback) } catch (e: Exception) {}
+                
+                // Tarik link dari Adimoviebox (v1 & v2)
+                try { AdimovieboxHelper.getLinks(titleQuery, yearQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback) } catch (e: Exception) {}
             }
         } catch (e: Exception) { }
 
@@ -245,7 +256,7 @@ class VidSrcProvider : MainAPI() {
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
             ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
-            ?: return true // Tetap true karena Sflix mungkin sudah berhasil memberikan link
+            ?: return true 
 
         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
 
