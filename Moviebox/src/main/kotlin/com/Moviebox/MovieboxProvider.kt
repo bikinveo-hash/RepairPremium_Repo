@@ -19,10 +19,8 @@ class MovieboxProvider : MainAPI() {
 
     private suspend fun getAuthToken(): String {
         cachedToken?.let { return it }
-
         try {
             val response = app.get(mainUrl)
-            // Mendukung cookie "mb_token" (moviebox.ph) dan "token" (netfilm.world)
             val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
             
             if (cookieToken != null) {
@@ -42,15 +40,15 @@ class MovieboxProvider : MainAPI() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
-        // Token hardcode sebagai fallback terakhir
         return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMxMjI1Njk0MzU5NDYxNDAyNjQsImF0cCI6MywiZXh0IjoiMTc3NzAzMjk1OCIsImV4cCI6MTc4NDgwODk1OCwiaWF0IjoxNzc3MDMyNjU4fQ.7cMp7KjbAQy-VZMZGgIC2Z9KCHxkyL3Ib_UGhc6vFU8"
     }
 
     private suspend fun getApiHeaders(): Map<String, String> {
         return mapOf(
             "accept" to "application/json",
+            "content-type" to "application/json",
             "x-request-lang" to "en",
+            "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
             "origin" to mainUrl,
             "referer" to "$mainUrl/",
             "authorization" to getAuthToken() 
@@ -65,7 +63,6 @@ class MovieboxProvider : MainAPI() {
     data class BannerItem(@JsonProperty("subject") val subject: Subject?)
     
     data class SearchApiResponse(@JsonProperty("data") val data: SearchData?)
-    // Fallback search jika key-nya bukan subjectList
     data class SearchData(@JsonProperty("subjectList") val subjectList: List<Subject>?, @JsonProperty("items") val items: List<Subject>?, @JsonProperty("list") val list: List<Subject>?)
     data class Subject(@JsonProperty("title") val title: String?, @JsonProperty("subjectId") val subjectId: String?, @JsonProperty("subjectType") val subjectType: Int?, @JsonProperty("detailPath") val detailPath: String?, @JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("cover") val cover: ImageInfo?)
     data class ImageInfo(@JsonProperty("url") val url: String?)
@@ -89,7 +86,7 @@ class MovieboxProvider : MainAPI() {
     data class CaptionData(@JsonProperty("captions") val captions: List<CaptionItem>?)
     data class CaptionItem(@JsonProperty("lanName") val lanName: String?, @JsonProperty("url") val url: String?)
 
-    // --- UTAMA ---
+    // --- FUNGSI UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val response = app.get("$apiUrl/home?host=moviebox.ph", headers = getApiHeaders()).parsedSafe<HomeResponse>()
         val homeItems = mutableListOf<HomePageList>()
@@ -103,28 +100,33 @@ class MovieboxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val response = app.get("$apiUrl/subject/search?keyword=$query&page=0&perPage=20", headers = getApiHeaders()).parsedSafe<SearchApiResponse>()
-        // Fallback untuk antisipasi perubahan nama array dari server
-        val list = response?.data?.subjectList ?: response?.data?.items ?: response?.data?.list ?: emptyList()
+        // PERBAIKAN 1: Gunakan app.post dan body JSON
+        val payload = mapOf(
+            "keyword" to query,
+            "page" to "1",
+            "perPage" to 28,
+            "subjectType" to 0
+        )
+        val response = app.post("$apiUrl/subject/search", headers = getApiHeaders(), json = payload).parsedSafe<SearchApiResponse>()
+        val list = response?.data?.items ?: response?.data?.subjectList ?: emptyList()
         return list.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val wrapper = app.get("$apiUrl/detail?detailPath=$url", headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data ?: return null
+        // PERBAIKAN 2: Pastikan hanya mengirim Slug (bukan URL Utuh) ke Backend
+        val slug = url.substringAfterLast("/") 
+        
+        val wrapper = app.get("$apiUrl/detail?detailPath=$slug", headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data ?: return null
         val res = wrapper.subject ?: return null
         
-        // Memuat Rekomendasi
         val recs = app.get("$apiUrl/subject/detail-rec?subjectId=${res.subjectId}&page=1&perPage=12", headers = getApiHeaders()).parsedSafe<RecResponse>()?.data?.items?.mapNotNull { it.toSearchResponse() }
         
-        // Memuat Aktor/Cast
         val castList = wrapper.stars?.mapNotNull { star ->
-            if (star.name != null) {
-                ActorData(actor = Actor(star.name, star.avatarUrl), roleString = star.character)
-            } else null
+            if (star.name != null) ActorData(actor = Actor(star.name, star.avatarUrl), roleString = star.character) else null
         }
         
-        return if (res.subjectType == 1) { // 1 = Movie
-            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", url).toJson()) {
+        return if (res.subjectType == 1) { 
+            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 0, 0).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
@@ -132,30 +134,30 @@ class MovieboxProvider : MainAPI() {
                 this.actors = castList
                 res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
             }
-        } else { // 2 = TV Series
+        } else {
             val episodesList = mutableListOf<Episode>()
-            
-            // Generate Episode otomatis berdasarkan MaxEp
             val seasonsData = wrapper.resource?.seasons
+            
             if (!seasonsData.isNullOrEmpty()) {
                 seasonsData.forEach { season ->
                     val sNum = season.se ?: 1
-                    val maxEp = season.maxEp ?: 1
-                    for (eNum in 1..maxEp) {
-                        episodesList.add(
-                            newEpisode(LinkData(res.subjectId ?: "", url, sNum, eNum).toJson()) {
-                                this.name = "Episode $eNum"
-                                this.season = sNum
-                                this.episode = eNum
-                            }
-                        )
+                    val maxEp = season.maxEp ?: 0
+                    if (maxEp > 0) {
+                        for (eNum in 1..maxEp) {
+                            episodesList.add(
+                                newEpisode(LinkData(res.subjectId ?: "", slug, sNum, eNum).toJson()) {
+                                    this.name = "Episode $eNum"
+                                    this.season = sNum
+                                    this.episode = eNum
+                                }
+                            )
+                        }
                     }
                 }
             } else if (!res.episodes.isNullOrEmpty()) {
-                // Fallback jika API tiba-tiba menggunakan list episodes biasa
                 res.episodes.forEach { ep ->
                     episodesList.add(
-                        newEpisode(LinkData(res.subjectId ?: "", url, ep.seasonNum ?: 1, ep.episodeNum ?: 1).toJson()) { 
+                        newEpisode(LinkData(res.subjectId ?: "", slug, ep.seasonNum ?: 1, ep.episodeNum ?: 1).toJson()) { 
                             this.name = ep.title
                             this.season = ep.seasonNum
                             this.episode = ep.episodeNum 
@@ -177,11 +179,15 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
-        val playRes = app.get("$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<PlayResponse>()
         
-        playRes?.data?.streams?.forEach { stream ->
+        // Karena LinkData sekarang berisi `slug`, backend tidak akan error (404) lagi
+        val playRes = app.get("$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        val streams = playRes?.data?.streams
+        
+        if (streams.isNullOrEmpty()) return false
+
+        streams.forEach { stream ->
             val streamQuality = getQuality(stream.resolutions)
-            
             callback(
                 newExtractorLink(
                     source = this.name,
@@ -194,8 +200,7 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
-            // Subtitle
-            if (stream == playRes.data.streams.firstOrNull()) {
+            if (stream == streams.firstOrNull()) {
                 app.get("$apiUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
                     subtitleCallback.invoke(
                         newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: "")
