@@ -17,11 +17,11 @@ class MovieboxProvider : MainAPI() {
 
     private val apiUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
     
-    private var cachedToken: String? = null
+    // Menyimpan Raw Token agar bisa dipakai untuk Header Authorization dan Cookie sekaligus
+    private var rawToken: String? = null
 
-    // Sistem Token Dinamis yang jauh lebih kuat
-    private suspend fun getAuthToken(): String {
-        cachedToken?.let { return it }
+    private suspend fun getRawAuthToken(): String {
+        rawToken?.let { return it }
 
         val domains = listOf("https://moviebox.ph", "https://netfilm.world", "https://h5-api.aoneroom.com")
         for (domain in domains) {
@@ -29,29 +29,29 @@ class MovieboxProvider : MainAPI() {
                 val response = app.get(domain)
                 val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
                 if (!cookieToken.isNullOrBlank()) {
-                    val cleanToken = cookieToken.replace("%22", "").replace("\"", "")
-                    cachedToken = "Bearer $cleanToken"
-                    return cachedToken!!
+                    rawToken = cookieToken.replace("%22", "").replace("\"", "")
+                    return rawToken!!
                 }
 
-                // Regex spesifik untuk token Moviebox (bukan token Firebase)
                 val tokenRegex = """(eyJhbGciOiJIUzI1NiI[a-zA-Z0-9\-_.]+)""".toRegex()
                 val matchResult = tokenRegex.find(response.text)
                 
                 if (matchResult != null) {
-                    cachedToken = "Bearer ${matchResult.groupValues[1]}"
-                    return cachedToken!!
+                    rawToken = matchResult.groupValues[1]
+                    return rawToken!!
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
         
-        // Fallback menggunakan Token Fresh dari tangkapan curl terbarumu
-        return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjQ4Njc4NDE4MzQ5MDEwMjkzMjgsImF0cCI6MywiZXh0IjoiMTc3NzA0MDQyMiIsImV4cCI6MTc4NDgxNjQyMiwiaWF0IjoxNzc3MDQwMTIyfQ.cxsvUHlRWDWiWOiEB78a9POanRXjX5eoL6h6Ip5Q7OU"
+        // Fallback Raw Token
+        rawToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjQ4Njc4NDE4MzQ5MDEwMjkzMjgsImF0cCI6MywiZXh0IjoiMTc3NzA0MDQyMiIsImV4cCI6MTc4NDgxNjQyMiwiaWF0IjoxNzc3MDQwMTIyfQ.cxsvUHlRWDWiWOiEB78a9POanRXjX5eoL6h6Ip5Q7OU"
+        return rawToken!!
     }
 
     private suspend fun getApiHeaders(): Map<String, String> {
+        val token = getRawAuthToken()
         return mapOf(
             "accept" to "application/json",
             "x-request-lang" to "en",
@@ -59,7 +59,9 @@ class MovieboxProvider : MainAPI() {
             "x-source" to "null",
             "origin" to mainUrl,
             "referer" to "$mainUrl/",
-            "authorization" to getAuthToken() 
+            "authorization" to "Bearer $token",
+            // PERBAIKAN FINAL: Suntikkan Token ke dalam Cookie secara manual agar API terbuka!
+            "cookie" to "mb_token=$token; token=$token"
         )
     }
 
@@ -108,7 +110,6 @@ class MovieboxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // PERBAIKAN 1: Memaksa JSON requestBody murni agar tidak ditolak oleh server
         val payload = mapOf(
             "keyword" to query,
             "page" to "1",
@@ -152,7 +153,6 @@ class MovieboxProvider : MainAPI() {
             val episodesList = mutableListOf<Episode>()
             val seasonsData = wrapper.resource?.seasons
             
-            // PERBAIKAN 2: Generator episode yang lebih kuat dan aman
             if (!seasonsData.isNullOrEmpty()) {
                 seasonsData.forEach { season ->
                     val sNum = season.se ?: 1
