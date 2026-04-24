@@ -7,7 +7,8 @@ import android.content.Context
 @CloudstreamPlugin
 class AdiXtreamPlugin : Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan provider VidSrcProvider agar dikenali oleh Cloudstream
+        // Mendaftarkan provider utama kita agar dikenali oleh Cloudstream.
+        // Sekarang VidSrcProvider ini sudah sangat canggih karena dibantu SflixHelper!
         registerMainAPI(VidSrcProvider())
     }
 }
