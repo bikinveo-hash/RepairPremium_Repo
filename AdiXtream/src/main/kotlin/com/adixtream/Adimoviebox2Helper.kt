@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.math.BigInteger
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -23,7 +22,9 @@ object Adimoviebox2Helper {
         val brandModels = mapOf(
             "Samsung" to listOf("SM-S918B", "SM-A528B", "SM-M336B"),
             "Xiaomi" to listOf("2201117TI", "M2012K11AI", "Redmi Note 11"),
-            "Google" to listOf("Pixel 7", "Pixel 8")
+            "OnePlus" to listOf("LE2111", "CPH2449", "IN2023"),
+            "Google" to listOf("Pixel 6", "Pixel 7", "Pixel 8"),
+            "Realme" to listOf("RMX3085", "RMX3360", "RMX3551")
         )
         val brand = brandModels.keys.random()
         val model = brandModels[brand]!!.random()
@@ -31,8 +32,7 @@ object Adimoviebox2Helper {
     }
 
     private fun md5(input: ByteArray): String {
-        val md = MessageDigest.getInstance("MD5")
-        return BigInteger(1, md.digest(input)).toString(16).padStart(32, '0')
+        return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) }
     }
 
     private fun generateXClientToken(timestamp: Long): String {
@@ -45,12 +45,21 @@ object Adimoviebox2Helper {
     private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
         val parsed = Uri.parse(url)
         val path = parsed.path ?: ""
+        
+        // Sesuai kode asli: Parameter URL tidak boleh di-encode di sini
         val query = if (parsed.queryParameterNames.isNotEmpty()) {
-            parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } }
+            parsed.queryParameterNames.sorted().joinToString("&") { key -> 
+                parsed.getQueryParameters(key).joinToString("&") { value -> "$key=$value" } 
+            }
         } else ""
+        
         val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
         val bodyBytes = body?.toByteArray(Charsets.UTF_8)
-        val bodyHash = if (bodyBytes != null && bodyBytes.isNotEmpty()) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""
+        val bodyHash = if (bodyBytes != null) {
+            val trimmed = if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes
+            md5(trimmed)
+        } else ""
+
         val bodyLength = bodyBytes?.size?.toString() ?: ""
         val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
         val mac = Mac.getInstance("HmacMD5")
@@ -59,20 +68,31 @@ object Adimoviebox2Helper {
         return "$timestamp|2|$signature"
     }
 
-    private fun getHeadersV2(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
+    private fun getHeadersV2(
+        url: String, 
+        body: String? = null, 
+        method: String = "POST", 
+        brand: String, 
+        model: String,
+        token: String? = null
+    ): Map<String, String> {
         val timestamp = System.currentTimeMillis()
-        val contentTypeSig = if(method=="POST") "application/json; charset=utf-8" else "application/json"
+        val cTypeSignature = if (method == "POST") "application/json; charset=utf-8" else "application/json"
         
         val headers = mutableMapOf(
             "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
             "accept" to "application/json",
             "x-client-token" to generateXClientToken(timestamp),
-            "x-tr-signature" to generateXTrSignature(method, "application/json", contentTypeSig, url, body, timestamp),
-            "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
-            "x-client-status" to "0"
+            "x-tr-signature" to generateXTrSignature(method, "application/json", cTypeSignature, url, body, timestamp),
+            "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":"","X-Play-Mode":"1","X-Idle-Data":"1","X-Family-Mode":"0","X-Content-Mode":"0"}""",
+            "x-client-status" to "0",
+            "connection" to "keep-alive"
         )
         if (method == "POST") {
-            headers["content-type"] = "application/json; charset=utf-8"
+            headers["content-type"] = "application/json"
+        }
+        if (token != null) {
+            headers["Authorization"] = "Bearer $token"
         }
         return headers
     }
@@ -81,13 +101,14 @@ object Adimoviebox2Helper {
         try {
             val (brand, model) = randomBrandModel()
             
+            // 1. Search
             val searchUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/search/v2"
-            val searchBody = """{"page":1,"perPage":10,"keyword":"$title"}"""
+            val jsonBody = """{"page": 1, "perPage": 20, "keyword": "$title"}"""
             
             val searchRes = app.post(
                 searchUrl, 
-                headers = getHeadersV2(searchUrl, searchBody, "POST", brand, model), 
-                requestBody = searchBody.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                headers = getHeadersV2(searchUrl, jsonBody, "POST", brand, model), 
+                requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())
             ).parsedSafe<Adimoviebox2SearchResponse>()
             
             val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.firstOrNull { subject ->
@@ -96,12 +117,23 @@ object Adimoviebox2Helper {
 
             val mainSubjectId = matchedSubject.subjectId ?: return
 
+            // 2. Fetch Detail to get Languages/Dubs AND Token (Krusial)
             val detailUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
-            val detailRes = app.get(detailUrl, headers = getHeadersV2(detailUrl, null, "GET", brand, model)).text
+            val detailResponse = app.get(detailUrl, headers = getHeadersV2(detailUrl, null, "GET", brand, model))
             
+            // KUNCI JAWABAN: Curi token dari header x-user 
+            var token: String? = null
+            val xUserHeader = detailResponse.headers["x-user"]
+            if (!xUserHeader.isNullOrBlank()) {
+                try {
+                    val xUserJson = JSONObject(xUserHeader)
+                    token = xUserJson.optString("token")
+                } catch (e: Exception) {}
+            }
+
             val subjectList = mutableListOf<Pair<String, String>>()
             try {
-                val data = JSONObject(detailRes).optJSONObject("data")
+                val data = JSONObject(detailResponse.text).optJSONObject("data")
                 subjectList.add(mainSubjectId to "Original Audio")
                 val dubs = data?.optJSONArray("dubs")
                 if (dubs != null) {
@@ -114,9 +146,12 @@ object Adimoviebox2Helper {
                 }
             } catch (e: Exception) { subjectList.add(mainSubjectId to "Original Audio") }
 
+            // 3. Play Info & Subtitles
             subjectList.forEach { (currentSubjectId, languageName) ->
                 val playUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$season&ep=$episode"
-                val playRes = app.get(playUrl, headers = getHeadersV2(playUrl, null, "GET", brand, model)).parsedSafe<Adimoviebox2PlayResponse>()
+                
+                // Gunakan token yang sudah didapat!
+                val playRes = app.get(playUrl, headers = getHeadersV2(playUrl, null, "GET", brand, model, token)).parsedSafe<Adimoviebox2PlayResponse>()
                 
                 playRes?.data?.streams?.forEach { stream ->
                     val streamUrl = stream.url ?: return@forEach
@@ -135,11 +170,12 @@ object Adimoviebox2Helper {
 
                     if (stream.id != null) {
                         val subInternal = "$apiUrlV2/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
-                        app.get(subInternal, headers = getHeadersV2(subInternal, null, "GET", brand, model)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
+                        app.get(subInternal, headers = getHeadersV2(subInternal, null, "GET", brand, model, token)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                             subtitleCallback.invoke(SubtitleFile("${cap.language ?: cap.lanName ?: cap.lan ?: "Unknown"} ($languageName)", cap.url ?: return@forEach))
                         }
+                        
                         val subExternal = "$apiUrlV2/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
-                        app.get(subExternal, headers = getHeadersV2(subExternal, null, "GET", brand, model)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
+                        app.get(subExternal, headers = getHeadersV2(subExternal, null, "GET", brand, model, token)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                             subtitleCallback.invoke(SubtitleFile("${cap.lan ?: cap.lanName ?: cap.language ?: "Unknown"} ($languageName) [Ext]", cap.url ?: return@forEach))
                         }
                     }
