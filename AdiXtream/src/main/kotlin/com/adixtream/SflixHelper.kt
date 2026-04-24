@@ -2,13 +2,12 @@ package com.adixtream
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.fasterxml.jackson.annotation.JsonProperty // <-- INI IMPORT WAJIBNYA
+import com.fasterxml.jackson.annotation.JsonProperty
 
 object SflixHelper {
     private var currentToken: String? = null
     private const val sflixMainUrl = "https://sflix.film"
 
-    // 1. Fungsi untuk mencuri token Sflix
     private suspend fun getSflixHeaders(): Map<String, String> {
         if (currentToken == null) {
             try {
@@ -46,7 +45,6 @@ object SflixHelper {
         return headers
     }
 
-    // 2. Fungsi utama untuk mencari dan menyedot link video & subtitle
     suspend fun getLinks(
         title: String,
         isTvSeries: Boolean,
@@ -56,24 +54,20 @@ object SflixHelper {
         subtitleCallback: (SubtitleFile) -> Unit
     ) {
         try {
-            // A. Cari film berdasarkan judul
             val searchUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/search"
             val payload = mapOf("keyword" to title, "page" to "1", "perPage" to 5, "subjectType" to 0)
             val searchRes = app.post(searchUrl, headers = getSflixHeaders(), json = payload).parsedSafe<SflixSearchResponse>()
             
-            // B. Pastikan tipe yang dipilih sesuai (Movie atau Series)
             val matchItem = searchRes?.data?.items?.firstOrNull { 
                 if (isTvSeries) it.subjectType != 1 else it.subjectType == 1 
             } ?: return
             
             val detailPath = matchItem.detailPath ?: return
             
-            // C. Ambil ID Sflix
             val detailUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/detail?detailPath=$detailPath"
             val detailRes = app.get(detailUrl, headers = getSflixHeaders()).parsedSafe<SflixDetailResponse>()
             val subjectId = detailRes?.data?.subject?.subjectId ?: return
 
-            // D. Tarik Link Video
             val playUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$season&ep=$episode&detailPath=$detailPath"
             val playRes = app.get(playUrl, headers = getSflixHeaders()).parsedSafe<SflixPlayResponse>()
 
@@ -94,7 +88,6 @@ object SflixHelper {
                 )
             }
 
-            // E. Tarik Subtitle
             val firstStreamId = playRes?.data?.streams?.firstOrNull()?.id
             if (firstStreamId != null) {
                 val capUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/caption?format=MP4&id=$firstStreamId&subjectId=$subjectId&detailPath=$detailPath"
@@ -110,9 +103,7 @@ object SflixHelper {
         }
     }
 
-    // ==========================================
-    // DATA CLASSES SFLIX DENGAN JSON PROPERTY Wajib
-    // ==========================================
+    // JSON Property pelindung dari Obfuscation
     data class SflixSearchResponse(@JsonProperty("data") val data: SflixSearchData? = null)
     data class SflixSearchData(@JsonProperty("items") val items: List<SflixSubjectItem>? = null)
     data class SflixSubjectItem(@JsonProperty("subjectType") val subjectType: Int? = null, @JsonProperty("detailPath") val detailPath: String? = null)
