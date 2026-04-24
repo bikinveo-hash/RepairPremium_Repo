@@ -2,7 +2,7 @@ package com.Moviebox
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.* // Memuat ExtractorLink, Qualities, ExtractorLinkType, dll.
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
@@ -22,7 +22,8 @@ class MovieboxProvider : MainAPI() {
 
         try {
             val response = app.get(mainUrl)
-            val cookieToken = response.cookies["mb_token"]
+            // Mendukung cookie "mb_token" (moviebox.ph) dan "token" (netfilm.world)
+            val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
             
             if (cookieToken != null) {
                 val cleanToken = cookieToken.replace("%22", "").replace("\"", "")
@@ -42,6 +43,7 @@ class MovieboxProvider : MainAPI() {
             e.printStackTrace()
         }
 
+        // Token hardcode sebagai fallback terakhir
         return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMxMjI1Njk0MzU5NDYxNDAyNjQsImF0cCI6MywiZXh0IjoiMTc3NzAzMjk1OCIsImV4cCI6MTc4NDgwODk1OCwiaWF0IjoxNzc3MDMyNjU4fQ.7cMp7KjbAQy-VZMZGgIC2Z9KCHxkyL3Ib_UGhc6vFU8"
     }
 
@@ -55,22 +57,30 @@ class MovieboxProvider : MainAPI() {
         )
     }
 
-    // Data Classes
+    // --- DATA CLASSES ---
     data class HomeResponse(@JsonProperty("data") val data: HomeData?)
     data class HomeData(@JsonProperty("operatingList") val operatingList: List<OperatingList>?)
     data class OperatingList(@JsonProperty("title") val title: String?, @JsonProperty("subjects") val subjects: List<Subject>?, @JsonProperty("banner") val banner: Banner?)
     data class Banner(@JsonProperty("items") val items: List<BannerItem>?)
     data class BannerItem(@JsonProperty("subject") val subject: Subject?)
+    
     data class SearchApiResponse(@JsonProperty("data") val data: SearchData?)
-    data class SearchData(@JsonProperty("subjectList") val subjectList: List<Subject>?)
+    // Fallback search jika key-nya bukan subjectList
+    data class SearchData(@JsonProperty("subjectList") val subjectList: List<Subject>?, @JsonProperty("items") val items: List<Subject>?, @JsonProperty("list") val list: List<Subject>?)
     data class Subject(@JsonProperty("title") val title: String?, @JsonProperty("subjectId") val subjectId: String?, @JsonProperty("subjectType") val subjectType: Int?, @JsonProperty("detailPath") val detailPath: String?, @JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("cover") val cover: ImageInfo?)
     data class ImageInfo(@JsonProperty("url") val url: String?)
+    
     data class DetailResponse(@JsonProperty("data") val data: DetailDataWrapper?)
-    data class DetailDataWrapper(@JsonProperty("subject") val subject: DetailData?)
+    data class DetailDataWrapper(@JsonProperty("subject") val subject: DetailData?, @JsonProperty("stars") val stars: List<Star>?, @JsonProperty("resource") val resource: ResourceData?)
     data class DetailData(@JsonProperty("subjectId") val subjectId: String?, @JsonProperty("title") val title: String?, @JsonProperty("description") val description: String?, @JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("cover") val cover: ImageInfo?, @JsonProperty("imdbRatingValue") val imdbRatingValue: String?, @JsonProperty("subjectType") val subjectType: Int?, @JsonProperty("episodes") val episodes: List<EpisodeInfo>?)
+    data class Star(@JsonProperty("name") val name: String?, @JsonProperty("avatarUrl") val avatarUrl: String?, @JsonProperty("character") val character: String?)
+    data class ResourceData(@JsonProperty("seasons") val seasons: List<SeasonDataApi>?)
+    data class SeasonDataApi(@JsonProperty("se") val se: Int?, @JsonProperty("maxEp") val maxEp: Int?)
     data class EpisodeInfo(@JsonProperty("episodeId") val episodeId: String?, @JsonProperty("title") val title: String?, @JsonProperty("episodeNum") val episodeNum: Int?, @JsonProperty("seasonNum") val seasonNum: Int?)
+    
     data class RecResponse(@JsonProperty("data") val data: RecData?)
     data class RecData(@JsonProperty("items") val items: List<Subject>?)
+    
     data class LinkData(val subjectId: String, val detailPath: String, val season: Int = 0, val episode: Int = 0)
     data class PlayResponse(@JsonProperty("data") val data: PlayData?)
     data class PlayData(@JsonProperty("streams") val streams: List<StreamItem>?)
@@ -79,13 +89,14 @@ class MovieboxProvider : MainAPI() {
     data class CaptionData(@JsonProperty("captions") val captions: List<CaptionItem>?)
     data class CaptionItem(@JsonProperty("lanName") val lanName: String?, @JsonProperty("url") val url: String?)
 
+    // --- UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val response = app.get("$apiUrl/home?host=moviebox.ph", headers = getApiHeaders()).parsedSafe<HomeResponse>()
         val homeItems = mutableListOf<HomePageList>()
         response?.data?.operatingList?.forEach { section ->
             val searchResponses = mutableListOf<SearchResponse>()
-            section.subjects?.forEach { it.toSearchResponse()?.let { searchResponses.add(it) } }
-            section.banner?.items?.forEach { it.subject?.toSearchResponse()?.let { searchResponses.add(it) } }
+            section.subjects?.forEach { it.toSearchResponse()?.let { res -> searchResponses.add(res) } }
+            section.banner?.items?.forEach { it.subject?.toSearchResponse()?.let { res -> searchResponses.add(res) } }
             if (searchResponses.isNotEmpty()) homeItems.add(HomePageList(section.title ?: "", searchResponses))
         }
         return newHomePageResponse(homeItems)
@@ -93,37 +104,72 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val response = app.get("$apiUrl/subject/search?keyword=$query&page=0&perPage=20", headers = getApiHeaders()).parsedSafe<SearchApiResponse>()
-        return response?.data?.subjectList?.mapNotNull { it.toSearchResponse() } ?: emptyList()
+        // Fallback untuk antisipasi perubahan nama array dari server
+        val list = response?.data?.subjectList ?: response?.data?.items ?: response?.data?.list ?: emptyList()
+        return list.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val res = app.get("$apiUrl/detail?detailPath=$url", headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data?.subject ?: return null
+        val wrapper = app.get("$apiUrl/detail?detailPath=$url", headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data ?: return null
+        val res = wrapper.subject ?: return null
+        
+        // Memuat Rekomendasi
         val recs = app.get("$apiUrl/subject/detail-rec?subjectId=${res.subjectId}&page=1&perPage=12", headers = getApiHeaders()).parsedSafe<RecResponse>()?.data?.items?.mapNotNull { it.toSearchResponse() }
         
-        return if (res.subjectType == 1) {
+        // Memuat Aktor/Cast
+        val castList = wrapper.stars?.mapNotNull { star ->
+            if (star.name != null) {
+                ActorData(actor = Actor(star.name, star.avatarUrl), roleString = star.character)
+            } else null
+        }
+        
+        return if (res.subjectType == 1) { // 1 = Movie
             newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", url).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
                 this.recommendations = recs
-                // Perbaikan 1: Gunakan properti score terbaru (Score.from)
+                this.actors = castList
                 res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
             }
-        } else {
-            val episodes = res.episodes?.map { 
-                newEpisode(LinkData(res.subjectId ?: "", url, it.seasonNum ?: 1, it.episodeNum ?: 1).toJson()) { 
-                    this.name = it.title
-                    this.season = it.seasonNum
-                    this.episode = it.episodeNum 
-                } 
-            } ?: emptyList()
+        } else { // 2 = TV Series
+            val episodesList = mutableListOf<Episode>()
             
-            newTvSeriesLoadResponse(res.title ?: "", url, TvType.TvSeries, episodes) {
+            // Generate Episode otomatis berdasarkan MaxEp
+            val seasonsData = wrapper.resource?.seasons
+            if (!seasonsData.isNullOrEmpty()) {
+                seasonsData.forEach { season ->
+                    val sNum = season.se ?: 1
+                    val maxEp = season.maxEp ?: 1
+                    for (eNum in 1..maxEp) {
+                        episodesList.add(
+                            newEpisode(LinkData(res.subjectId ?: "", url, sNum, eNum).toJson()) {
+                                this.name = "Episode $eNum"
+                                this.season = sNum
+                                this.episode = eNum
+                            }
+                        )
+                    }
+                }
+            } else if (!res.episodes.isNullOrEmpty()) {
+                // Fallback jika API tiba-tiba menggunakan list episodes biasa
+                res.episodes.forEach { ep ->
+                    episodesList.add(
+                        newEpisode(LinkData(res.subjectId ?: "", url, ep.seasonNum ?: 1, ep.episodeNum ?: 1).toJson()) { 
+                            this.name = ep.title
+                            this.season = ep.seasonNum
+                            this.episode = ep.episodeNum 
+                        }
+                    )
+                }
+            }
+
+            newTvSeriesLoadResponse(res.title ?: "", url, TvType.TvSeries, episodesList) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
                 this.recommendations = recs
-                // Perbaikan 1: Gunakan properti score terbaru (Score.from)
+                this.actors = castList
                 res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
             }
         }
@@ -136,7 +182,6 @@ class MovieboxProvider : MainAPI() {
         playRes?.data?.streams?.forEach { stream ->
             val streamQuality = getQuality(stream.resolutions)
             
-            // Perbaikan 2: Format newExtractorLink terbaru sesuai ExtractorApi.kt
             callback(
                 newExtractorLink(
                     source = this.name,
@@ -149,11 +194,11 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
+            // Subtitle
             if (stream == playRes.data.streams.firstOrNull()) {
-                app.get("$apiUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach {
-                    // Perbaikan 3: Menggunakan newSubtitleFile agar terhindar dari error deprecated
+                app.get("$apiUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
                     subtitleCallback.invoke(
-                        newSubtitleFile(it.lanName ?: "Unknown", it.url ?: "")
+                        newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: "")
                     )
                 }
             }
@@ -161,7 +206,6 @@ class MovieboxProvider : MainAPI() {
         return true
     }
 
-    // Perbaikan 4: Atur year di dalam builder karena interface dasar SearchResponse tidak memiliki atribut year
     private fun Subject.toSearchResponse(): SearchResponse? {
         val titleStr = title ?: return null
         val pathStr = detailPath ?: return null
