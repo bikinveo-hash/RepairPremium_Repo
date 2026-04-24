@@ -162,11 +162,11 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Mencari elemen video player utama
+        // Cari elemen video utama (Desain Baru Podjav)
         val videoElement = document.selectFirst("#podjavPlayer")
         var foundNativeVideo = false
 
-        // STRATEGI 1: Mengambil dari sistem JSON di tag HTML video (Player Modern)
+        // RENCANA A: Coba ambil dari sistem JSON (Sistem Baru Podjav)
         if (videoElement != null) {
             val dataSourcesRaw = videoElement.attr("data-sources")
             if (dataSourcesRaw.isNotBlank() && dataSourcesRaw != "[]") {
@@ -174,7 +174,7 @@ class PodjavProvider : MainAPI() {
                 
                 sources.forEach { source ->
                     if (source.url.isNotBlank()) {
-                        val isM3u8 = source.type == "m3u8" || source.url.contains(".m3u8", true)
+                        val isM3u8 = source.type == "m3u8" || source.url.contains(".m3u8", ignoreCase = true)
                         
                         callback.invoke(
                             newExtractorLink(
@@ -192,45 +192,59 @@ class PodjavProvider : MainAPI() {
                 }
             }
 
-            // Ekstraksi Subtitle dari player native
+            // Ekstrak Subtitle Rencana A
             val dataSubtitlesRaw = videoElement.attr("data-subtitles")
             if (dataSubtitlesRaw.isNotBlank() && dataSubtitlesRaw != "[]") {
                 val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
+                
                 subtitles.forEach { sub ->
                     if (sub.src.isNotBlank()) {
-                        subtitleCallback.invoke(SubtitleFile(sub.label ?: "Indonesia", sub.src))
+                        subtitleCallback.invoke(
+                            SubtitleFile(
+                                lang = sub.label ?: "Indonesia",
+                                url = sub.src
+                            )
+                        )
                     }
                 }
             }
         }
 
-        // STRATEGI 2: Bongkar Iframe Manual (Untuk server movearnpre/callistanise/video lama)
+        // RENCANA B: JIKA RENCANA A KOSONG, KITA EKSTRAK IFRAME MANUAL! (Solusi Error 3003)
         if (!foundNativeVideo) {
-            val iframeSrc = document.selectFirst("iframe")?.attr("src")
+            val iframeSrc = document.selectFirst("iframe#podjavEmbed")?.attr("src")
+                ?: document.selectFirst(".player-wrapper iframe")?.attr("src")
+                ?: document.selectFirst("iframe")?.attr("src")
 
             if (iframeSrc != null && iframeSrc.isNotBlank()) {
-                var fixUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-
+                var fixUrl = iframeSrc
+                if (fixUrl.startsWith("//")) fixUrl = "https:$fixUrl"
+                
                 try {
-                    // Ambil konten dari website iframe (karena browser melarang cross-domain access)
+                    // 1. Kunjungi halaman Iframe tersebut
                     val iframeResponse = app.get(fixUrl, referer = mainUrl).text
                     
-                    // Dekripsi Javascript yang dipacking/diacak (Solusi Error 3003)
+                    // 2. Bongkar Javascript terenkripsi (Metode Filemoon/Vidhide Native Bypass)
                     val unpacked = getAndUnpack(iframeResponse)
 
-                    // Cari link file video .m3u8 atau .mp4 menggunakan regex
-                    val linkRegex = Regex("""["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
-                    var videoLink = linkRegex.find(unpacked)?.groupValues?.get(1) 
+                    // 3. Ambil URL .m3u8 atau .mp4 yang berhasil dibongkar
+                    val linkRegex = Regex("""file:\s*["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
+                    val alternateLinkRegex = Regex("""["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
+                    
+                    var videoLink = linkRegex.find(unpacked)?.groupValues?.get(1)
+                        ?: alternateLinkRegex.find(unpacked)?.groupValues?.get(1)
                         ?: linkRegex.find(iframeResponse)?.groupValues?.get(1)
+                        ?: alternateLinkRegex.find(iframeResponse)?.groupValues?.get(1)
 
                     if (videoLink != null) {
-                        // Perbaiki link jika berupa URL relatif
+                        // Perbaiki link relatif (yang diawali dengan garis miring "/")
                         if (videoLink.startsWith("/")) {
                             val uri = URI(fixUrl)
                             videoLink = "${uri.scheme}://${uri.host}$videoLink"
                         }
 
-                        val isMp4 = videoLink.contains(".mp4", true)
+                        val isMp4 = videoLink.contains(".mp4", ignoreCase = true)
+
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
@@ -238,13 +252,28 @@ class PodjavProvider : MainAPI() {
                                 url = videoLink,
                                 type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
                             ) {
-                                // Pasang referer ke URL iframe agar tidak diblokir server
+                                // Referer WAJIB pakai URL iframe agar video bisa didownload ExoPlayer
                                 this.referer = fixUrl
                                 this.quality = Qualities.P720.value
                             }
                         )
+
+                        // Ambil Subtitle (Jika ada di dalam unpack iframe)
+                        val srtRegex = Regex("""["']((?:https?://|/)[^"']*\.srt[^"']*)["']""")
+                        var srtLink = srtRegex.find(unpacked)?.groupValues?.get(1)
+                            ?: srtRegex.find(iframeResponse)?.groupValues?.get(1)
+                            
+                        if (srtLink != null) {
+                            if (srtLink.startsWith("/")) {
+                                val uri = URI(fixUrl)
+                                srtLink = "${uri.scheme}://${uri.host}$srtLink"
+                            }
+                            subtitleCallback.invoke(
+                                SubtitleFile(lang = "Indonesia", url = srtLink)
+                            )
+                        }
                     } else {
-                        // Jika gagal membongkar sendiri, gunakan sistem extractor otomatis Cloudstream
+                        // Jika gagal mengekstrak regex, biarkan Extractor API mencoba
                         loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
