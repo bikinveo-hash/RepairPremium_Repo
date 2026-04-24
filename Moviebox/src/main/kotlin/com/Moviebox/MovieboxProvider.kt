@@ -17,27 +17,28 @@ class MovieboxProvider : MainAPI() {
 
     private val apiUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
     
-    // Menyimpan Raw Token agar bisa dipakai untuk Header Authorization dan Cookie sekaligus
     private var rawToken: String? = null
 
+    // Sistem Scraper Token Anti-Bot
     private suspend fun getRawAuthToken(): String {
         rawToken?.let { return it }
 
         val domains = listOf("https://moviebox.ph", "https://netfilm.world", "https://h5-api.aoneroom.com")
+        val scrapeHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        )
+
         for (domain in domains) {
             try {
-                val response = app.get(domain)
-                val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
-                if (!cookieToken.isNullOrBlank()) {
-                    rawToken = cookieToken.replace("%22", "").replace("\"", "")
-                    return rawToken!!
-                }
-
-                val tokenRegex = """(eyJhbGciOiJIUzI1NiI[a-zA-Z0-9\-_.]+)""".toRegex()
+                val response = app.get(domain, headers = scrapeHeaders)
+                
+                // Menangkap token JWT (HS256) apapun bentuknya di dalam HTML
+                val tokenRegex = """eyJhbGciOiJIUzI1NiI[a-zA-Z0-9\-_.]+""".toRegex()
                 val matchResult = tokenRegex.find(response.text)
                 
                 if (matchResult != null) {
-                    rawToken = matchResult.groupValues[1]
+                    rawToken = matchResult.value
                     return rawToken!!
                 }
             } catch (e: Exception) {
@@ -45,9 +46,8 @@ class MovieboxProvider : MainAPI() {
             }
         }
         
-        // Fallback Raw Token
-        rawToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjQ4Njc4NDE4MzQ5MDEwMjkzMjgsImF0cCI6MywiZXh0IjoiMTc3NzA0MDQyMiIsImV4cCI6MTc4NDgxNjQyMiwiaWF0IjoxNzc3MDQwMTIyfQ.cxsvUHlRWDWiWOiEB78a9POanRXjX5eoL6h6Ip5Q7OU"
-        return rawToken!!
+        // Token cadangan darurat (hanya dipakai jika benar-benar gagal scrape)
+        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjQ4Njc4NDE4MzQ5MDEwMjkzMjgsImF0cCI6MywiZXh0IjoiMTc3NzA0MDQyMiIsImV4cCI6MTc4NDgxNjQyMiwiaWF0IjoxNzc3MDQwMTIyfQ.cxsvUHlRWDWiWOiEB78a9POanRXjX5eoL6h6Ip5Q7OU"
     }
 
     private suspend fun getApiHeaders(): Map<String, String> {
@@ -59,9 +59,10 @@ class MovieboxProvider : MainAPI() {
             "x-source" to "null",
             "origin" to mainUrl,
             "referer" to "$mainUrl/",
+            "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "authorization" to "Bearer $token",
-            // PERBAIKAN FINAL: Suntikkan Token ke dalam Cookie secara manual agar API terbuka!
-            "cookie" to "mb_token=$token; token=$token"
+            // Cookie format browser asli dengan %22 (URL Encoded Double Quotes)
+            "cookie" to "mb_token=%22$token%22; token=%22$token%22"
         )
     }
 
@@ -88,7 +89,14 @@ class MovieboxProvider : MainAPI() {
     data class RecResponse(@JsonProperty("data") val data: RecData?)
     data class RecData(@JsonProperty("items") val items: List<Subject>?)
     
-    data class LinkData(val subjectId: String, val detailPath: String, val season: Int = 0, val episode: Int = 0)
+    // Keamanan ekstra untuk proguard Cloudstream
+    data class LinkData(
+        @JsonProperty("subjectId") val subjectId: String, 
+        @JsonProperty("detailPath") val detailPath: String, 
+        @JsonProperty("season") val season: Int = 0, 
+        @JsonProperty("episode") val episode: Int = 0
+    )
+    
     data class PlayResponse(@JsonProperty("data") val data: PlayData?)
     data class PlayData(@JsonProperty("streams") val streams: List<StreamItem>?)
     data class StreamItem(@JsonProperty("id") val id: String?, @JsonProperty("url") val url: String?, @JsonProperty("resolutions") val resolutions: String?, @JsonProperty("format") val format: String?)
@@ -194,10 +202,19 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
+        val playUrl = "$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
-        val playRes = app.get("$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        // Percobaan Pertama
+        var playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        
+        // PANTANG MENYERAH: Jika server membalas dengan streams kosong (Token Mati), 
+        // kita paksa hapus token lama dan tembak lagi dengan token baru!
+        if (playRes?.data?.streams.isNullOrEmpty()) {
+            rawToken = null // Reset cache token
+            playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
+        }
+        
         val streams = playRes?.data?.streams
-        
         if (streams.isNullOrEmpty()) return false
 
         streams.forEach { stream ->
