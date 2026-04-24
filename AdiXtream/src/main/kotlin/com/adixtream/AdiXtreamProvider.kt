@@ -203,12 +203,14 @@ class VidSrcProvider : MainAPI() {
             baseUrl = "$mainUrl/embed/movie/$tmdbId"
         }
 
-        // --- SOURCE 1: SFLIX & ADIMOVIEBOX HELPERS ---
+        // =========================================================
+        // 1. PANGGIL ASISTEN SFLIX, ADIMOVIEBOX 1 & ADIMOVIEBOX 2
+        // =========================================================
         try {
             var titleQuery: String? = null
             var yearQuery: Int? = null
-
-            // Ambil info nama & tahun dari TMDB untuk pencarian di helper
+            
+            // Ambil info nama & tahun dari TMDB
             if (isTvSeries) {
                 val tvRes = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
                 titleQuery = tvRes?.name
@@ -220,15 +222,22 @@ class VidSrcProvider : MainAPI() {
             }
 
             if (titleQuery != null) {
-                // Tarik link dari Sflix API
+                // Tarik link dari Sflix
                 try { SflixHelper.getLinks(titleQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback) } catch (e: Exception) {}
                 
-                // Tarik link dari Adimoviebox (v1 & v2)
+                // Tarik link dari Adimoviebox1 (Filmboom)
                 try { AdimovieboxHelper.getLinks(titleQuery, yearQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback) } catch (e: Exception) {}
+                
+                // Tarik link dari Adimoviebox2 (Aoneroom Mobile App)
+                try { Adimoviebox2Helper.getLinks(titleQuery, yearQuery, isTvSeries, seasonNum, epNum, callback, subtitleCallback) } catch (e: Exception) {}
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) { 
+            e.printStackTrace()
+        }
 
-        // --- SOURCE 2: VIDSRC + OPENSUBTITLES ---
+        // ==========================================
+        // 2. KODE VIDSRC & OPENSUBTITLES ASLI
+        // ==========================================
         try {
             val mediaTypePath = if (isTvSeries) "tv" else "movie"
             val extRes = app.get("https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey").text
@@ -251,13 +260,12 @@ class VidSrcProvider : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // Ekstraksi Link dari VidSrc (Embed)
         val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
         val response1 = app.get(baseUrl, interceptor = universalBypass).text
         var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
             ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src")
             ?: return true 
-
+            
         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
 
         var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = universalBypass).text
@@ -278,7 +286,7 @@ class VidSrcProvider : MainAPI() {
             val m3u8Url = "https://tmstr2.neonhorizonworkshops.com/pl/${hashMatch.groupValues[1].replace("\\/", "/")}"
             callback.invoke(newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) { this.referer = finalReferer })
         }
-
+        
         return true
     }
 }
