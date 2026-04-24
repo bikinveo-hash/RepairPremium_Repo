@@ -5,10 +5,8 @@ import android.net.Uri
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-// INI DUA BARIS IMPORT YANG KELUPAAN BRO 👇
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.nicehttp.RequestBodyTypes
-// ===========================================
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -43,6 +41,7 @@ object AdimovieboxHelper {
         return "$timestamp,$hash"
     }
 
+    // PERBAIKAN: Enkripsi Signature dibuat lebih adaptif untuk GET tanpa body
     @SuppressLint("UseKtx")
     private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
         val parsed = Uri.parse(url)
@@ -52,7 +51,7 @@ object AdimovieboxHelper {
         } else ""
         val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
         val bodyBytes = body?.toByteArray(Charsets.UTF_8)
-        val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""
+        val bodyHash = if (bodyBytes != null && bodyBytes.isNotEmpty()) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""
         val bodyLength = bodyBytes?.size?.toString() ?: ""
         val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
         val mac = Mac.getInstance("HmacMD5")
@@ -61,17 +60,23 @@ object AdimovieboxHelper {
         return "$timestamp|2|$signature"
     }
 
+    // PERBAIKAN: Header GET dan POST dipisahkan dengan sangat rapi
     private fun getHeadersV2(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
         val timestamp = System.currentTimeMillis()
-        return mapOf(
+        val cTypeSignature = if (method == "POST") "application/json; charset=utf-8" else ""
+        
+        val headers = mutableMapOf(
             "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
             "accept" to "application/json",
-            "content-type" to "application/json",
             "x-client-token" to generateXClientToken(timestamp),
-            "x-tr-signature" to generateXTrSignature(method, "application/json", if(method=="POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp),
+            "x-tr-signature" to generateXTrSignature(method, "application/json", cTypeSignature, url, body, timestamp),
             "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
             "x-client-status" to "0"
         )
+        if (method == "POST") {
+            headers["content-type"] = "application/json"
+        }
+        return headers
     }
 
     private suspend fun getAdimoviebox2(title: String, year: Int?, isTvSeries: Boolean, season: Int, episode: Int, callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit) {
@@ -79,16 +84,16 @@ object AdimovieboxHelper {
         val searchUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/search/v2"
         val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$title"}"""
         
-        val searchRes = app.post(searchUrl, headers = getHeadersV2(searchUrl, jsonBody, "POST", brand, model), requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
-        val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
-            val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-            val isTitleMatch = subject.title?.contains(title, true) == true
-            val isYearMatch = year == null || subjectYear == year
-            val isTypeMatch = if (isTvSeries) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
-            isTitleMatch && isYearMatch && isTypeMatch
+        val searchRes = app.post(searchUrl, headers = getHeadersV2(searchUrl, jsonBody, "POST", brand, model), requestBody = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
+        
+        // PERBAIKAN: Filter dilonggarkan! Langsung ambil hasil pertama yang cocok jenisnya (Movie/Series)
+        val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.firstOrNull { subject ->
+            if (isTvSeries) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
+        
+        // Ambil Data Detail + Dubbing Audio
         val detailUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailRes = app.get(detailUrl, headers = getHeadersV2(detailUrl, null, "GET", brand, model)).text
         
@@ -107,6 +112,7 @@ object AdimovieboxHelper {
             }
         } catch (e: Exception) { subjectList.add(mainSubjectId to "Original Audio") }
 
+        // Tarik Video Berdasarkan List Bahasa (Original + Dub)
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$season&ep=$episode"
             val playRes = app.get(playUrl, headers = getHeadersV2(playUrl, null, "GET", brand, model)).parsedSafe<Adimoviebox2PlayResponse>()
@@ -116,7 +122,7 @@ object AdimovieboxHelper {
                 val baseHeaders = getHeadersV2(streamUrl, null, "GET", brand, model).toMutableMap()
                 if (!stream.signCookie.isNullOrEmpty()) baseHeaders["Cookie"] = stream.signCookie
 
-                callback.invoke(newExtractorLink("Adimoviebox2 ($languageName)", "Adimoviebox2 ($languageName)", streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                callback.invoke(newExtractorLink("Adimoviebox2 API ($languageName)", "Adimoviebox2 ($languageName)", streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                     this.quality = getQualityFromName(stream.resolutions)
                     this.headers = baseHeaders
                 })
@@ -144,9 +150,10 @@ object AdimovieboxHelper {
         val searchBody = mapOf("keyword" to title, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         
         val searchRes = app.post(searchUrl, requestBody = searchBody).parsedSafe<AdimovieboxResponse>()
+        
+        // Di V1 kita juga longgarkan, cukup cari yang judulnya mirip
         val matchedMedia = searchRes?.data?.items?.find { item ->
-            val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-            item.title.equals(title, true) || (item.title?.contains(title, true) == true && itemYear == year)
+            item.title?.contains(title, true) == true || title.contains(item.title ?: "", true)
         } ?: return
         
         val subjectId = matchedMedia.subjectId ?: return
@@ -158,7 +165,7 @@ object AdimovieboxHelper {
         val streams = playRes?.data?.streams ?: return
         
         streams.reversed().distinctBy { it.url }.forEach { source ->
-             callback.invoke(newExtractorLink("Adimoviebox1", "Adimoviebox1", source.url ?: return@forEach, if (source.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+             callback.invoke(newExtractorLink("Adimoviebox1 API", "Adimoviebox1", source.url ?: return@forEach, if (source.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                     this.referer = "$apiUrlV1/"
                     this.quality = getQualityFromName(source.resolutions)
              })
@@ -176,8 +183,8 @@ object AdimovieboxHelper {
 
     // Fungsi Gabungan untuk dipanggil dari Provider
     suspend fun getLinks(title: String, year: Int?, isTvSeries: Boolean, season: Int, episode: Int, callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit) {
-        try { getAdimoviebox2(title, year, isTvSeries, season, episode, callback, subtitleCallback) } catch (e: Exception) {}
-        try { getAdimoviebox1(title, year, isTvSeries, season, episode, callback, subtitleCallback) } catch (e: Exception) {}
+        try { getAdimoviebox2(title, year, isTvSeries, season, episode, callback, subtitleCallback) } catch (e: Exception) { e.printStackTrace() }
+        try { getAdimoviebox1(title, year, isTvSeries, season, episode, callback, subtitleCallback) } catch (e: Exception) { e.printStackTrace() }
     }
 
     // ==========================================
