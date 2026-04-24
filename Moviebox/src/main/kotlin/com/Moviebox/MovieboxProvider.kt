@@ -8,8 +8,11 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class MovieboxProvider : MainAPI() {
     override var name = "Moviebox"
-    // PERUBAHAN FATAL 1: Kita gunakan netfilm.world sebagai markas utama
-    override var mainUrl = "https://netfilm.world" 
+    override var mainUrl = "https://netfilm.world"
+    
+    // API Utama yang kita temukan dari investigasi
+    private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff" 
+    
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -49,7 +52,7 @@ class MovieboxProvider : MainAPI() {
         val headers = mutableMapOf(
             "Accept" to "application/json",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-            "x-source" to "null",
+            "x-source" to "", // Perbaikan: String kosong agar sesuai request asli
             "x-request-lang" to "en",
             "Origin" to mainUrl,
             "Referer" to "$mainUrl/"
@@ -57,7 +60,8 @@ class MovieboxProvider : MainAPI() {
         
         if (token != null) {
             headers["Authorization"] = "Bearer $token"
-            headers["Cookie"] = "token=%22$token%22; mb_token=%22$token%22"
+            // Perbaikan: Format cookie bersih tanpa %22
+            headers["Cookie"] = "token=$token; mb_token=$token" 
         }
         return headers
     }
@@ -101,8 +105,7 @@ class MovieboxProvider : MainAPI() {
 
     // --- FUNGSI UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // PERUBAHAN FATAL 2: Gunakan $mainUrl (Jalur Dalam) untuk semua API
-        val apiUrl = "$mainUrl/wefeed-h5api-bff/home?host=netfilm.world"
+        val apiUrl = "$apiBaseUrl/home?host=netfilm.world"
         val response = app.get(apiUrl, headers = getApiHeaders()).parsedSafe<HomeResponse>()
         
         val homeItems = mutableListOf<HomePageList>()
@@ -116,7 +119,7 @@ class MovieboxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val apiUrl = "$mainUrl/wefeed-h5api-bff/subject/search"
+        val apiUrl = "$apiBaseUrl/subject/search"
         val payload = mapOf(
             "keyword" to query,
             "page" to "1",
@@ -127,7 +130,7 @@ class MovieboxProvider : MainAPI() {
         val response = app.post(
             apiUrl, 
             headers = getApiHeaders(), 
-            json = payload // Cloudstream menangani JSON body dengan rapi di sini
+            json = payload 
         ).parsedSafe<SearchApiResponse>()
         
         val list = response?.data?.items ?: response?.data?.subjectList ?: emptyList()
@@ -136,12 +139,12 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val slug = url.substringAfterLast("/") 
-        val detailUrl = "$mainUrl/wefeed-h5api-bff/detail?detailPath=$slug"
+        val detailUrl = "$apiBaseUrl/detail?detailPath=$slug"
         
         val wrapper = app.get(detailUrl, headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data ?: return null
         val res = wrapper.subject ?: return null
         
-        val recUrl = "$mainUrl/wefeed-h5api-bff/subject/detail-rec?subjectId=${res.subjectId}&page=1&perPage=12"
+        val recUrl = "$apiBaseUrl/subject/detail-rec?subjectId=${res.subjectId}&page=1&perPage=12"
         val recs = app.get(recUrl, headers = getApiHeaders()).parsedSafe<RecResponse>()?.data?.items?.mapNotNull { it.toSearchResponse() }
         
         val castList = wrapper.stars?.mapNotNull { star ->
@@ -149,7 +152,8 @@ class MovieboxProvider : MainAPI() {
         }
         
         return if (res.subjectType == 1) { 
-            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 0, 0).toJson()) {
+            // Perbaikan: Mengatur default season 1 dan episode 1 untuk Film
+            newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 1, 1).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
@@ -202,13 +206,13 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
-        val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
+        val playUrl = "$apiBaseUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
         var playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
         
         // Auto-Retry jika token mati
         if (playRes?.data?.streams.isNullOrEmpty()) {
-            rawToken = null
+            rawToken = null // Reset token
             playRes = app.get(playUrl, headers = getApiHeaders()).parsedSafe<PlayResponse>()
         }
         
@@ -229,8 +233,9 @@ class MovieboxProvider : MainAPI() {
                 }
             )
             
+            // Tarik Subtitle hanya sekali di stream pertama untuk menghindari duplikasi
             if (stream == streams.firstOrNull()) {
-                val captionUrl = "$mainUrl/wefeed-h5api-bff/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
+                val captionUrl = "$apiBaseUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
                 app.get(captionUrl, headers = getApiHeaders()).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
                     subtitleCallback.invoke(
                         newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: "")
