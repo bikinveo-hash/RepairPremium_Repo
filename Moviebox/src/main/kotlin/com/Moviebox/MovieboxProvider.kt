@@ -5,6 +5,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class MovieboxProvider : MainAPI() {
     override var name = "Moviebox"
@@ -17,38 +19,44 @@ class MovieboxProvider : MainAPI() {
     
     private var cachedToken: String? = null
 
+    // Sistem Token Dinamis yang jauh lebih kuat
     private suspend fun getAuthToken(): String {
         cachedToken?.let { return it }
-        try {
-            val response = app.get(mainUrl)
-            val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
-            
-            if (cookieToken != null) {
-                val cleanToken = cookieToken.replace("%22", "").replace("\"", "")
-                cachedToken = "Bearer $cleanToken"
-                return cachedToken!!
-            }
 
-            val htmlResponse = response.text
-            val tokenRegex = """(eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)""".toRegex()
-            val matchResult = tokenRegex.find(htmlResponse)
-            
-            if (matchResult != null) {
-                cachedToken = "Bearer ${matchResult.groupValues[1]}"
-                return cachedToken!!
+        val domains = listOf("https://moviebox.ph", "https://netfilm.world", "https://h5-api.aoneroom.com")
+        for (domain in domains) {
+            try {
+                val response = app.get(domain)
+                val cookieToken = response.cookies["mb_token"] ?: response.cookies["token"]
+                if (!cookieToken.isNullOrBlank()) {
+                    val cleanToken = cookieToken.replace("%22", "").replace("\"", "")
+                    cachedToken = "Bearer $cleanToken"
+                    return cachedToken!!
+                }
+
+                // Regex spesifik untuk token Moviebox (bukan token Firebase)
+                val tokenRegex = """(eyJhbGciOiJIUzI1NiI[a-zA-Z0-9\-_.]+)""".toRegex()
+                val matchResult = tokenRegex.find(response.text)
+                
+                if (matchResult != null) {
+                    cachedToken = "Bearer ${matchResult.groupValues[1]}"
+                    return cachedToken!!
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
-        return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMxMjI1Njk0MzU5NDYxNDAyNjQsImF0cCI6MywiZXh0IjoiMTc3NzAzMjk1OCIsImV4cCI6MTc4NDgwODk1OCwiaWF0IjoxNzc3MDMyNjU4fQ.7cMp7KjbAQy-VZMZGgIC2Z9KCHxkyL3Ib_UGhc6vFU8"
+        
+        // Fallback menggunakan Token Fresh dari tangkapan curl terbarumu
+        return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjQ4Njc4NDE4MzQ5MDEwMjkzMjgsImF0cCI6MywiZXh0IjoiMTc3NzA0MDQyMiIsImV4cCI6MTc4NDgxNjQyMiwiaWF0IjoxNzc3MDQwMTIyfQ.cxsvUHlRWDWiWOiEB78a9POanRXjX5eoL6h6Ip5Q7OU"
     }
 
     private suspend fun getApiHeaders(): Map<String, String> {
         return mapOf(
             "accept" to "application/json",
-            "content-type" to "application/json",
             "x-request-lang" to "en",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
+            "x-source" to "null",
             "origin" to mainUrl,
             "referer" to "$mainUrl/",
             "authorization" to getAuthToken() 
@@ -100,20 +108,26 @@ class MovieboxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // PERBAIKAN 1: Gunakan app.post dan body JSON
+        // PERBAIKAN 1: Memaksa JSON requestBody murni agar tidak ditolak oleh server
         val payload = mapOf(
             "keyword" to query,
             "page" to "1",
             "perPage" to 28,
             "subjectType" to 0
         )
-        val response = app.post("$apiUrl/subject/search", headers = getApiHeaders(), json = payload).parsedSafe<SearchApiResponse>()
+        val reqBody = payload.toJson().toRequestBody("application/json".toMediaTypeOrNull())
+        
+        val response = app.post(
+            "$apiUrl/subject/search", 
+            headers = getApiHeaders(), 
+            requestBody = reqBody
+        ).parsedSafe<SearchApiResponse>()
+        
         val list = response?.data?.items ?: response?.data?.subjectList ?: emptyList()
         return list.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // PERBAIKAN 2: Pastikan hanya mengirim Slug (bukan URL Utuh) ke Backend
         val slug = url.substringAfterLast("/") 
         
         val wrapper = app.get("$apiUrl/detail?detailPath=$slug", headers = getApiHeaders()).parsedSafe<DetailResponse>()?.data ?: return null
@@ -138,6 +152,7 @@ class MovieboxProvider : MainAPI() {
             val episodesList = mutableListOf<Episode>()
             val seasonsData = wrapper.resource?.seasons
             
+            // PERBAIKAN 2: Generator episode yang lebih kuat dan aman
             if (!seasonsData.isNullOrEmpty()) {
                 seasonsData.forEach { season ->
                     val sNum = season.se ?: 1
@@ -180,7 +195,6 @@ class MovieboxProvider : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
         
-        // Karena LinkData sekarang berisi `slug`, backend tidak akan error (404) lagi
         val playRes = app.get("$apiUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}", headers = getApiHeaders()).parsedSafe<PlayResponse>()
         val streams = playRes?.data?.streams
         
