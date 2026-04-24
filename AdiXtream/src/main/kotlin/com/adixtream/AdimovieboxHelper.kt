@@ -22,7 +22,17 @@ object AdimovieboxHelper {
     private val secretKeyDefault = android.util.Base64.decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==", android.util.Base64.DEFAULT)
     private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("")
 
-    // Fungsi MD5 Sakti ala Adicinemax21
+    private fun randomBrandModel(): Pair<String, String> {
+        val brandModels = mapOf(
+            "Samsung" to listOf("SM-S918B", "SM-A528B", "SM-M336B"),
+            "Xiaomi" to listOf("2201117TI", "M2012K11AI", "Redmi Note 11"),
+            "Google" to listOf("Pixel 7", "Pixel 8")
+        )
+        val brand = brandModels.keys.random()
+        val model = brandModels[brand]!!.random()
+        return brand to model
+    }
+
     private fun md5(input: ByteArray): String {
         val md = MessageDigest.getInstance("MD5")
         return BigInteger(1, md.digest(input)).toString(16).padStart(32, '0')
@@ -52,16 +62,17 @@ object AdimovieboxHelper {
         return "$timestamp|2|$signature"
     }
 
-    private fun getHeadersV2(url: String, body: String? = null, method: String = "POST"): Map<String, String> {
+    // PERBAIKAN UTAMA: Content Type Signature sesuai dengan metode GET/POST!
+    private fun getHeadersV2(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
         val timestamp = System.currentTimeMillis()
-        val cTypeSignature = if (method == "POST") "application/json; charset=utf-8" else ""
+        val contentTypeSig = if(method=="POST") "application/json; charset=utf-8" else "application/json"
         
         val headers = mutableMapOf(
-            "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; 2201117TI; Build/BP22.250325.006; Cronet/133.0.6876.3)",
+            "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
             "accept" to "application/json",
             "x-client-token" to generateXClientToken(timestamp),
-            "x-tr-signature" to generateXTrSignature(method, "application/json", cTypeSignature, url, body, timestamp),
-            "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"Xiaomi","model":"2201117TI","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
+            "x-tr-signature" to generateXTrSignature(method, "application/json", contentTypeSig, url, body, timestamp),
+            "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
             "x-client-status" to "0"
         )
         if (method == "POST") {
@@ -71,13 +82,14 @@ object AdimovieboxHelper {
     }
 
     private suspend fun getAdimoviebox2(title: String, year: Int?, isTvSeries: Boolean, season: Int, episode: Int, callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit) {
-        // 1. SEARCH MENGGUNAKAN RAW STRING JSON (Bebas Error)
+        val (brand, model) = randomBrandModel()
+        
         val searchUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/search/v2"
         val searchBody = """{"page":1,"perPage":10,"keyword":"$title"}"""
         
         val searchRes = app.post(
             searchUrl, 
-            headers = getHeadersV2(searchUrl, searchBody, "POST"), 
+            headers = getHeadersV2(searchUrl, searchBody, "POST", brand, model), 
             requestBody = searchBody.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         ).parsedSafe<Adimoviebox2SearchResponse>()
         
@@ -87,9 +99,8 @@ object AdimovieboxHelper {
 
         val mainSubjectId = matchedSubject.subjectId ?: return
 
-        // 2. DETAIL & DUBBING
         val detailUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
-        val detailRes = app.get(detailUrl, headers = getHeadersV2(detailUrl, null, "GET")).text
+        val detailRes = app.get(detailUrl, headers = getHeadersV2(detailUrl, null, "GET", brand, model)).text
         
         val subjectList = mutableListOf<Pair<String, String>>()
         try {
@@ -106,15 +117,13 @@ object AdimovieboxHelper {
             }
         } catch (e: Exception) { subjectList.add(mainSubjectId to "Original Audio") }
 
-        // 3. PLAY
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrlV2/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$season&ep=$episode"
-            val playRes = app.get(playUrl, headers = getHeadersV2(playUrl, null, "GET")).parsedSafe<Adimoviebox2PlayResponse>()
+            val playRes = app.get(playUrl, headers = getHeadersV2(playUrl, null, "GET", brand, model)).parsedSafe<Adimoviebox2PlayResponse>()
             
             playRes?.data?.streams?.forEach { stream ->
                 val streamUrl = stream.url ?: return@forEach
                 
-                // HEADER VIDEO MURNI (Ala Adicinemax21)
                 val headerStream = mutableMapOf(
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
                 )
@@ -122,18 +131,18 @@ object AdimovieboxHelper {
                     headerStream["Cookie"] = stream.signCookie
                 }
 
-                callback.invoke(newExtractorLink("Adimoviebox2", "Adimoviebox2 ($languageName)", streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                callback.invoke(newExtractorLink("Adimoviebox2 API", "Adimoviebox2 ($languageName)", streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                     this.quality = getQualityFromName(stream.resolutions)
                     this.headers = headerStream
                 })
 
                 if (stream.id != null) {
                     val subInternal = "$apiUrlV2/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
-                    app.get(subInternal, headers = getHeadersV2(subInternal, null, "GET")).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
+                    app.get(subInternal, headers = getHeadersV2(subInternal, null, "GET", brand, model)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                         subtitleCallback.invoke(SubtitleFile("${cap.language ?: cap.lanName ?: cap.lan ?: "Unknown"} ($languageName)", cap.url ?: return@forEach))
                     }
                     val subExternal = "$apiUrlV2/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
-                    app.get(subExternal, headers = getHeadersV2(subExternal, null, "GET")).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
+                    app.get(subExternal, headers = getHeadersV2(subExternal, null, "GET", brand, model)).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                         subtitleCallback.invoke(SubtitleFile("${cap.lan ?: cap.lanName ?: cap.language ?: "Unknown"} ($languageName) [Ext]", cap.url ?: return@forEach))
                     }
                 }
@@ -147,7 +156,6 @@ object AdimovieboxHelper {
     private suspend fun getAdimoviebox1(title: String, year: Int?, isTvSeries: Boolean, season: Int, episode: Int, callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit) {
         val apiUrlV1 = "https://filmboom.top"
         val searchUrl = "$apiUrlV1/wefeed-h5-bff/web/subject/search"
-        // RAW STRING JSON (Bebas Error)
         val searchBody = """{"keyword":"$title","page":1,"perPage":0,"subjectType":0}"""
         
         val searchRes = app.post(
@@ -168,7 +176,7 @@ object AdimovieboxHelper {
         val streams = playRes?.data?.streams ?: return
         
         streams.reversed().distinctBy { it.url }.forEach { source ->
-             callback.invoke(newExtractorLink("Adimoviebox1", "Adimoviebox1", source.url ?: return@forEach, if (source.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+             callback.invoke(newExtractorLink("Adimoviebox1 API", "Adimoviebox1", source.url ?: return@forEach, if (source.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                     this.referer = "$apiUrlV1/"
                     this.quality = getQualityFromName(source.resolutions)
              })
