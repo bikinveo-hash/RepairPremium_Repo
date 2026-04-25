@@ -49,8 +49,8 @@ class PodjavProvider : MainAPI() {
         val posterUrl = this.selectFirst("img.thumb")?.attr("src")
 
         // Mendeteksi label Uncensored dari class badge atau data genre
-        val isUncensored = this.selectFirst(".badge-uncen") != null || 
-                          this.attr("data-genre").contains("uncensored", ignoreCase = true)
+        val isUncensored = this.selectFirst(".badge-uncen") != null ||
+            this.attr("data-genre").contains("uncensored", ignoreCase = true)
         val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $titleText" else titleText
 
         return newMovieSearchResponse(finalTitle, url, TvType.NSFW) {
@@ -173,21 +173,28 @@ class PodjavProvider : MainAPI() {
                 val sources = AppUtils.parseJson<List<VideoSource>>(dataSourcesRaw)
                 
                 sources.forEach { source ->
-                    if (source.url.isNotBlank()) {
-                        val isM3u8 = source.type == "m3u8" || source.url.contains(".m3u8", ignoreCase = true)
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = source.label ?: "HD Stream",
-                                url = source.url,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.P720.value
-                            }
-                        )
-                        foundNativeVideo = true
+                    val url = source.url
+                    if (url.isNotBlank()) {
+                        // Jika tipenya embed atau bukan file langsung, serahkan ke Extractor
+                        if (source.type == "embed" || (!url.contains(".m3u8", true) && !url.contains(".mp4", true))) {
+                            loadExtractor(url, mainUrl, subtitleCallback, callback)
+                            foundNativeVideo = true
+                        } else {
+                            // Jika link langsung, proses seperti biasa
+                            val isM3u8 = source.type == "m3u8" || url.contains(".m3u8", ignoreCase = true)
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = source.label ?: "HD Stream",
+                                    url = url,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = mainUrl
+                                    this.quality = Qualities.P720.value
+                                }
+                            )
+                            foundNativeVideo = true
+                        }
                     }
                 }
             }
@@ -210,7 +217,7 @@ class PodjavProvider : MainAPI() {
             }
         }
 
-        // RENCANA B: JIKA RENCANA A KOSONG, KITA EKSTRAK IFRAME MANUAL! (Solusi Error 3003)
+        // RENCANA B: JIKA RENCANA A KOSONG, KITA CARI IFRAME DAN GUNAKAN EXTRACTOR API
         if (!foundNativeVideo) {
             val iframeSrc = document.selectFirst("iframe#podjavEmbed")?.attr("src")
                 ?: document.selectFirst(".player-wrapper iframe")?.attr("src")
@@ -221,63 +228,10 @@ class PodjavProvider : MainAPI() {
                 if (fixUrl.startsWith("//")) fixUrl = "https:$fixUrl"
                 
                 try {
-                    // 1. Kunjungi halaman Iframe tersebut
-                    val iframeResponse = app.get(fixUrl, referer = mainUrl).text
-                    
-                    // 2. Bongkar Javascript terenkripsi (Metode Filemoon/Vidhide Native Bypass)
-                    val unpacked = getAndUnpack(iframeResponse)
-
-                    // 3. Ambil URL .m3u8 atau .mp4 yang berhasil dibongkar
-                    val linkRegex = Regex("""file:\s*["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
-                    val alternateLinkRegex = Regex("""["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
-                    
-                    var videoLink = linkRegex.find(unpacked)?.groupValues?.get(1)
-                        ?: alternateLinkRegex.find(unpacked)?.groupValues?.get(1)
-                        ?: linkRegex.find(iframeResponse)?.groupValues?.get(1)
-                        ?: alternateLinkRegex.find(iframeResponse)?.groupValues?.get(1)
-
-                    if (videoLink != null) {
-                        // Perbaiki link relatif (yang diawali dengan garis miring "/")
-                        if (videoLink.startsWith("/")) {
-                            val uri = URI(fixUrl)
-                            videoLink = "${uri.scheme}://${uri.host}$videoLink"
-                        }
-
-                        val isMp4 = videoLink.contains(".mp4", ignoreCase = true)
-
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = "Server Eksternal " + if (isMp4) "(MP4)" else "(M3U8)",
-                                url = videoLink,
-                                type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                            ) {
-                                // Referer WAJIB pakai URL iframe agar video bisa didownload ExoPlayer
-                                this.referer = fixUrl
-                                this.quality = Qualities.P720.value
-                            }
-                        )
-
-                        // Ambil Subtitle (Jika ada di dalam unpack iframe)
-                        val srtRegex = Regex("""["']((?:https?://|/)[^"']*\.srt[^"']*)["']""")
-                        var srtLink = srtRegex.find(unpacked)?.groupValues?.get(1)
-                            ?: srtRegex.find(iframeResponse)?.groupValues?.get(1)
-                            
-                        if (srtLink != null) {
-                            if (srtLink.startsWith("/")) {
-                                val uri = URI(fixUrl)
-                                srtLink = "${uri.scheme}://${uri.host}$srtLink"
-                            }
-                            subtitleCallback.invoke(
-                                SubtitleFile(lang = "Indonesia", url = srtLink)
-                            )
-                        }
-                    } else {
-                        // Jika gagal mengekstrak regex, biarkan Extractor API mencoba
-                        loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
-                    }
-                } catch (e: Exception) {
+                    // Serahkan ke Cloudstream Extractor untuk membongkar script
                     loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
