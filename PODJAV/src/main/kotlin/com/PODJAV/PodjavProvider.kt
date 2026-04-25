@@ -162,77 +162,86 @@ class PodjavProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Cari elemen video utama (Desain Baru Podjav)
+        // Cari elemen video utama
         val videoElement = document.selectFirst("#podjavPlayer")
-        var foundNativeVideo = false
+        var embedUrl: String? = null
 
-        // RENCANA A: Coba ambil dari sistem JSON (Sistem Baru Podjav)
+        // 1. Ambil URL dari JSON data-sources
         if (videoElement != null) {
             val dataSourcesRaw = videoElement.attr("data-sources")
             if (dataSourcesRaw.isNotBlank() && dataSourcesRaw != "[]") {
                 val sources = AppUtils.parseJson<List<VideoSource>>(dataSourcesRaw)
-                
-                sources.forEach { source ->
-                    val url = source.url
-                    if (url.isNotBlank()) {
-                        // Jika tipenya embed atau bukan file langsung, serahkan ke Extractor
-                        if (source.type == "embed" || (!url.contains(".m3u8", true) && !url.contains(".mp4", true))) {
-                            loadExtractor(url, mainUrl, subtitleCallback, callback)
-                            foundNativeVideo = true
-                        } else {
-                            // Jika link langsung, proses seperti biasa
-                            val isM3u8 = source.type == "m3u8" || url.contains(".m3u8", ignoreCase = true)
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = source.label ?: "HD Stream",
-                                    url = url,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = mainUrl
-                                    this.quality = Qualities.P720.value
-                                }
-                            )
-                            foundNativeVideo = true
-                        }
-                    }
-                }
+                // Cari URL pertama yang tersedia
+                embedUrl = sources.firstOrNull { it.url.isNotBlank() }?.url
             }
-
-            // Ekstrak Subtitle Rencana A
+            
+            // Ekstrak Subtitle (jika ada)
             val dataSubtitlesRaw = videoElement.attr("data-subtitles")
             if (dataSubtitlesRaw.isNotBlank() && dataSubtitlesRaw != "[]") {
                 val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
-                
                 subtitles.forEach { sub ->
                     if (sub.src.isNotBlank()) {
-                        subtitleCallback.invoke(
-                            SubtitleFile(
-                                lang = sub.label ?: "Indonesia",
-                                url = sub.src
-                            )
-                        )
+                        subtitleCallback.invoke(SubtitleFile(lang = sub.label ?: "Indonesia", url = sub.src))
                     }
                 }
             }
         }
 
-        // RENCANA B: JIKA RENCANA A KOSONG, KITA CARI IFRAME DAN GUNAKAN EXTRACTOR API
-        if (!foundNativeVideo) {
-            val iframeSrc = document.selectFirst("iframe#podjavEmbed")?.attr("src")
+        // 2. Fallback: Jika tidak ada di JSON, cari tag iframe
+        if (embedUrl == null) {
+            embedUrl = document.selectFirst("iframe#podjavEmbed")?.attr("src")
                 ?: document.selectFirst(".player-wrapper iframe")?.attr("src")
                 ?: document.selectFirst("iframe")?.attr("src")
+        }
 
-            if (iframeSrc != null && iframeSrc.isNotBlank()) {
-                var fixUrl = iframeSrc
-                if (fixUrl.startsWith("//")) fixUrl = "https:$fixUrl"
+        // 3. Proses eksekusi link Embed
+        if (embedUrl != null) {
+            if (embedUrl.startsWith("//")) embedUrl = "https:$embedUrl"
+            
+            try {
+                // Kunjungi halaman embed (misal: movearnpre.com)
+                val iframeResponse = app.get(embedUrl, referer = mainUrl).text
                 
-                try {
-                    // Serahkan ke Cloudstream Extractor untuk membongkar script
-                    loadExtractor(fixUrl, mainUrl, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                // Gunakan fungsi Unpack milikmu untuk membongkar script Vidhide/Filemoon
+                val unpacked = getAndUnpack(iframeResponse)
+
+                // Cari link m3u8 atau mp4 dari script yang sudah dibongkar
+                val linkRegex = Regex("""file:\s*["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
+                val alternateLinkRegex = Regex("""["']((?:https?://|/)[^"']*\.(?:m3u8|mp4)[^"']*)["']""")
+                
+                var videoLink = linkRegex.find(unpacked)?.groupValues?.get(1)
+                    ?: alternateLinkRegex.find(unpacked)?.groupValues?.get(1)
+                    ?: linkRegex.find(iframeResponse)?.groupValues?.get(1)
+                    ?: alternateLinkRegex.find(iframeResponse)?.groupValues?.get(1)
+
+                if (videoLink != null) {
+                    // Seperti temuanmu di console, kadang link berawalan "/stream/..."
+                    if (videoLink.startsWith("/")) {
+                        val uri = URI(embedUrl)
+                        videoLink = "${uri.scheme}://${uri.host}$videoLink"
+                    }
+
+                    val isMp4 = videoLink.contains(".mp4", ignoreCase = true)
+
+                    // Kirim link video m3u8 asli ke aplikasi!
+                    callback.invoke(
+                        newExtractorLink(
+                            source = this.name,
+                            name = "Server Utama " + if (isMp4) "(MP4)" else "(M3U8)",
+                            url = videoLink,
+                            type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = embedUrl // Sangat penting agar server Vidhide tidak memblokir kita
+                            this.quality = Qualities.P720.value
+                        }
+                    )
+                } else {
+                    // Jika regex gagal, serahkan ke Extractor bawaan Cloudstream sebagai plan B
+                    loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
                 }
+            } catch (e: Exception) {
+                // Jika error saat unpack, serahkan ke Extractor bawaan Cloudstream
+                loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
             }
         }
 
