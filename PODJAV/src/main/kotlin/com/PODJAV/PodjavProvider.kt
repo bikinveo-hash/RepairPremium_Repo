@@ -15,9 +15,8 @@ class PodjavProvider : MainAPI() {
     // Memberikan label NSFW agar konten dewasa terpisah di aplikasi
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Daftar kategori/genre yang akan muncul di halaman utama
+    // Daftar kategori/genre yang akan muncul di halaman utama (Tanpa Baru Upload)
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Baru Upload",
         "$mainUrl/genre/affair/" to "Perselingkuhan",
         "$mainUrl/genre/abuse/" to "Pelecehan",
         "$mainUrl/genre/cuckold/" to "Istri Tidak Setia",
