@@ -18,12 +18,11 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengambil token 'claim' dari URL iframe 
-            // (Asumsinya url berisi e2e.majorplay.net/play?claim=eyJ...)
+            // Mengambil token 'claim' dari URL iframe palsu yang dikirim oleh IdlixProvider
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Membuat body request POST persis seperti data curl buatanmu
+            // Membuat body request POST
             val requestBody = """{"claim":"$claimToken"}"""
             
             // Mengirim request POST ke API Majorplay yang baru
@@ -32,7 +31,7 @@ class Majorplay : ExtractorApi() {
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
                     "Referer" to "https://z1.idlixku.com/",
-                    "Content-Type" to "text/plain", // Content-type yang mereka pakai sekarang
+                    "Content-Type" to "text/plain", 
                     "Accept" to "*/*",
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                 ),
@@ -46,7 +45,7 @@ class Majorplay : ExtractorApi() {
                 subtitleCallback.invoke(SubtitleFile(lang, subUrl))
             }
 
-            // Mengambil link video m3u8 (sekarang memakai variabel 'url')
+            // Mengambil link video m3u8
             val videoUrl = response?.url ?: return
             
             val streamHeaders = mapOf(
@@ -57,20 +56,35 @@ class Majorplay : ExtractorApi() {
             )
 
             // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
-            M3u8Helper.generateM3u8(
-                source = name,
-                streamUrl = videoUrl,
-                referer = "https://z1.idlixku.com/",
-                headers = streamHeaders
-            ).forEach { parsedLink ->
-                callback.invoke(parsedLink)
+            if (videoUrl.contains(".m3u8")) {
+                M3u8Helper.generateM3u8(
+                    source = name,
+                    streamUrl = videoUrl,
+                    referer = "https://z1.idlixku.com/",
+                    headers = streamHeaders
+                ).forEach { parsedLink ->
+                    callback.invoke(parsedLink)
+                }
+            } else {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = videoUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://z1.idlixku.com/"
+                        this.quality = Qualities.Unknown.value
+                        this.headers = streamHeaders
+                    }
+                )
             }
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
     }
 
-    // Struktur Data (JSON) yang baru kita sesuaikan dengan tangkapan layar network milikmu
+    // Struktur Data (JSON) yang baru
     data class NewMajorplayResponse(
         @JsonProperty("code") val code: String? = null,
         @JsonProperty("url") val url: String? = null, 
