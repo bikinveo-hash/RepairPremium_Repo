@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.*
 
 class Majorplay : ExtractorApi() {
@@ -18,11 +19,11 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengambil token 'claim' dari URL iframe palsu
+            // Mengambil token 'claim' dari URL iframe palsu yang dikirim IdlixProvider
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Mengirim request POST dengan parameter 'json' (mengikuti gaya kodemu yang lama)
+            // Mengirim request POST dengan parameter 'json'
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
@@ -31,15 +32,17 @@ class Majorplay : ExtractorApi() {
                     "Accept" to "*/*",
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                 ),
-                json = mapOf("claim" to claimToken) // Ini perbaikannya bro!
+                json = mapOf("claim" to claimToken)
             ).parsedSafe<NewMajorplayResponse>()
             
-            // Mengekstrak daftar subtitle
-            response?.subtitles?.forEach { sub ->
-                val lang = sub.label ?: sub.lang ?: "Indonesian"
-                val subUrl = sub.path ?: return@forEach
-                // Info: Kalau mau warning di build hilang, pakai newSubtitleFile(lang, subUrl)
-                subtitleCallback.invoke(SubtitleFile(lang, subUrl)) 
+            // Mengekstrak daftar subtitle menggunakan 'for' loop standar dan 'newSubtitleFile'
+            val subs = response?.subtitles
+            if (subs != null) {
+                for (sub in subs) {
+                    val lang = sub.label ?: sub.lang ?: "Indonesian"
+                    val subUrl = sub.path ?: continue
+                    subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
+                }
             }
 
             // Mengambil link video m3u8
@@ -52,7 +55,7 @@ class Majorplay : ExtractorApi() {
                 "Accept" to "*/*"
             )
 
-            // Mengirimkan link stream
+            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
             if (videoUrl.contains(".m3u8")) {
                 M3u8Helper.generateM3u8(
                     source = name,
