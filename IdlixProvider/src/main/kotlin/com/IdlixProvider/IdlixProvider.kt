@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -298,7 +297,8 @@ class IdlixProvider : MainAPI() {
     ): Boolean {
         try {
             val parts = data.split("|")
-            val contentType = parts.getOrNull(0) ?: "movie" 
+            val rawContentType = parts.getOrNull(0) ?: "movie"
+            val contentType = rawContentType.substringAfterLast("/") // Biasanya "movie" atau "episode"
             val contentId = parts.getOrNull(1) ?: data 
             val refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
 
@@ -309,7 +309,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Meminta token/claim langsung dari endpoint play-info terbaru
+            // Mengambil token claim langsung dari endpoint play-info Idlix yang baru
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -317,10 +317,10 @@ class IdlixProvider : MainAPI() {
 
             val claim = playInfoRes.claim ?: return false
             
-            // Kita buat URL palsu yang mengandung claim untuk di ekstrak oleh Majorplay.kt
+            // Kita buat URL "palsu" yang memuat token claim untuk ditangkap oleh Majorplay.kt
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             
-            // Lemparkan tugas ekstraksi ke file Majorplay.kt
+            // Melempar tugas selanjutnya ke Ekstraktor Majorplay
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
             return true
@@ -440,7 +440,7 @@ data class Cast(
     @JsonProperty("profilePath") val profilePath: String? = null
 )
 
-// Data class baru pengganti Challenge/Solve
+// Ini adalah struktur data baru untuk API play-info
 data class PlayInfoResponse(
     @JsonProperty("claim") val claim: String? = null,
     @JsonProperty("redeemUrl") val redeemUrl: String? = null,
