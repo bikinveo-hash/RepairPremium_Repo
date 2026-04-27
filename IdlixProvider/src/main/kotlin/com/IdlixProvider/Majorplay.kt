@@ -18,31 +18,28 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengambil token 'claim' dari URL iframe palsu yang dikirim oleh IdlixProvider
+            // Mengambil token 'claim' dari URL iframe palsu
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Membuat body request POST
-            val requestBody = """{"claim":"$claimToken"}"""
-            
-            // Mengirim request POST ke API Majorplay yang baru
+            // Mengirim request POST dengan parameter 'json' (mengikuti gaya kodemu yang lama)
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
                     "Referer" to "https://z1.idlixku.com/",
-                    "Content-Type" to "text/plain", 
                     "Accept" to "*/*",
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                 ),
-                text = requestBody
+                json = mapOf("claim" to claimToken) // Ini perbaikannya bro!
             ).parsedSafe<NewMajorplayResponse>()
             
             // Mengekstrak daftar subtitle
             response?.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
-                subtitleCallback.invoke(SubtitleFile(lang, subUrl))
+                // Info: Kalau mau warning di build hilang, pakai newSubtitleFile(lang, subUrl)
+                subtitleCallback.invoke(SubtitleFile(lang, subUrl)) 
             }
 
             // Mengambil link video m3u8
@@ -55,7 +52,7 @@ class Majorplay : ExtractorApi() {
                 "Accept" to "*/*"
             )
 
-            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
+            // Mengirimkan link stream
             if (videoUrl.contains(".m3u8")) {
                 M3u8Helper.generateM3u8(
                     source = name,
@@ -84,7 +81,7 @@ class Majorplay : ExtractorApi() {
         }
     }
 
-    // Struktur Data (JSON) yang baru
+    // Struktur Data (JSON)
     data class NewMajorplayResponse(
         @JsonProperty("code") val code: String? = null,
         @JsonProperty("url") val url: String? = null, 
