@@ -296,11 +296,30 @@ class IdlixProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val parts = data.split("|")
-            val rawContentType = parts.getOrNull(0) ?: "movie"
-            val contentType = rawContentType.substringAfterLast("/")
-            val contentId = parts.getOrNull(1) ?: data 
-            val refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
+            var contentType = "movie"
+            var contentId = data
+            var refererUrl = "$mainUrl/"
+
+            // Sistem Fallback: Mengecek apakah 'data' berupa format "tipe|id|url" atau hanya URL mentah karena Cache
+            if (data.contains("|")) {
+                val parts = data.split("|")
+                val rawContentType = parts.getOrNull(0) ?: "movie"
+                contentType = rawContentType.substringAfterLast("/")
+                contentId = parts.getOrNull(1) ?: data 
+                refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
+            } else if (data.startsWith("http")) {
+                // Jika aplikasi mengirimkan URL mentah (sering terjadi jika movie dibuka dari Cache)
+                refererUrl = data
+                val isSeries = data.contains("/series/")
+                val slug = data.split("/").last()
+                val apiUrl = "$mainUrl/api/${if (isSeries) "series" else "movies"}/$slug"
+                
+                val responseText = app.get(apiUrl).text
+                val detail = AppUtils.parseJson<IdlixDetailResponse>(responseText)
+                
+                contentId = detail.id ?: slug
+                contentType = if (isSeries) "episode" else "movie"
+            }
 
             val headers = mapOf(
                 "Referer" to refererUrl, 
@@ -309,7 +328,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Meminta token/claim langsung dari endpoint play-info terbaru
+            // Meminta token claim dari endpoint play-info terbaru
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -317,10 +336,8 @@ class IdlixProvider : MainAPI() {
 
             val claim = playInfoRes.claim ?: return false
             
-            // Kita buat URL palsu yang mengandung claim untuk di ekstrak oleh Majorplay.kt
+            // Melempar URL palsu berisi token claim ke file Majorplay.kt
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
-            
-            // Lemparkan tugas ekstraksi ke file Majorplay.kt
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
             return true
@@ -440,7 +457,6 @@ data class Cast(
     @JsonProperty("profilePath") val profilePath: String? = null
 )
 
-// Data class baru pengganti Challenge/Solve
 data class PlayInfoResponse(
     @JsonProperty("claim") val claim: String? = null,
     @JsonProperty("redeemUrl") val redeemUrl: String? = null,
