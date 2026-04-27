@@ -298,7 +298,7 @@ class IdlixProvider : MainAPI() {
         try {
             val parts = data.split("|")
             val rawContentType = parts.getOrNull(0) ?: "movie"
-            val contentType = rawContentType.substringAfterLast("/") // Biasanya "movie" atau "episode"
+            val contentType = rawContentType.substringAfterLast("/")
             val contentId = parts.getOrNull(1) ?: data 
             val refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
 
@@ -309,7 +309,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Mengambil token claim langsung dari endpoint play-info Idlix yang baru
+            // Meminta token/claim langsung dari endpoint play-info terbaru
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -317,10 +317,10 @@ class IdlixProvider : MainAPI() {
 
             val claim = playInfoRes.claim ?: return false
             
-            // Kita buat URL "palsu" yang memuat token claim untuk ditangkap oleh Majorplay.kt
+            // Kita buat URL palsu yang mengandung claim untuk di ekstrak oleh Majorplay.kt
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             
-            // Melempar tugas selanjutnya ke Ekstraktor Majorplay
+            // Lemparkan tugas ekstraksi ke file Majorplay.kt
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
             return true
@@ -440,7 +440,7 @@ data class Cast(
     @JsonProperty("profilePath") val profilePath: String? = null
 )
 
-// Ini adalah struktur data baru untuk API play-info
+// Data class baru pengganti Challenge/Solve
 data class PlayInfoResponse(
     @JsonProperty("claim") val claim: String? = null,
     @JsonProperty("redeemUrl") val redeemUrl: String? = null,
