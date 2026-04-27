@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
-import java.security.MessageDigest
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -299,8 +298,7 @@ class IdlixProvider : MainAPI() {
     ): Boolean {
         try {
             val parts = data.split("|")
-            val rawContentType = parts.getOrNull(0) ?: "movie"
-            val contentType = rawContentType.substringAfterLast("/")
+            val contentType = parts.getOrNull(0) ?: "movie" 
             val contentId = parts.getOrNull(1) ?: data 
             val refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
 
@@ -311,74 +309,25 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Tahap 1: Challenge
-            val challengeRes = app.post(
-                url = "$mainUrl/api/watch/challenge",
-                json = mapOf("contentType" to contentType, "contentId" to contentId),
+            // Meminta token/claim langsung dari endpoint play-info terbaru
+            val playInfoRes = app.get(
+                url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
-            ).parsedSafe<ChallengeResponse>() ?: return false
+            ).parsedSafe<PlayInfoResponse>() ?: return false
 
-            val challenge = challengeRes.challenge ?: return false
-            val signature = challengeRes.signature ?: return false
-            val difficulty = challengeRes.difficulty ?: 3
+            val claim = playInfoRes.claim ?: return false
             
-            // Tahap 2: Solve Nonce (SHA-256 Bypass)
-            val nonce = mineNonce(challenge, difficulty) ?: return false
-
-            val solveRes = app.post(
-                url = "$mainUrl/api/watch/solve",
-                json = mapOf("challenge" to challenge, "signature" to signature, "nonce" to nonce),
-                headers = headers
-            ).parsedSafe<SolveResponse>()
-
-            val embedPath = solveRes?.embedUrl ?: return false
-            val fullEmbedUrl = if (embedPath.startsWith("/")) "$mainUrl$embedPath" else embedPath
+            // Kita buat URL palsu yang mengandung claim untuk di ekstrak oleh Majorplay.kt
+            val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             
-            // Tahap 3: Ambil iframe dengan WebViewResolver
-            val playerRegex = """((?:majorplay\.net|jeniusplay\.com)/(?:embed|video|player)/[a-zA-Z0-9]+)""".toRegex()
+            // Lemparkan tugas ekstraksi ke file Majorplay.kt
+            loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
-            val embedResponse = app.get(
-                fullEmbedUrl, 
-                headers = headers,
-                interceptor = WebViewResolver(playerRegex)
-            )
-            
-            val finalUrl = embedResponse.url
-            
-            if (finalUrl.contains("majorplay.net") || finalUrl.contains("jeniusplay.com")) {
-                loadExtractor(finalUrl, fullEmbedUrl, subtitleCallback, callback)
-                return true
-            }
-
-            return false
+            return true
         } catch (e: Exception) {
             Log.e("adixtream", "Error di loadLinks: ${e.message}")
             return false
         }
-    }
-
-    private fun mineNonce(challenge: String, difficulty: Int): Int? {
-        val md = MessageDigest.getInstance("SHA-256")
-        for (nonce in 0..2000000) {
-            val text = challenge + nonce
-            val bytes = md.digest(text.toByteArray())
-            var isValid = true
-            for (i in 0 until difficulty) {
-                val byteIndex = i / 2
-                val isHighNibble = (i % 2 == 0)
-                val nibble = if (isHighNibble) {
-                    (bytes[byteIndex].toInt() ushr 4) and 0x0F
-                } else {
-                    bytes[byteIndex].toInt() and 0x0F
-                }
-                if (nibble != 0) {
-                    isValid = false
-                    break
-                }
-            }
-            if (isValid) return nonce
-        }
-        return null
     }
 }
 
@@ -491,12 +440,9 @@ data class Cast(
     @JsonProperty("profilePath") val profilePath: String? = null
 )
 
-data class ChallengeResponse(
-    @JsonProperty("challenge") val challenge: String? = null,
-    @JsonProperty("signature") val signature: String? = null,
-    @JsonProperty("difficulty") val difficulty: Int? = 3
-)
-
-data class SolveResponse(
-    @JsonProperty("embedUrl") val embedUrl: String? = null
+// Data class baru pengganti Challenge/Solve
+data class PlayInfoResponse(
+    @JsonProperty("claim") val claim: String? = null,
+    @JsonProperty("redeemUrl") val redeemUrl: String? = null,
+    @JsonProperty("videoId") val videoId: String? = null
 )
