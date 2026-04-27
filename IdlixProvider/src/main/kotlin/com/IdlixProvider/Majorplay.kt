@@ -18,63 +18,66 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val videoId = url.split("/").lastOrNull() ?: return
+            // Mengambil token 'claim' dari URL iframe 
+            // (Asumsinya url berisi e2e.majorplay.net/play?claim=eyJ...)
+            val claimToken = url.substringAfter("claim=").substringBefore("&")
+            if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            val response = app.get(
-                url = "$mainUrl/api/token/viewer?videoId=$videoId", 
-                referer = url, 
-                headers = mapOf("Origin" to mainUrl)
-            ).parsedSafe<MajorplayResponse>()
+            // Membuat body request POST persis seperti data curl buatanmu
+            val requestBody = """{"claim":"$claimToken"}"""
             
+            // Mengirim request POST ke API Majorplay yang baru
+            val response = app.post(
+                url = "$mainUrl/api/play",
+                headers = mapOf(
+                    "Origin" to "https://z1.idlixku.com",
+                    "Referer" to "https://z1.idlixku.com/",
+                    "Content-Type" to "text/plain", // Content-type yang mereka pakai sekarang
+                    "Accept" to "*/*",
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                ),
+                text = requestBody
+            ).parsedSafe<NewMajorplayResponse>()
+            
+            // Mengekstrak daftar subtitle
             response?.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
                 subtitleCallback.invoke(SubtitleFile(lang, subUrl))
             }
 
-            val videoUrl = response?.hlsUrl ?: response?.primaryUrl ?: return
+            // Mengambil link video m3u8 (sekarang memakai variabel 'url')
+            val videoUrl = response?.url ?: return
             
             val streamHeaders = mapOf(
-                "Origin" to mainUrl,
+                "Origin" to "https://z1.idlixku.com",
+                "Referer" to "https://z1.idlixku.com/",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
                 "Accept" to "*/*"
             )
 
-            if (videoUrl.contains(".m3u8")) {
-                M3u8Helper.generateM3u8(
-                    source = name,
-                    streamUrl = videoUrl,
-                    referer = url,
-                    headers = streamHeaders
-                ).forEach { parsedLink ->
-                    callback.invoke(parsedLink)
-                }
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                        this.headers = streamHeaders
-                    }
-                )
+            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
+            M3u8Helper.generateM3u8(
+                source = name,
+                streamUrl = videoUrl,
+                referer = "https://z1.idlixku.com/",
+                headers = streamHeaders
+            ).forEach { parsedLink ->
+                callback.invoke(parsedLink)
             }
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
     }
 
-    data class MajorplayResponse(
-        @JsonProperty("hlsUrl") val hlsUrl: String? = null, 
-        @JsonProperty("primaryUrl") val primaryUrl: String? = null, 
-        @JsonProperty("subtitles") val subtitles: List<MajorSubtitle>? = null
+    // Struktur Data (JSON) yang baru kita sesuaikan dengan tangkapan layar network milikmu
+    data class NewMajorplayResponse(
+        @JsonProperty("code") val code: String? = null,
+        @JsonProperty("url") val url: String? = null, 
+        @JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null
     )
     
-    data class MajorSubtitle(
+    data class NewMajorSubtitle(
         @JsonProperty("lang") val lang: String? = null, 
         @JsonProperty("label") val label: String? = null, 
         @JsonProperty("path") val path: String? = null
