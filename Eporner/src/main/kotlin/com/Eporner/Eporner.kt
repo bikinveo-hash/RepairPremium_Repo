@@ -26,6 +26,7 @@ class Eporner : MainAPI() {
             "cat/japanese" to "Japanese",
             "cat/hd-1080p" to "1080 Porn",
             "cat/4k-porn" to "4K Porn",
+            "country-top/id" to "Indonesia", // <-- Ini adalah baris baru yang ditambahkan
             "recommendations" to "Recommendation Videos",
         )
 
@@ -45,6 +46,7 @@ class Eporner : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse {
         val title = fixTitle(this.select("div.mbunder p.mbtit a").text() ?: "No Title").trim()
         val href = fixUrl(this.select("div.mbcontent a").attr("href"))
+        
         var posterUrl = this.selectFirst("img")?.attr("data-src")
  
         if (posterUrl.isNullOrBlank())
@@ -68,6 +70,7 @@ class Eporner : MainAPI() {
         val document = app.get(url).document
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")?.trim().toString()
+   
         val poster = fixUrlNull(document.selectFirst("[property='og:image']")?.attr("content"))
         val description = document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
         
@@ -78,7 +81,7 @@ class Eporner : MainAPI() {
         // ------------------------------------------------
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
-            this.posterUrl = poster
+             this.posterUrl = poster
             this.plot = description
             this.recommendations = recommendationsList // Menyematkan rekomendasi ke tampilan
         }
@@ -98,7 +101,7 @@ class Eporner : MainAPI() {
         val qualities = mp4Sources.keys()
  
         while (qualities.hasNext()) {
-            val quality = qualities.next() as String
+             val quality = qualities.next() as String
             val sourceObject = mp4Sources.getJSONObject(quality)
             val src = sourceObject.getString("src")
             val labelShort = sourceObject.getString("labelShort") ?: ""
@@ -132,7 +135,7 @@ class Eporner : MainAPI() {
         }
     }
     private fun getIndexQuality(str: String?): Int {
-        return Regex("(\\d{3,4})[pP]").find(str ?: "") ?.groupValues ?. getOrNull(1) ?. toIntOrNull()
+        return Regex("(\\d{3,4})[pP]").find(str ?: "") ?.groupValues ?.getOrNull(1) ?. toIntOrNull()
             ?: Qualities.Unknown.value
     }
 }
