@@ -12,7 +12,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies rahasia untuk menembus peringatan 18+ (Age-Gate Bypass)
+    // Cookies rahasia untuk menembus peringatan 18+
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -49,15 +49,17 @@ class PornhubProvider : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".title a")?.text() ?: return null
-        
         val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
         val href = fixUrl(rawHref) 
         
-        val posterUrl = this.selectFirst("img")?.attr("data-mediumthumb") 
-            ?: this.selectFirst("img")?.attr("src")
+        val imgElement = this.selectFirst("img")
+        val posterUrl = imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() } 
+            ?: imgElement?.attr("src")
         
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
+            // PERBAIKAN 1: Tambahkan header Referer agar gambar tidak error 403
+            this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
     }
 
@@ -69,25 +71,33 @@ class PornhubProvider : MainAPI() {
         
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
+            // PERBAIKAN 1: Header untuk gambar poster detail
+            this.posterHeaders = mapOf("Referer" to "$mainUrl/")
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             
-            // PERBAIKAN 1: Memasukkan data aktor langsung ke dalam properti 'actors'
-            val actorsList = doc.select(".pornstarsWrapper a").map { it.text() }
+            // PERBAIKAN 3: Ambil nama DAN gambar aktor agar tampil bulat seperti Adicinemax21
+            val actorsList = doc.select(".pornstarsWrapper a").mapNotNull { aTag ->
+                val actorName = aTag.text().trim()
+                if (actorName.isNotEmpty()) {
+                    // Cari gambar di dalam tag <a> jika ada, atau gunakan null
+                    val actorImage = aTag.selectFirst("img")?.attr("src") ?: aTag.attr("data-image")
+                    ActorData(Actor(actorName, actorImage.takeIf { it.isNotBlank() }))
+                } else null
+            }
             if (actorsList.isNotEmpty()) {
-                this.actors = actorsList.map { ActorData(Actor(it)) }
+                this.actors = actorsList
             }
             
-            // PERBAIKAN 2: Menggunakan top-level function getDurationFromString lalu memasukkan ke 'duration'
             this.duration = getDurationFromString(durationText)
-            
             this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
         }
     }
 
+    // PERBAIKAN 2: Ubah tipe data `quality` menjadi `Any?` untuk menghindari jebakan Array JSON
     data class MediaDefinition(
         val format: String?,
-        val quality: String?,
+        val quality: Any?, 
         val videoUrl: String?
     )
 
@@ -111,18 +121,24 @@ class PornhubProvider : MainAPI() {
                 mediaList.forEach { media ->
                     val videoUrl = media.videoUrl ?: return@forEach
                     val format = media.format ?: ""
-                    val quality = media.quality ?: "Unknown"
+                    
+                    // PERBAIKAN 2 (Lanjutan): Ekstrak nilai quality dengan aman
+                    val rawQuality = media.quality
+                    val qualityStr = when (rawQuality) {
+                        is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
+                        else -> rawQuality?.toString() ?: "Unknown"
+                    }
                     
                     val cleanUrl = videoUrl.replace("\\/", "/")
                     if (cleanUrl.isBlank()) return@forEach
 
-                    val qualInt = getQualityFromName(quality)
+                    val qualInt = getQualityFromName(qualityStr)
                     val linkType = if (format.contains("hls", true) || cleanUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
 
                     callback(
                         newExtractorLink(
                             source = this@PornhubProvider.name,
-                            name = "PH Player $quality",
+                            name = "PH Player $qualityStr",
                             url = cleanUrl,
                             type = linkType
                         ) {
