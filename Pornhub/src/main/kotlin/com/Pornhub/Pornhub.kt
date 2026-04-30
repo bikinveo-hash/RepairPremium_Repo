@@ -20,14 +20,12 @@ class PornhubProvider : MainAPI() {
         "platform" to "pc"
     )
 
-    // Menu Halaman Utama
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
         "$mainUrl/video?o=mv" to "Most Viewed",
     )
 
-    // Mengambil daftar video di halaman utama (Mendukung scroll/paginasi)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}&page=$page"
         val doc = app.get(url, cookies = phCookies).document
@@ -38,7 +36,6 @@ class PornhubProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    // Mengambil daftar video dari kolom pencarian (Mendukung paginasi)
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val url = "$mainUrl/video/search?search=$query&page=$page"
         val doc = app.get(url, cookies = phCookies).document
@@ -50,54 +47,52 @@ class PornhubProvider : MainAPI() {
         return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
-    // Helper: Mengubah elemen HTML video menjadi objek CloudStream
+    // PERBAIKAN 1: Hapus addDuration karena SearchResponse tidak punya durasi
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".title a")?.text() ?: return null
         val href = mainUrl + this.selectFirst(".title a")?.attr("href")
         
-        // Coba ambil gambar kualitas bagus dulu, kalau gagal ambil yang biasa
         val posterUrl = this.selectFirst("img")?.attr("data-mediumthumb") 
             ?: this.selectFirst("img")?.attr("src")
         
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
-            addDuration(this@toSearchResult.selectFirst(".duration")?.text())
         }
     }
 
-    // Mengambil detail info saat video diklik
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, cookies = phCookies).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
         val poster = doc.selectFirst("link[property=og:image]")?.attr("content")
         
-        // Parameter ke-4 adalah dataUrl yang akan dilempar ke fungsi loadLinks
+        // Pindahkan pengambilan durasi ke LoadResponse (halaman detail)
+        val durationText = doc.selectFirst(".duration")?.text()
+        
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
+            
+            // addDuration diletakkan di sini
+            addDuration(durationText)
         }
     }
 
-    // Struktur data untuk mempermudah membaca JSON video PH
     data class MediaDefinition(
         val format: String?,
         val quality: String?,
         val videoUrl: String?
     )
 
-    // Mengekstrak link video asli (Bypass proteksi JSON & HLS)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Harus pakai cookies agar bisa masuk ke halaman player
         val html = app.get(data, cookies = phCookies).text
         
-        // Mencari script JSON yang menyimpan link video
         val mediaDefsRegex = Regex(""""mediaDefinitions"\s*:\s*(\[.*?\])""")
         val match = mediaDefsRegex.find(html)
         
@@ -105,7 +100,6 @@ class PornhubProvider : MainAPI() {
             val jsonString = match.groupValues[1]
             
             try {
-                // Ubah teks JSON menjadi bentuk List<MediaDefinition>
                 val mediaList = parseJson<List<MediaDefinition>>(jsonString)
                 
                 mediaList.forEach { media ->
@@ -113,27 +107,28 @@ class PornhubProvider : MainAPI() {
                     val format = media.format ?: ""
                     val quality = media.quality ?: "Unknown"
                     
-                    // Bersihkan karakter aneh pada URL
                     val cleanUrl = videoUrl.replace("\\/", "/")
                     if (cleanUrl.isBlank()) return@forEach
 
-                    // Konversi kualitas string (misal "1080") ke format CloudStream
                     val qualInt = getQualityFromName(quality)
+                    val linkType = if (format.contains("hls", true) || cleanUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
 
+                    // PERBAIKAN 2: Menggunakan fungsi newExtractorLink
                     callback(
-                        ExtractorLink(
-                            source = this.name,
+                        newExtractorLink(
+                            source = this@PornhubProvider.name,
                             name = "PH Player $quality",
                             url = cleanUrl,
-                            referer = mainUrl, // WAJIB: Surat pengantar untuk bypass proteksi Origin
-                            quality = qualInt,
-                            isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
-                        )
+                            type = linkType
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = qualInt
+                        }
                     )
                 }
                 return true
             } catch (e: Exception) {
-                e.printStackTrace() // Abaikan jika terjadi error parsing
+                e.printStackTrace()
             }
         }
         return false
