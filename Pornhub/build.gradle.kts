@@ -14,5 +14,5 @@ cloudstream {
     **/
     status  = 1 // will be 3 if unspecified
     tvTypes = listOf("NSFW")
-    iconUrl = "https://static.xhpingcdn.com/xh-mobile/images/favicon/favicon-v2-512x512.png?v=1"
+    iconUrl = "https://www.pornhub.com/favicon.ico"
 }
