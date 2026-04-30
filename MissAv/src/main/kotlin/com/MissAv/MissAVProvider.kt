@@ -24,7 +24,10 @@ class MissAVProvider : MainAPI() {
     )
 
     private fun String.toUrl(): String {
-        return if (this.startsWith("http")) this else "https://missav.ws$this"
+        // Memastikan tidak ada URL yang rusak karena kurang garis miring (/)
+        return if (this.startsWith("http")) this else {
+            if (this.startsWith("/")) "https://missav.ws$this" else "https://missav.ws/$this"
+        }
     }
 
     // ==============================
@@ -48,12 +51,19 @@ class MissAVProvider : MainAPI() {
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        val linkElement = element.selectFirst("a.text-secondary") ?: return null
+        // 1. Ambil tag <a> pertama. Ini biasanya membungkus gambar dan PASTI mengarah ke URL video
+        val linkElement = element.selectFirst("a") ?: return null
         val url = linkElement.attr("href").toUrl()
-        val title = linkElement.text().trim()
-        val imgElement = element.selectFirst("img")
         
+        // 2. Ambil elemen gambar untuk poster
+        val imgElement = element.selectFirst("img")
         val posterUrl = imgElement?.attr("data-src")?.ifEmpty { imgElement.attr("src") }
+        
+        // 3. Prioritaskan mengambil judul dari atribut 'alt' pada gambar karena lebih akurat.
+        // Jika kosong, baru gunakan cara lama (teks dari link) sebagai cadangan.
+        val title = imgElement?.attr("alt")?.trim()?.ifEmpty {
+            element.selectFirst("a.text-secondary")?.text()?.trim()
+        } ?: "Unknown Title"
 
         return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
@@ -149,7 +159,7 @@ class MissAVProvider : MainAPI() {
             val codeMatch = codeRegex.find(title)
             val code = codeMatch?.value
             
-            // Hanya cari subtitle jika KODE ditemukan. 
+            // Hanya cari subtitle jika KODE ditemukan.
             // Jika tidak ada kode, jangan cari (karena pencarian judul teks biasa sering salah film)
             if (!code.isNullOrEmpty()) {
                 fetchSubtitleCatStrict(code, subtitleCallback)
@@ -186,8 +196,7 @@ class MissAVProvider : MainAPI() {
                 val resultHref = linkElement.attr("href")
 
                 // --- VALIDASI KETAT (STRICT CHECK) ---
-                // Pastikan judul hasil pencarian MENGANDUNG Kode ID.
-                // Case insensitive (huruf besar/kecil dianggap sama)
+                // Pastikan judul hasil pencarian MENGANDUNG Kode ID. Case insensitive (huruf besar/kecil dianggap sama)
                 if (resultTitle.contains(codeId, ignoreCase = true)) {
                     
                     val detailPageUrl = if (resultHref.startsWith("http")) resultHref else "https://www.subtitlecat.com/$resultHref"
