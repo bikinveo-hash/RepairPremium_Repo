@@ -1,6 +1,5 @@
 package com.Pornhub
 
-import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -13,7 +12,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk menembus peringatan 18+
+    // Cookies wajib untuk menembus peringatan umur 18+
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -34,7 +33,16 @@ class PornhubProvider : MainAPI() {
         val home = doc.select("li.videoblock").mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(request.name, home)
+        
+        // Memaksa UI beranda menampilkan poster secara horizontal (landscape)
+        return newHomePageResponse(
+            HomePageList(
+                name = request.name,
+                list = home,
+                isHorizontalImages = true 
+            ),
+            hasNext = home.isNotEmpty()
+        )
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
@@ -53,17 +61,18 @@ class PornhubProvider : MainAPI() {
         val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
         val href = fixUrl(rawHref) 
         
-        // Prioritaskan data-image atau data-thumb_url agar gambar tidak buram
+        // Prioritas tag gambar agar dapat resolusi High-Res dan tidak buram
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-thumb_url")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        // Gunakan newAnimeSearchResponse agar posternya jadi horizontal (landscape)
+        // Gunakan newAnimeSearchResponse agar layout kartu pencarian jadi Horizontal
         return newAnimeSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
-            // Tambahkan header Referer agar gambar tidak di-blokir (Error 403)
+            // Bypass error 403 (Forbidden) dari server CDN gambar
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
     }
@@ -71,16 +80,18 @@ class PornhubProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, cookies = phCookies).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
-        val poster = doc.selectFirst("link[property=og:image]")?.attr("content")
+        
+        // Mengambil poster besar dari halaman detail (menggunakan meta property)
+        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
         val durationText = doc.selectFirst(".duration")?.text()
         
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
-            this.posterHeaders = mapOf("Referer" to "$mainUrl/") // Header untuk poster detail
+            this.posterHeaders = mapOf("Referer" to "$mainUrl/")
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             
-            // Ekstraksi aktor dengan foto (Biar tampil bulat di UI)
+            // Mengambil aktor dan fotonya agar tampil bulat rapi
             val actorsList = doc.select(".pornstarsWrapper a").mapNotNull { aTag ->
                 val actorName = aTag.text().trim()
                 if (actorName.isNotEmpty()) {
@@ -112,21 +123,20 @@ class PornhubProvider : MainAPI() {
             val jsonString = match.groupValues[1]
             
             try {
-                // Gunakan JsonNode agar kebal dari JSON array/string mismatch (Anti-Crash)
-                val mediaList = parseJson<List<JsonNode>>(jsonString)
+                // Trik kebal JSON: Parsing menggunakan Map untuk menghindari jebakan String/Array Mismatch
+                val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
                 mediaList.forEach { media ->
-                    val videoUrl = media.get("videoUrl")?.asText() ?: return@forEach
+                    val videoUrl = media["videoUrl"] as? String ?: return@forEach
                     if (videoUrl.isBlank()) return@forEach
                     
-                    val format = media.get("format")?.asText() ?: ""
+                    val format = media["format"] as? String ?: ""
                     
-                    // Logika kebal crash untuk mengekstrak 'quality'
-                    val rawQuality = media.get("quality")
-                    val qualityStr = if (rawQuality != null && rawQuality.isArray && rawQuality.size() > 0) {
-                        rawQuality.get(0).asText() // Jika JSON berbentuk Array [240]
-                    } else {
-                        rawQuality?.asText() ?: "Unknown" // Jika JSON berbentuk String "1080"
+                    // Ekstraksi nilai resolusi dengan aman
+                    val rawQuality = media["quality"]
+                    val qualityStr = when (rawQuality) {
+                        is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
+                        else -> rawQuality?.toString() ?: "Unknown"
                     }
                     
                     val cleanUrl = videoUrl.replace("\\/", "/")
@@ -141,7 +151,11 @@ class PornhubProvider : MainAPI() {
                             url = cleanUrl,
                             type = linkType
                         ) {
-                            this.referer = mainUrl
+                            // WAJIB ADA: Surat pengantar (Headers) untuk bypass proteksi CORS Player
+                            this.headers = mapOf(
+                                "Origin" to mainUrl,
+                                "Referer" to "$mainUrl/"
+                            )
                             this.quality = qualInt
                         }
                     )
