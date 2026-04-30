@@ -1,5 +1,6 @@
 package com.Pornhub
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -12,7 +13,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies rahasia untuk menembus peringatan 18+
+    // Cookies wajib untuk menembus peringatan 18+
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -52,13 +53,16 @@ class PornhubProvider : MainAPI() {
         val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
         val href = fixUrl(rawHref) 
         
+        // PERBAIKAN 1: Ekstraksi Poster High-Res
+        // Kita prioritaskan data-image atau data-thumb_url agar gambar tidak buram
         val imgElement = this.selectFirst("img")
-        val posterUrl = imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() } 
+        val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-thumb_url")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
-            // PERBAIKAN 1: Tambahkan header Referer agar gambar tidak error 403
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
     }
@@ -71,16 +75,14 @@ class PornhubProvider : MainAPI() {
         
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
-            // PERBAIKAN 1: Header untuk gambar poster detail
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             
-            // PERBAIKAN 3: Ambil nama DAN gambar aktor agar tampil bulat seperti Adicinemax21
+            // Ekstraksi aktor dengan foto (Biar bulat seperti Adicinemax21)
             val actorsList = doc.select(".pornstarsWrapper a").mapNotNull { aTag ->
                 val actorName = aTag.text().trim()
                 if (actorName.isNotEmpty()) {
-                    // Cari gambar di dalam tag <a> jika ada, atau gunakan null
                     val actorImage = aTag.selectFirst("img")?.attr("src") ?: aTag.attr("data-image")
                     ActorData(Actor(actorName, actorImage.takeIf { it.isNotBlank() }))
                 } else null
@@ -93,13 +95,6 @@ class PornhubProvider : MainAPI() {
             this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
         }
     }
-
-    // PERBAIKAN 2: Ubah tipe data `quality` menjadi `Any?` untuk menghindari jebakan Array JSON
-    data class MediaDefinition(
-        val format: String?,
-        val quality: Any?, 
-        val videoUrl: String?
-    )
 
     override suspend fun loadLinks(
         data: String,
@@ -116,21 +111,24 @@ class PornhubProvider : MainAPI() {
             val jsonString = match.groupValues[1]
             
             try {
-                val mediaList = parseJson<List<MediaDefinition>>(jsonString)
+                // PERBAIKAN 2: Gunakan JsonNode agar kebal dari tipe data yang berubah-ubah (Array vs String)
+                val mediaList = parseJson<List<JsonNode>>(jsonString)
                 
                 mediaList.forEach { media ->
-                    val videoUrl = media.videoUrl ?: return@forEach
-                    val format = media.format ?: ""
+                    val videoUrl = media.get("videoUrl")?.asText() ?: return@forEach
+                    if (videoUrl.isBlank()) return@forEach
                     
-                    // PERBAIKAN 2 (Lanjutan): Ekstrak nilai quality dengan aman
-                    val rawQuality = media.quality
-                    val qualityStr = when (rawQuality) {
-                        is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
-                        else -> rawQuality?.toString() ?: "Unknown"
+                    val format = media.get("format")?.asText() ?: ""
+                    
+                    // Logika kebal crash untuk membaca 'quality'
+                    val rawQuality = media.get("quality")
+                    val qualityStr = if (rawQuality != null && rawQuality.isArray && rawQuality.size() > 0) {
+                        rawQuality.get(0).asText() // Jika bentuknya Array [240], ambil angka 240-nya
+                    } else {
+                        rawQuality?.asText() ?: "Unknown" // Jika bentuknya String "1080", langsung ambil
                     }
                     
                     val cleanUrl = videoUrl.replace("\\/", "/")
-                    if (cleanUrl.isBlank()) return@forEach
 
                     val qualInt = getQualityFromName(qualityStr)
                     val linkType = if (format.contains("hls", true) || cleanUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
