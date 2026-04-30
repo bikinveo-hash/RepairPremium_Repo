@@ -2,99 +2,140 @@ package com.Pornhub
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
 
 class PornhubProvider : MainAPI() {
-    // Info Dasar Provider
     override var name = "Pornhub"
-    override var mainUrl = "https://www.pornhub.com" // Pastikan URL sesuai
+    override var mainUrl = "https://www.pornhub.com"
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // 1. Fungsi untuk Halaman Utama (Main Page)
+    // Cookies rahasia untuk menembus peringatan 18+ (Age-Gate Bypass)
+    private val phCookies = mapOf(
+        "bs" to "1",
+        "accessAgeDisclaimerPH" to "2",
+        "age_verified" to "1",
+        "platform" to "pc"
+    )
+
+    // Menu Halaman Utama
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
         "$mainUrl/video?o=mv" to "Most Viewed",
     )
 
+    // Mengambil daftar video di halaman utama (Mendukung scroll/paginasi)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + "&page=$page").document
-        // Berdasarkan hasil-kode.html: video item ada di dalam li dengan class 'videoblock'
+        val url = if (page == 1) request.data else "${request.data}&page=$page"
+        val doc = app.get(url, cookies = phCookies).document
+        
         val home = doc.select("li.videoblock").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
     }
 
-    // 2. Fungsi Pencarian (Search)
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/video/search?search=$query"
-        val doc = app.get(url).document
-        return doc.select("li.videoblock").mapNotNull {
+    // Mengambil daftar video dari kolom pencarian (Mendukung paginasi)
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val url = "$mainUrl/video/search?search=$query&page=$page"
+        val doc = app.get(url, cookies = phCookies).document
+        
+        val results = doc.select("li.videoblock").mapNotNull {
             it.toSearchResult()
         }
+        
+        return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
-    // Helper untuk mapping element HTML ke objek SearchResponse
+    // Helper: Mengubah elemen HTML video menjadi objek CloudStream
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".title a")?.text() ?: return null
         val href = mainUrl + this.selectFirst(".title a")?.attr("href")
-        val posterUrl = this.selectFirst("img")?.attr("data-mediumthumb") ?: this.selectFirst("img")?.attr("src")
         
-        return newAnimeSearchResponse(title, href, TvType.NSFW) {
+        // Coba ambil gambar kualitas bagus dulu, kalau gagal ambil yang biasa
+        val posterUrl = this.selectFirst("img")?.attr("data-mediumthumb") 
+            ?: this.selectFirst("img")?.attr("src")
+        
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
-            // Mengambil durasi jika ada
             addDuration(this@toSearchResult.selectFirst(".duration")?.text())
         }
     }
 
-    // 3. Fungsi Memuat Detail (Load)
+    // Mengambil detail info saat video diklik
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+        val doc = app.get(url, cookies = phCookies).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
         val poster = doc.selectFirst("link[property=og:image]")?.attr("content")
         
-        return newAnimeLoadResponse(title, url, TvType.NSFW) {
+        // Parameter ke-4 adalah dataUrl yang akan dilempar ke fungsi loadLinks
+        return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
-            // Rekomendasi video di bawah
             this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
         }
     }
 
-    // 4. Fungsi Mengambil Link Video (LoadLinks)
+    // Struktur data untuk mempermudah membaca JSON video PH
+    data class MediaDefinition(
+        val format: String?,
+        val quality: String?,
+        val videoUrl: String?
+    )
+
+    // Mengekstrak link video asli (Bypass proteksi JSON & HLS)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        // Harus pakai cookies agar bisa masuk ke halaman player
+        val html = app.get(data, cookies = phCookies).text
         
-        // Catatan: Situs besar seperti ini biasanya menyembunyikan link di dalam script JSON/Base64
-        // Kita mencari pola 'flashvars' atau link .m3u8 di dalam tag script
-        val script = doc.select("script").find { it.data().contains("mediaDefinitions") }?.data()
+        // Mencari script JSON yang menyimpan link video
+        val mediaDefsRegex = Regex(""""mediaDefinitions"\s*:\s*(\[.*?\])""")
+        val match = mediaDefsRegex.find(html)
         
-        if (script != null) {
-            // Mencari link m3u8 menggunakan regex sederhana
-            val m3u8Regex = Regex("""(https?://.*?\.m3u8.*?)"""")
-            m3u8Regex.findAll(script).forEach { match ->
-                val link = match.groupValues[1].replace("\\/", "/")
-                callback(
-                    ExtractorLink(
-                        this.name,
-                        "Pornhub Player",
-                        link,
-                        data,
-                        Qualities.Unknown.value,
-                        isM3u8 = true
+        if (match != null) {
+            val jsonString = match.groupValues[1]
+            
+            try {
+                // Ubah teks JSON menjadi bentuk List<MediaDefinition>
+                val mediaList = parseJson<List<MediaDefinition>>(jsonString)
+                
+                mediaList.forEach { media ->
+                    val videoUrl = media.videoUrl ?: return@forEach
+                    val format = media.format ?: ""
+                    val quality = media.quality ?: "Unknown"
+                    
+                    // Bersihkan karakter aneh pada URL
+                    val cleanUrl = videoUrl.replace("\\/", "/")
+                    if (cleanUrl.isBlank()) return@forEach
+
+                    // Konversi kualitas string (misal "1080") ke format CloudStream
+                    val qualInt = getQualityFromName(quality)
+
+                    callback(
+                        ExtractorLink(
+                            source = this.name,
+                            name = "PH Player $quality",
+                            url = cleanUrl,
+                            referer = mainUrl, // WAJIB: Surat pengantar untuk bypass proteksi Origin
+                            quality = qualInt,
+                            isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
+                        )
                     )
-                )
+                }
+                return true
+            } catch (e: Exception) {
+                e.printStackTrace() // Abaikan jika terjadi error parsing
             }
         }
-        return true
+        return false
     }
 }
