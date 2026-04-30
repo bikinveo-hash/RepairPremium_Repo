@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.URLEncoder
 
 class PodjavProvider : MainAPI() {
     override var name = "PODJAV"
@@ -101,7 +102,9 @@ class PodjavProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        val url = "$mainUrl/?s=$query"
+        // Menerjemahkan teks pencarian agar spasi aman di URL
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = "$mainUrl/?s=$encodedQuery"
         val document = app.get(url).document
 
         // Mencari semua elemen a.video-card di halaman hasil pencarian
@@ -207,7 +210,7 @@ class PodjavProvider : MainAPI() {
                 val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
                 subtitles.forEach { sub ->
                     if (sub.src.isNotBlank()) {
-                        subtitleCallback.invoke(SubtitleFile(lang = sub.label ?: "Indonesia", url = sub.src))
+                         subtitleCallback.invoke(SubtitleFile(lang = sub.label ?: "Indonesia", url = sub.src))
                     }
                 }
             }
