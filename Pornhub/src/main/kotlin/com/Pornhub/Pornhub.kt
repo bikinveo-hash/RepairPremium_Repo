@@ -53,16 +53,17 @@ class PornhubProvider : MainAPI() {
         val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
         val href = fixUrl(rawHref) 
         
-        // PERBAIKAN 1: Ekstraksi Poster High-Res
-        // Kita prioritaskan data-image atau data-thumb_url agar gambar tidak buram
+        // Prioritaskan data-image atau data-thumb_url agar gambar tidak buram
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-thumb_url")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        return newMovieSearchResponse(title, href, TvType.NSFW) {
+        // Gunakan newAnimeSearchResponse agar posternya jadi horizontal (landscape)
+        return newAnimeSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
+            // Tambahkan header Referer agar gambar tidak di-blokir (Error 403)
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
     }
@@ -75,11 +76,11 @@ class PornhubProvider : MainAPI() {
         
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
-            this.posterHeaders = mapOf("Referer" to "$mainUrl/")
+            this.posterHeaders = mapOf("Referer" to "$mainUrl/") // Header untuk poster detail
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             
-            // Ekstraksi aktor dengan foto (Biar bulat seperti Adicinemax21)
+            // Ekstraksi aktor dengan foto (Biar tampil bulat di UI)
             val actorsList = doc.select(".pornstarsWrapper a").mapNotNull { aTag ->
                 val actorName = aTag.text().trim()
                 if (actorName.isNotEmpty()) {
@@ -111,7 +112,7 @@ class PornhubProvider : MainAPI() {
             val jsonString = match.groupValues[1]
             
             try {
-                // PERBAIKAN 2: Gunakan JsonNode agar kebal dari tipe data yang berubah-ubah (Array vs String)
+                // Gunakan JsonNode agar kebal dari JSON array/string mismatch (Anti-Crash)
                 val mediaList = parseJson<List<JsonNode>>(jsonString)
                 
                 mediaList.forEach { media ->
@@ -120,12 +121,12 @@ class PornhubProvider : MainAPI() {
                     
                     val format = media.get("format")?.asText() ?: ""
                     
-                    // Logika kebal crash untuk membaca 'quality'
+                    // Logika kebal crash untuk mengekstrak 'quality'
                     val rawQuality = media.get("quality")
                     val qualityStr = if (rawQuality != null && rawQuality.isArray && rawQuality.size() > 0) {
-                        rawQuality.get(0).asText() // Jika bentuknya Array [240], ambil angka 240-nya
+                        rawQuality.get(0).asText() // Jika JSON berbentuk Array [240]
                     } else {
-                        rawQuality?.asText() ?: "Unknown" // Jika bentuknya String "1080", langsung ambil
+                        rawQuality?.asText() ?: "Unknown" // Jika JSON berbentuk String "1080"
                     }
                     
                     val cleanUrl = videoUrl.replace("\\/", "/")
