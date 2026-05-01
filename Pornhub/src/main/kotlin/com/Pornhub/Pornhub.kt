@@ -22,17 +22,38 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
+    // DAFTAR KATEGORI BARU SESUAI PERMINTAANMU BRO! 🔥
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
         "$mainUrl/video?o=mv" to "Most Viewed",
+        "$mainUrl/channels/momxxx" to "Momxxx",
+        "$mainUrl/channels/danejones" to "Dane Jones",
+        "$mainUrl/channels/pure-taboo" to "Pure Taboo",
+        "$mainUrl/video/search?search=pure+taboo+cheating" to "Pure Taboo Cheating",
+        "$mainUrl/channels/mylf" to "Mylf",
+        "$mainUrl/channels/delphine" to "Delphine",
+        "$mainUrl/channels/my-friends-hot-mom" to "My Friends Hot Mom"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) request.data else "${request.data}&page=$page"
+        // LOGIKA PINTAR: Menyesuaikan tanda '?' atau '&' untuk halaman 2, 3, dst.
+        val url = if (page == 1) {
+            request.data
+        } else {
+            if (request.data.contains("?")) {
+                "${request.data}&page=$page"
+            } else {
+                "${request.data}?page=$page"
+            }
+        }
+        
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val home = doc.select("li.videoblock").mapNotNull {
+        // PUKUL RATA BERANDA: Memastikan video di halaman channel juga ikut terambil
+        val selector = "li.pcVideoListItem, li.videoblock, ul.videos li"
+        
+        val home = doc.select(selector).mapNotNull {
             it.toSearchResult()
         }
         
@@ -52,7 +73,6 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // PUKUL RATA: Tangkap semua video yang ada di container pencarian
         val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock, ul.search-video-results li"
         
         val results = doc.select(selector).mapNotNull {
@@ -142,7 +162,6 @@ class PornhubProvider : MainAPI() {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
-                // KITA CEK SEMUA RESOLUSI YANG ADA DI JSON (Tidak pakai "find" lagi)
                 mediaList.forEach { media ->
                     val videoUrl = media["videoUrl"] as? String ?: return@forEach
                     if (videoUrl.isBlank()) return@forEach
@@ -160,16 +179,14 @@ class PornhubProvider : MainAPI() {
                     val qualInt = getQualityFromName(qualityStr)
                     val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
-                    // VALIDASI LINK PINTAR: Mencegah Error 2004!
                     try {
-                        // Kita ping servernya dulu. Jika benar-benar ada file-nya, akan isSuccessful
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
                         
                         if (check.isSuccessful) {
                             callback(
                                 newExtractorLink(
                                     source = this@PornhubProvider.name,
-                                    name = "PH Player $qualityStr", // Trek yang sangat rapi
+                                    name = "PH Player $qualityStr",
                                     url = cleanUrl,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
@@ -182,8 +199,7 @@ class PornhubProvider : MainAPI() {
                             )
                         }
                     } catch (e: Exception) {
-                        // Jika server memberikan 404 (file tidak ada), kita diam-diam membuang resolusi ini.
-                        // Hasilnya: Error 2004 terblokir total!
+                        // Abaikan jika video tidak ada (Anti Error 2004)
                     }
                 }
                 return true
