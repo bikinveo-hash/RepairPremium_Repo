@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
-import java.net.URLEncoder // Tambahan wajib untuk fitur search!
 
 class PornhubProvider : MainAPI() {
     override var name = "Pornhub"
@@ -14,6 +13,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
+    // Cookies anti-blokir
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -30,10 +30,11 @@ class PornhubProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}&page=$page"
-        val doc = app.get(url, cookies = phCookies).document
         
-        // Menargetkan elemen mobile dan desktop sekaligus biar aman
-        val home = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull {
+        // PERBAIKAN: Selalu bawa User-Agent agar tidak dicurigai bot
+        val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
+        
+        val home = doc.select("li.videoblock").mapNotNull {
             it.toSearchResult()
         }
         
@@ -48,13 +49,13 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        // PERBAIKAN FATAL: Encode spasi dan simbol agar server PH tidak bingung
-        val encodedQuery = URLEncoder.encode(query, "utf-8")
-        val url = "$mainUrl/video/search?search=$encodedQuery&page=$page"
+        // Format query persis seperti browser (spasi jadi +)
+        val formattedQuery = query.replace(" ", "+")
+        val url = "$mainUrl/video/search?search=$formattedQuery&page=$page"
         
-        val doc = app.get(url, cookies = phCookies).document
+        // PERBAIKAN FATAL: Bawa User-Agent agar tidak ditendang (redirect) ke Beranda!
+        val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // Membaca hasil pencarian dari struktur mobile (videoblock) maupun desktop (pcVideoListItem)
         val results = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull {
             it.toSearchResult()
         }
@@ -63,7 +64,6 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Selector diperluas agar bisa menangkap judul di segala versi web PH
         val titleElement = this.selectFirst(".title a, span.title a") ?: return null
         val title = titleElement.text()
         val href = fixUrl(titleElement.attr("href"))
@@ -75,7 +75,6 @@ class PornhubProvider : MainAPI() {
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        // Tetap menggunakan AnimeSearch agar Cloudstream berusaha menampilkan gambar semaksimal mungkin
         return newAnimeSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
@@ -83,7 +82,8 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url, cookies = phCookies).document
+        // PERBAIKAN: Bawa User-Agent
+        val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
         
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
