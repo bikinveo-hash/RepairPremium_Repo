@@ -13,7 +13,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk bypass deteksi bot
+    // Cookies wajib untuk bypass deteksi bot dan memaksa HTML versi PC
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI: Ditambahkan ?o=vi agar langsung menembak ke daftar video murni!
+    // DAFTAR KATEGORI LENGKAP
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -49,12 +49,16 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SISTEM PRIORITAS WADAH TUNGGAL (Anti campur aduk sidebar!)
-        val mainContainer = doc.selectFirst("#showAllVids") // Prioritas 1: Halaman Channel
-            ?: doc.selectFirst("#videoCategory") // Prioritas 2: Halaman Hot/Most Viewed
-            ?: doc.selectFirst("#videoSearchResult") // Prioritas 3: Halaman Pencarian
-            ?: doc.selectFirst("#mostRecentVideos") // Prioritas 4: Halaman Recent
-            ?: doc.selectFirst("ul.videos") // Fallback terakhir
+        // SISTEM RADAR WADAH LENGKAP: Menangkap halaman yang dialihkan ke profil Bintang/Model
+        val mainContainer = doc.selectFirst("#showAllVids") // Halaman Channel Biasa
+            ?: doc.selectFirst("#pornstarsVideoList") // Halaman Pornstar
+            ?: doc.selectFirst("#modelVideoList") // Halaman Model
+            ?: doc.selectFirst("#modelsVideoList") // Halaman Model (Plural)
+            ?: doc.selectFirst("#videoCategory") // Halaman Hot/Most Viewed
+            ?: doc.selectFirst("#videoSearchResult") // Halaman Pencarian
+            ?: doc.selectFirst("#mostRecentVideos") // Halaman Recent
+            ?: doc.selectFirst(".channelVideoList") // Fallback Class
+            ?: doc.selectFirst(".pornstarVideoList") // Fallback Class
             
         val home = mainContainer?.select("li")?.mapNotNull {
             it.toSearchResult()
@@ -188,7 +192,6 @@ class PornhubProvider : MainAPI() {
 
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
-                        
                         if (check.isSuccessful) {
                             callback(
                                 newExtractorLink(
@@ -205,9 +208,7 @@ class PornhubProvider : MainAPI() {
                                 }
                             )
                         }
-                    } catch (e: Exception) {
-                        // Abaikan jika video tidak ada (Anti Error 2004)
-                    }
+                    } catch (e: Exception) {}
                 }
                 return true
             } catch (e: Exception) {
