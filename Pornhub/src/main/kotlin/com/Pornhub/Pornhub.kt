@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI
+    // DAFTAR KATEGORI LENGKAP
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -37,7 +37,7 @@ class PornhubProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // LOGIKA PINTAR: Menyesuaikan tanda '?' atau '&' untuk halaman 2, 3, dst.
+        // Logika Pintar Pagination (? vs &)
         val url = if (page == 1) {
             request.data
         } else {
@@ -50,10 +50,9 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // PERBAIKAN FATAL KATEGORI: Kita kunci hanya pada ID wadah utamanya saja agar sidebar sponsor/rekomendasi diabaikan!
-        val selector = "#showAllVids li.pcVideoListItem, #showAllVids li.videoblock, " +
-                       "#videoCategory li.pcVideoListItem, #videoCategory li.videoblock, " +
-                       "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock"
+        // SELECTOR SAKTI: Mencakup semua kemungkinan kontainer utama (PC & Mobile Fallback)
+        val selector = "#showAllVids li, #videoCategory li, #videoSearchResult li, " +
+                       "#mostRecentVideos li, .videos.search-video-results li, .sectionWrapper li"
         
         val home = doc.select(selector).mapNotNull {
             it.toSearchResult()
@@ -85,14 +84,17 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
+        // Ambil link yang valid
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
+        // Taktik Pukul Rata Judul
         val title = this.selectFirst(".title")?.text()?.takeIf { it.isNotBlank() }
             ?: linkElement.attr("title").takeIf { it.isNotBlank() }
             ?: linkElement.text().takeIf { it.isNotBlank() }
             ?: "Unknown Title"
         
+        // Ambil Poster
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
@@ -164,7 +166,6 @@ class PornhubProvider : MainAPI() {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
-                // KITA CEK SEMUA RESOLUSI YANG ADA DI JSON
                 mediaList.forEach { media ->
                     val videoUrl = media["videoUrl"] as? String ?: return@forEach
                     if (videoUrl.isBlank()) return@forEach
@@ -182,15 +183,14 @@ class PornhubProvider : MainAPI() {
                     val qualInt = getQualityFromName(qualityStr)
                     val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
-                    // VALIDASI LINK PINTAR: Mencegah Error 2004!
+                    // Validasi Link (Anti Error 2004)
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
-                        
                         if (check.isSuccessful) {
                             callback(
                                 newExtractorLink(
                                     source = this@PornhubProvider.name,
-                                    name = "PH Player $qualityStr", // Trek yang sangat rapi
+                                    name = "PH Player $qualityStr",
                                     url = cleanUrl,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
@@ -202,9 +202,7 @@ class PornhubProvider : MainAPI() {
                                 }
                             )
                         }
-                    } catch (e: Exception) {
-                        // Abaikan jika video tidak ada (Anti Error 2004)
-                    }
+                    } catch (e: Exception) {}
                 }
                 return true
             } catch (e: Exception) {
