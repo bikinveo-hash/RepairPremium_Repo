@@ -49,14 +49,19 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        // Format query persis seperti browser (spasi jadi +)
-        val formattedQuery = query.replace(" ", "+")
+        // 1. Format query persis seperti browser agar aman dari karakter spesial
+        val formattedQuery = java.net.URLEncoder.encode(query, "utf-8")
         val url = "$mainUrl/video/search?search=$formattedQuery&page=$page"
         
-        // PERBAIKAN FATAL: Bawa User-Agent agar tidak ditendang (redirect) ke Beranda!
+        // 2. Bawa User-Agent agar tidak ditendang (redirect) ke Beranda
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val results = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull {
+        // 3. PERBAIKAN FATAL: Gunakan ID Wadah Utama dan Selector dari hasil inspeksi
+        val selector = "#videoListSearchResults li[class^=videoSearchList], " +
+                       "#videoListSearchResults li.videoblock, " +
+                       "#videoListSearchResults li.pcVideoListItem"
+        
+        val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
         }
         
