@@ -1,9 +1,11 @@
 package com.Pornhub
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
+import java.net.URLEncoder // Tambahan wajib untuk fitur search!
 
 class PornhubProvider : MainAPI() {
     override var name = "Pornhub"
@@ -30,7 +32,8 @@ class PornhubProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}&page=$page"
         val doc = app.get(url, cookies = phCookies).document
         
-        val home = doc.select("li.videoblock").mapNotNull {
+        // Menargetkan elemen mobile dan desktop sekaligus biar aman
+        val home = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull {
             it.toSearchResult()
         }
         
@@ -45,10 +48,14 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        val url = "$mainUrl/video/search?search=$query&page=$page"
+        // PERBAIKAN FATAL: Encode spasi dan simbol agar server PH tidak bingung
+        val encodedQuery = URLEncoder.encode(query, "utf-8")
+        val url = "$mainUrl/video/search?search=$encodedQuery&page=$page"
+        
         val doc = app.get(url, cookies = phCookies).document
         
-        val results = doc.select("li.videoblock").mapNotNull {
+        // Membaca hasil pencarian dari struktur mobile (videoblock) maupun desktop (pcVideoListItem)
+        val results = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull {
             it.toSearchResult()
         }
         
@@ -56,9 +63,10 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".title a")?.text() ?: return null
-        val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
-        val href = fixUrl(rawHref) 
+        // Selector diperluas agar bisa menangkap judul di segala versi web PH
+        val titleElement = this.selectFirst(".title a, span.title a") ?: return null
+        val title = titleElement.text()
+        val href = fixUrl(titleElement.attr("href"))
         
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
@@ -67,7 +75,8 @@ class PornhubProvider : MainAPI() {
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        return newMovieSearchResponse(title, href, TvType.NSFW) {
+        // Tetap menggunakan AnimeSearch agar Cloudstream berusaha menampilkan gambar semaksimal mungkin
+        return newAnimeSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
@@ -98,7 +107,7 @@ class PornhubProvider : MainAPI() {
             }
             
             this.duration = getDurationFromString(durationText)
-            this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
+            this.recommendations = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull { it.toSearchResult() }
         }
     }
 
@@ -110,8 +119,6 @@ class PornhubProvider : MainAPI() {
     ): Boolean {
         val html = app.get(data, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).text
         
-        // PERBAIKAN FATAL: Algoritma Penghitung Kurung Siku (Bracket Matching)
-        // Ini memastikan JSON tidak terpotong di tengah jalan meskipun ada array di dalamnya.
         var jsonString = ""
         val startIndex = html.indexOf("\"mediaDefinitions\":[")
         if (startIndex != -1) {
