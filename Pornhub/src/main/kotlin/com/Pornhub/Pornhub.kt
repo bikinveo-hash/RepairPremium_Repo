@@ -13,12 +13,12 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk bypass deteksi bot dan memaksa HTML versi PC
+    // Cookies wajib untuk bypass deteksi bot
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc", // Penyelamat agar layar tidak blank
+        "platform" to "pc",
         "cookieConsent" to "3"
     )
 
@@ -50,15 +50,19 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SELECTOR SAKTI: Mencakup channel Premium dan Channel Biasa
-        val selector = "#showAllVids li.pcVideoListItem, #showAllVids li.videoblock, " +
-                       "#videoCategory li.pcVideoListItem, #videoCategory li.videoblock, " +
-                       "#mostRecentVideos li.pcVideoListItem, #mostRecentVideos li.videoblock, " +
-                       ".sectionWrapper li.pcVideoListItem, .sectionWrapper li.videoblock, " +
-                       "ul.videos li.pcVideoListItem, ul.videos li.videoblock"
+        // SELECTOR SAKTI: Langsung target wadah utama dan ambil SEMUA isinya
+        val selector = "#showAllVids li, #videoCategory li, #mostRecentVideos li, " +
+                       ".sectionWrapper li, .videoUList li, #videoSearchResult li"
         
-        val home = doc.select(selector).mapNotNull {
+        var home = doc.select(selector).mapNotNull {
             it.toSearchResult()
+        }
+        
+        // JURUS CADANGAN (Fallback): Jika wadah di atas tidak ketemu, sapu bersih seluruh <li> di halaman!
+        if (home.isEmpty()) {
+            home = doc.select("li").mapNotNull {
+                it.toSearchResult()
+            }
         }
         
         return newHomePageResponse(
@@ -77,16 +81,27 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock, ul.search-video-results li.pcVideoListItem"
+        val selector = "#videoSearchResult li, ul.search-video-results li"
         
-        val results = doc.select(selector).mapNotNull {
+        var results = doc.select(selector).mapNotNull {
             it.toSearchResult()
+        }
+        
+        // Fallback Search
+        if (results.isEmpty()) {
+            results = doc.select("li").mapNotNull {
+                it.toSearchResult()
+            }
         }
         
         return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
+        // ANTI-SPONSOR: Buang elemen yang class-nya mengandung kata sponsor atau iklan
+        val kelas = this.className().lowercase()
+        if (kelas.contains("sponsor") || kelas.contains("ad")) return null
+        
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
