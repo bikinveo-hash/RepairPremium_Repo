@@ -13,16 +13,16 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk bypass deteksi bot
+    // Cookies wajib untuk bypass deteksi bot dan memaksa HTML versi PC
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc",
+        "platform" to "pc", 
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI LENGKAP: Semua channel diakhiri '/videos' agar murni 100%!
+    // DAFTAR KATEGORI LENGKAP
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -37,7 +37,6 @@ class PornhubProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Logika Pintar Pagination (? vs &)
         val url = if (page == 1) {
             request.data
         } else {
@@ -50,20 +49,16 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SELECTOR SAKTI: Langsung target wadah utama dan ambil SEMUA isinya
-        val selector = "#showAllVids li, #videoCategory li, #mostRecentVideos li, " +
-                       ".sectionWrapper li, .videoUList li, #videoSearchResult li"
-        
-        var home = doc.select(selector).mapNotNull {
+        // SISTEM PRIORITAS WADAH TUNGGAL (Anti campur aduk sidebar!)
+        val mainContainer = doc.selectFirst("#showAllVids") // Prioritas 1: Halaman Channel
+            ?: doc.selectFirst("#videoCategory") // Prioritas 2: Halaman Hot/Most Viewed
+            ?: doc.selectFirst("#videoSearchResult") // Prioritas 3: Halaman Pencarian
+            ?: doc.selectFirst("#mostRecentVideos") // Prioritas 4: Halaman Recent
+            ?: doc.selectFirst("ul.videos") // Fallback terakhir
+            
+        val home = mainContainer?.select("li")?.mapNotNull {
             it.toSearchResult()
-        }
-        
-        // JURUS CADANGAN (Fallback): Jika wadah di atas tidak ketemu, sapu bersih seluruh <li> di halaman!
-        if (home.isEmpty()) {
-            home = doc.select("li").mapNotNull {
-                it.toSearchResult()
-            }
-        }
+        } ?: emptyList()
         
         return newHomePageResponse(
             HomePageList(
@@ -81,26 +76,19 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val selector = "#videoSearchResult li, ul.search-video-results li"
-        
-        var results = doc.select(selector).mapNotNull {
+        // Hanya ambil dari wadah pencarian
+        val mainContainer = doc.selectFirst("#videoSearchResult") ?: doc.selectFirst("ul.search-video-results")
+        val results = mainContainer?.select("li")?.mapNotNull {
             it.toSearchResult()
-        }
-        
-        // Fallback Search
-        if (results.isEmpty()) {
-            results = doc.select("li").mapNotNull {
-                it.toSearchResult()
-            }
-        }
+        } ?: emptyList()
         
         return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // ANTI-SPONSOR: Buang elemen yang class-nya mengandung kata sponsor atau iklan
+        // FILTER EKSTRA: Buang paksa elemen yang berbau sponsor atau iklan
         val kelas = this.className().lowercase()
-        if (kelas.contains("sponsor") || kelas.contains("ad")) return null
+        if (kelas.contains("sponsor") || kelas.contains("ad") || kelas.contains("promoted")) return null
         
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
@@ -198,7 +186,6 @@ class PornhubProvider : MainAPI() {
                     val qualInt = getQualityFromName(qualityStr)
                     val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
-                    // Validasi Link Pintar: Anti Error 2004
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
                         if (check.isSuccessful) {
