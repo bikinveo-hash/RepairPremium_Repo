@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI BARU: Ditambahkan "/videos" di belakang channel agar murni dan akurat!
+    // DAFTAR KATEGORI
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -50,8 +50,10 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // PUKUL RATA BERANDA: Memastikan video di halaman channel juga ikut terambil
-        val selector = "li.pcVideoListItem, li.videoblock, ul.videos li"
+        // PERBAIKAN FATAL KATEGORI: Kita kunci hanya pada ID wadah utamanya saja agar sidebar sponsor/rekomendasi diabaikan!
+        val selector = "#showAllVids li.pcVideoListItem, #showAllVids li.videoblock, " +
+                       "#videoCategory li.pcVideoListItem, #videoCategory li.videoblock, " +
+                       "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock"
         
         val home = doc.select(selector).mapNotNull {
             it.toSearchResult()
