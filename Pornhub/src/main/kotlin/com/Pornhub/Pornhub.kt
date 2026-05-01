@@ -18,7 +18,7 @@ class PornhubProvider : MainAPI() {
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc",
+        "platform" to "pc", // Ini yang memaksa server memberikan HTML versi PC
         "cookieConsent" to "3"
     )
 
@@ -53,13 +53,11 @@ class PornhubProvider : MainAPI() {
         val formattedQuery = java.net.URLEncoder.encode(query, "utf-8")
         val url = "$mainUrl/video/search?search=$formattedQuery&page=$page"
         
-        // 2. Bawa User-Agent agar tidak ditendang (redirect) ke Beranda
+        // 2. Bawa User-Agent & Cookies
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // 3. PERBAIKAN FATAL: Gunakan ID Wadah Utama dan Selector dari hasil inspeksi
-        val selector = "#videoListSearchResults li[class^=videoSearchList], " +
-                       "#videoListSearchResults li.videoblock, " +
-                       "#videoListSearchResults li.pcVideoListItem"
+        // 3. PERBAIKAN FINAL: Gunakan ID Container versi PC sesuai isi search.txt!
+        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock"
         
         val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
