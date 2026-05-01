@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI LENGKAP
+    // DAFTAR KATEGORI LENGKAP: Semua channel diakhiri '/videos' agar murni 100%!
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -50,9 +50,12 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SELECTOR SAKTI: Mencakup semua kemungkinan kontainer utama (PC & Mobile Fallback)
-        val selector = "#showAllVids li, #videoCategory li, #videoSearchResult li, " +
-                       "#mostRecentVideos li, .videos.search-video-results li, .sectionWrapper li"
+        // SELECTOR SAKTI: Mencakup channel Premium dan Channel Biasa
+        val selector = "#showAllVids li.pcVideoListItem, #showAllVids li.videoblock, " +
+                       "#videoCategory li.pcVideoListItem, #videoCategory li.videoblock, " +
+                       "#mostRecentVideos li.pcVideoListItem, #mostRecentVideos li.videoblock, " +
+                       ".sectionWrapper li.pcVideoListItem, .sectionWrapper li.videoblock, " +
+                       "ul.videos li.pcVideoListItem, ul.videos li.videoblock"
         
         val home = doc.select(selector).mapNotNull {
             it.toSearchResult()
@@ -74,7 +77,7 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock, ul.search-video-results li"
+        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock, ul.search-video-results li.pcVideoListItem"
         
         val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
@@ -84,17 +87,14 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Ambil link yang valid
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
-        // Taktik Pukul Rata Judul
         val title = this.selectFirst(".title")?.text()?.takeIf { it.isNotBlank() }
             ?: linkElement.attr("title").takeIf { it.isNotBlank() }
             ?: linkElement.text().takeIf { it.isNotBlank() }
             ?: "Unknown Title"
         
-        // Ambil Poster
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
@@ -183,7 +183,7 @@ class PornhubProvider : MainAPI() {
                     val qualInt = getQualityFromName(qualityStr)
                     val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
-                    // Validasi Link (Anti Error 2004)
+                    // Validasi Link Pintar: Anti Error 2004
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
                         if (check.isSuccessful) {
