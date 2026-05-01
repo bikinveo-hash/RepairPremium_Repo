@@ -13,7 +13,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk bypass deteksi bot dan memaksa HTML versi PC
+    // Cookies wajib untuk bypass deteksi bot
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -22,18 +22,18 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI LENGKAP
+    // DAFTAR KATEGORI: Ditambahkan ?o=vi agar langsung menembak ke daftar video murni!
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
         "$mainUrl/video?o=mv" to "Most Viewed",
-        "$mainUrl/channels/momxxx/videos" to "Momxxx",
-        "$mainUrl/channels/danejones/videos" to "Dane Jones",
-        "$mainUrl/channels/pure-taboo/videos" to "Pure Taboo",
+        "$mainUrl/channels/momxxx/videos?o=vi" to "Momxxx",
+        "$mainUrl/channels/danejones/videos?o=vi" to "Dane Jones",
+        "$mainUrl/channels/pure-taboo/videos?o=vi" to "Pure Taboo",
         "$mainUrl/video/search?search=pure+taboo+cheating" to "Pure Taboo Cheating",
-        "$mainUrl/channels/mylf/videos" to "Mylf",
-        "$mainUrl/channels/delphine/videos" to "Delphine",
-        "$mainUrl/channels/my-friends-hot-mom/videos" to "My Friends Hot Mom"
+        "$mainUrl/channels/mylf/videos?o=vi" to "Mylf",
+        "$mainUrl/channels/delphine/videos?o=vi" to "Delphine",
+        "$mainUrl/channels/my-friends-hot-mom/videos?o=vi" to "My Friends Hot Mom"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -188,6 +188,7 @@ class PornhubProvider : MainAPI() {
 
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
+                        
                         if (check.isSuccessful) {
                             callback(
                                 newExtractorLink(
@@ -204,7 +205,9 @@ class PornhubProvider : MainAPI() {
                                 }
                             )
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) {
+                        // Abaikan jika video tidak ada (Anti Error 2004)
+                    }
                 }
                 return true
             } catch (e: Exception) {
