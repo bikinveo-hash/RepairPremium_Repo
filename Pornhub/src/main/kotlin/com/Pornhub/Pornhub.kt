@@ -1,5 +1,6 @@
 package com.Pornhub
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -12,12 +13,13 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib untuk menembus peringatan umur 18+
+    // Cookies super ketat (ditambahkan rekomendasi dari curl)
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc"
+        "platform" to "pc",
+        "cookieConsent" to "3" // Tambahan izin cookie agar tidak diredirect
     )
 
     override val mainPage = mainPageOf(
@@ -34,7 +36,7 @@ class PornhubProvider : MainAPI() {
             it.toSearchResult()
         }
         
-        // Memaksa UI beranda menampilkan poster secara horizontal (landscape)
+        // Beranda bisa horizontal
         return newHomePageResponse(
             HomePageList(
                 name = request.name,
@@ -46,7 +48,10 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
+        // PERBAIKAN: Pastikan ini adalah URL pencarian yang benar, bukan API autocomplete!
+        // Formatnya: /video/search?search=katakunci
         val url = "$mainUrl/video/search?search=$query&page=$page"
+        
         val doc = app.get(url, cookies = phCookies).document
         
         val results = doc.select("li.videoblock").mapNotNull {
@@ -61,7 +66,6 @@ class PornhubProvider : MainAPI() {
         val rawHref = this.selectFirst(".title a")?.attr("href") ?: return null
         val href = fixUrl(rawHref) 
         
-        // Prioritas tag gambar agar dapat resolusi High-Res dan tidak buram
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
@@ -69,10 +73,9 @@ class PornhubProvider : MainAPI() {
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        // Gunakan newAnimeSearchResponse agar layout kartu pencarian jadi Horizontal
-        return newAnimeSearchResponse(title, href, TvType.NSFW) {
+        // Kembalikan ke newMovieSearchResponse agar pas dengan layout potret aplikasi
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
-            // Bypass error 403 (Forbidden) dari server CDN gambar
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
         }
     }
@@ -81,7 +84,6 @@ class PornhubProvider : MainAPI() {
         val doc = app.get(url, cookies = phCookies).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
         
-        // Mengambil poster besar dari halaman detail (menggunakan meta property)
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
         val durationText = doc.selectFirst(".duration")?.text()
         
@@ -91,7 +93,6 @@ class PornhubProvider : MainAPI() {
             this.plot = doc.selectFirst(".video-description")?.text()
             this.tags = doc.select(".categoriesWrapper a").map { it.text() }
             
-            // Mengambil aktor dan fotonya agar tampil bulat rapi
             val actorsList = doc.select(".pornstarsWrapper a").mapNotNull { aTag ->
                 val actorName = aTag.text().trim()
                 if (actorName.isNotEmpty()) {
@@ -114,7 +115,8 @@ class PornhubProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val html = app.get(data, cookies = phCookies).text
+        // PERBAIKAN: Menambahkan User-Agent agar tidak dicurigai sebagai bot saat loadLinks
+        val html = app.get(data, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).text
         
         val mediaDefsRegex = Regex(""""mediaDefinitions"\s*:\s*(\[.*?\])""")
         val match = mediaDefsRegex.find(html)
@@ -123,7 +125,6 @@ class PornhubProvider : MainAPI() {
             val jsonString = match.groupValues[1]
             
             try {
-                // Trik kebal JSON: Parsing menggunakan Map untuk menghindari jebakan String/Array Mismatch
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
                 mediaList.forEach { media ->
@@ -132,7 +133,6 @@ class PornhubProvider : MainAPI() {
                     
                     val format = media["format"] as? String ?: ""
                     
-                    // Ekstraksi nilai resolusi dengan aman
                     val rawQuality = media["quality"]
                     val qualityStr = when (rawQuality) {
                         is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
@@ -151,7 +151,6 @@ class PornhubProvider : MainAPI() {
                             url = cleanUrl,
                             type = linkType
                         ) {
-                            // WAJIB ADA: Surat pengantar (Headers) untuk bypass proteksi CORS Player
                             this.headers = mapOf(
                                 "Origin" to mainUrl,
                                 "Referer" to "$mainUrl/"
