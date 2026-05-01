@@ -13,7 +13,7 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies wajib
+    // Cookies wajib untuk bypass deteksi bot
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI LENGKAP DENGAN ?o=vi
+    // DAFTAR KATEGORI
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -49,21 +49,20 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SELECTOR TERBAIK: 
-        // Menggunakan ID Wadah Utama agar bebas sponsor, TAPI tidak membatasi class 'li' 
-        // agar tidak terjadi layar kosong!
-        val selector = "#showAllVids li, " +
-                       "#pornstarsVideoList li, " +
-                       "#modelVideoList li, " +
-                       "#modelsVideoList li, " +
-                       "#videoCategory li, " +
-                       "#videoSearchResult li, " +
-                       "#mostRecentVideos li, " +
-                       "ul.search-video-results li"
-                       
-        val home = doc.select(selector).mapNotNull {
+        // KUNCI JAWABAN TERMUX: Memasukkan #showAllChanelVideos (typo asli dari server) di prioritas utama
+        val mainContainer = doc.selectFirst("#showAllChanelVideos") // Prioritas 1: Halaman Channel (Tab Video)
+            ?: doc.selectFirst("#showAllVids") // Prioritas 2: Halaman Channel Biasa
+            ?: doc.selectFirst("#pornstarsVideoList") // Prioritas 3: Halaman Bintang
+            ?: doc.selectFirst("#modelVideoList") // Prioritas 4: Halaman Model
+            ?: doc.selectFirst("#modelsVideoList") // Prioritas 5: Halaman Model (Plural)
+            ?: doc.selectFirst("#videoCategory") // Prioritas 6: Halaman Hot/Most Viewed
+            ?: doc.selectFirst("#videoSearchResult") // Prioritas 7: Halaman Pencarian
+            ?: doc.selectFirst("#mostRecentVideos") // Prioritas 8: Halaman Recent
+            ?: doc.selectFirst("ul.videos") // Fallback
+            
+        val home = mainContainer?.select("li")?.mapNotNull {
             it.toSearchResult()
-        }
+        } ?: emptyList()
         
         return newHomePageResponse(
             HomePageList(
@@ -81,22 +80,19 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        val selector = "#videoSearchResult li, ul.search-video-results li"
-        
-        val results = doc.select(selector).mapNotNull {
+        val mainContainer = doc.selectFirst("#videoSearchResult") ?: doc.selectFirst("ul.search-video-results")
+        val results = mainContainer?.select("li")?.mapNotNull {
             it.toSearchResult()
-        }
+        } ?: emptyList()
         
         return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Anti-Sponsor Filter
         val kelas = this.className().lowercase()
         val classList = kelas.split(" ")
         if (classList.any { it == "ad" || it.contains("sponsor") || it.contains("promoted") }) return null
         
-        // Hanya ambil elemen yang PENGHUBUNG VIDEONYA VALID
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
