@@ -22,18 +22,18 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI BARU SESUAI PERMINTAANMU BRO! 🔥
+    // DAFTAR KATEGORI BARU: Ditambahkan "/videos" di belakang channel agar murni dan akurat!
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
         "$mainUrl/video?o=mv" to "Most Viewed",
-        "$mainUrl/channels/momxxx" to "Momxxx",
-        "$mainUrl/channels/danejones" to "Dane Jones",
-        "$mainUrl/channels/pure-taboo" to "Pure Taboo",
+        "$mainUrl/channels/momxxx/videos" to "Momxxx",
+        "$mainUrl/channels/danejones/videos" to "Dane Jones",
+        "$mainUrl/channels/pure-taboo/videos" to "Pure Taboo",
         "$mainUrl/video/search?search=pure+taboo+cheating" to "Pure Taboo Cheating",
-        "$mainUrl/channels/mylf" to "Mylf",
-        "$mainUrl/channels/delphine" to "Delphine",
-        "$mainUrl/channels/my-friends-hot-mom" to "My Friends Hot Mom"
+        "$mainUrl/channels/mylf/videos" to "Mylf",
+        "$mainUrl/channels/delphine/videos" to "Delphine",
+        "$mainUrl/channels/my-friends-hot-mom/videos" to "My Friends Hot Mom"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -162,6 +162,7 @@ class PornhubProvider : MainAPI() {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
+                // KITA CEK SEMUA RESOLUSI YANG ADA DI JSON
                 mediaList.forEach { media ->
                     val videoUrl = media["videoUrl"] as? String ?: return@forEach
                     if (videoUrl.isBlank()) return@forEach
@@ -179,6 +180,7 @@ class PornhubProvider : MainAPI() {
                     val qualInt = getQualityFromName(qualityStr)
                     val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
+                    // VALIDASI LINK PINTAR: Mencegah Error 2004!
                     try {
                         val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
                         
@@ -186,7 +188,7 @@ class PornhubProvider : MainAPI() {
                             callback(
                                 newExtractorLink(
                                     source = this@PornhubProvider.name,
-                                    name = "PH Player $qualityStr",
+                                    name = "PH Player $qualityStr", // Trek yang sangat rapi
                                     url = cleanUrl,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
