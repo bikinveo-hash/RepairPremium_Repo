@@ -1,6 +1,5 @@
 package com.Pornhub
 
-import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -13,13 +12,12 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies super ketat (ditambahkan rekomendasi dari curl)
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
         "platform" to "pc",
-        "cookieConsent" to "3" // Tambahan izin cookie agar tidak diredirect
+        "cookieConsent" to "3"
     )
 
     override val mainPage = mainPageOf(
@@ -36,7 +34,6 @@ class PornhubProvider : MainAPI() {
             it.toSearchResult()
         }
         
-        // Beranda bisa horizontal
         return newHomePageResponse(
             HomePageList(
                 name = request.name,
@@ -48,10 +45,7 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        // PERBAIKAN: Pastikan ini adalah URL pencarian yang benar, bukan API autocomplete!
-        // Formatnya: /video/search?search=katakunci
         val url = "$mainUrl/video/search?search=$query&page=$page"
-        
         val doc = app.get(url, cookies = phCookies).document
         
         val results = doc.select("li.videoblock").mapNotNull {
@@ -73,7 +67,6 @@ class PornhubProvider : MainAPI() {
             ?: imgElement?.attr("data-mediumthumb")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
         
-        // Kembalikan ke newMovieSearchResponse agar pas dengan layout potret aplikasi
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")
@@ -115,15 +108,28 @@ class PornhubProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // PERBAIKAN: Menambahkan User-Agent agar tidak dicurigai sebagai bot saat loadLinks
         val html = app.get(data, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).text
         
-        val mediaDefsRegex = Regex(""""mediaDefinitions"\s*:\s*(\[.*?\])""")
-        val match = mediaDefsRegex.find(html)
+        // PERBAIKAN FATAL: Algoritma Penghitung Kurung Siku (Bracket Matching)
+        // Ini memastikan JSON tidak terpotong di tengah jalan meskipun ada array di dalamnya.
+        var jsonString = ""
+        val startIndex = html.indexOf("\"mediaDefinitions\":[")
+        if (startIndex != -1) {
+            var bracketCount = 0
+            val arrayStart = html.indexOf("[", startIndex)
+            for (i in arrayStart until html.length) {
+                val char = html[i]
+                if (char == '[') bracketCount++
+                else if (char == ']') bracketCount--
+                
+                if (bracketCount == 0) {
+                    jsonString = html.substring(arrayStart, i + 1)
+                    break
+                }
+            }
+        }
         
-        if (match != null) {
-            val jsonString = match.groupValues[1]
-            
+        if (jsonString.isNotBlank()) {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
                 
