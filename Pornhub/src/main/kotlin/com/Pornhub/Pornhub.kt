@@ -13,12 +13,11 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies anti-blokir
+    // Cookies dasar, tidak perlu disalin semua dari Inspect Element
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc", // Ini yang memaksa server memberikan HTML versi PC
         "cookieConsent" to "3"
     )
 
@@ -30,8 +29,6 @@ class PornhubProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}&page=$page"
-        
-        // PERBAIKAN: Selalu bawa User-Agent agar tidak dicurigai bot
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
         val home = doc.select("li.videoblock").mapNotNull {
@@ -49,15 +46,13 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        // 1. Format query persis seperti browser agar aman dari karakter spesial
         val formattedQuery = java.net.URLEncoder.encode(query, "utf-8")
         val url = "$mainUrl/video/search?search=$formattedQuery&page=$page"
         
-        // 2. Bawa User-Agent & Cookies
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // 3. PERBAIKAN FINAL: Gunakan ID Container versi PC sesuai isi search.txt!
-        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock"
+        // PUKUL RATA: Ambil semua daftar di dalam wadah pencarian, entah server ngasih versi PC atau Mobile
+        val selector = "#videoSearchResult li, #videoListSearchResults li, ul.search-video-results li"
         
         val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
@@ -67,9 +62,15 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst(".title a, span.title a") ?: return null
-        val title = titleElement.text()
-        val href = fixUrl(titleElement.attr("href"))
+        // CARA PALING AMAN: Cari elemen apa pun yang menuju link video ("viewkey=")
+        val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
+        val href = fixUrl(linkElement.attr("href"))
+        
+        // Coba cari judul dari class .title, ATAU dari atribut title, ATAU dari teks mentahnya
+        val title = this.selectFirst(".title")?.text()?.takeIf { it.isNotBlank() }
+            ?: linkElement.attr("title").takeIf { it.isNotBlank() }
+            ?: linkElement.text().takeIf { it.isNotBlank() }
+            ?: "Unknown Title"
         
         val imgElement = this.selectFirst("img")
         val posterUrl = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
@@ -85,7 +86,6 @@ class PornhubProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // PERBAIKAN: Bawa User-Agent
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         val title = doc.selectFirst("h1.title")?.text() ?: ""
         
