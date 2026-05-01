@@ -22,7 +22,7 @@ class PornhubProvider : MainAPI() {
         "cookieConsent" to "3"
     )
 
-    // DAFTAR KATEGORI LENGKAP
+    // DAFTAR KATEGORI
     override val mainPage = mainPageOf(
         "$mainUrl/video?o=mr" to "Recently Added",
         "$mainUrl/video?o=ht" to "Hot",
@@ -49,20 +49,18 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // SISTEM RADAR WADAH LENGKAP: Menangkap halaman yang dialihkan ke profil Bintang/Model
-        val mainContainer = doc.selectFirst("#showAllVids") // Halaman Channel Biasa
-            ?: doc.selectFirst("#pornstarsVideoList") // Halaman Pornstar
-            ?: doc.selectFirst("#modelVideoList") // Halaman Model
-            ?: doc.selectFirst("#modelsVideoList") // Halaman Model (Plural)
-            ?: doc.selectFirst("#videoCategory") // Halaman Hot/Most Viewed
-            ?: doc.selectFirst("#videoSearchResult") // Halaman Pencarian
-            ?: doc.selectFirst("#mostRecentVideos") // Halaman Recent
-            ?: doc.selectFirst(".channelVideoList") // Fallback Class
-            ?: doc.selectFirst(".pornstarVideoList") // Fallback Class
-            
-        val home = mainContainer?.select("li")?.mapNotNull {
+        // SELECTOR PRESISI TINGGI (Berdasarkan hasil Termux):
+        // Hanya mengambil "li.videoblock" dari dalam wadah-wadah utama!
+        val selector = "#showAllVids li.videoblock, " +
+                       "#pornstarsVideoList li.videoblock, " +
+                       "#modelVideoList li.videoblock, " +
+                       "#videoCategory li.videoblock, " +
+                       "#videoSearchResult li.videoblock, " +
+                       "#mostRecentVideos li.videoblock"
+                       
+        val home = doc.select(selector).mapNotNull {
             it.toSearchResult()
-        } ?: emptyList()
+        }
         
         return newHomePageResponse(
             HomePageList(
@@ -81,16 +79,17 @@ class PornhubProvider : MainAPI() {
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
         // Hanya ambil dari wadah pencarian
-        val mainContainer = doc.selectFirst("#videoSearchResult") ?: doc.selectFirst("ul.search-video-results")
-        val results = mainContainer?.select("li")?.mapNotNull {
+        val selector = "#videoSearchResult li.videoblock, ul.search-video-results li.videoblock"
+        
+        val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
-        } ?: emptyList()
+        }
         
         return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // FILTER EKSTRA: Buang paksa elemen yang berbau sponsor atau iklan
+        // FILTER EXTRA: Buang video sponsor yang menyamar
         val kelas = this.className().lowercase()
         if (kelas.contains("sponsor") || kelas.contains("ad") || kelas.contains("promoted")) return null
         
@@ -140,7 +139,7 @@ class PornhubProvider : MainAPI() {
             }
             
             this.duration = getDurationFromString(durationText)
-            this.recommendations = doc.select("li.videoblock, li.pcVideoListItem").mapNotNull { it.toSearchResult() }
+            this.recommendations = doc.select("li.videoblock").mapNotNull { it.toSearchResult() }
         }
     }
 
