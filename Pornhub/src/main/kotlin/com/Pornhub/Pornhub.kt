@@ -18,7 +18,7 @@ class PornhubProvider : MainAPI() {
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
-        "platform" to "pc", // Penyelamat agar tidak dikasih versi Vue.js (layar blank)
+        "platform" to "pc", // Penyelamat agar layar tidak blank
         "cookieConsent" to "3"
     )
 
@@ -63,11 +63,9 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Amankan link berawalan viewkey
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
-        // Taktik tebar jaring untuk dapat judul
         val title = this.selectFirst(".title")?.text()?.takeIf { it.isNotBlank() }
             ?: linkElement.attr("title").takeIf { it.isNotBlank() }
             ?: linkElement.text().takeIf { it.isNotBlank() }
@@ -143,71 +141,49 @@ class PornhubProvider : MainAPI() {
         if (jsonString.isNotBlank()) {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
-                var m3u8Ditemukan = false
                 
-                // TAHAP 1: KODE PINTAR (Gunakan M3u8Helper)
-                val hlsMedia = mediaList.find { 
-                    val format = it["format"] as? String ?: ""
-                    val videoUrl = it["videoUrl"] as? String ?: ""
-                    format.contains("hls", true) || videoUrl.contains(".m3u8") 
-                }
-
-                if (hlsMedia != null) {
-                    val videoUrl = hlsMedia["videoUrl"] as? String ?: ""
-                    if (videoUrl.isNotBlank()) {
-                        val cleanUrl = videoUrl.replace("\\/", "/")
-                        try {
-                            // M3u8Helper akan otomatis menarik resolusi yang BENAR-BENAR TERSEDIA
-                            val m3u8Links = M3u8Helper.generateM3u8(
-                                source = this@PornhubProvider.name,
-                                streamUrl = cleanUrl,
-                                referer = "$mainUrl/",
-                                headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/")
-                            )
-                            if (m3u8Links.isNotEmpty()) {
-                                m3u8Links.forEach { callback(it) }
-                                m3u8Ditemukan = true
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
+                // KITA CEK SEMUA RESOLUSI YANG ADA DI JSON (Tidak pakai "find" lagi)
+                mediaList.forEach { media ->
+                    val videoUrl = media["videoUrl"] as? String ?: return@forEach
+                    if (videoUrl.isBlank()) return@forEach
+                    
+                    val format = media["format"] as? String ?: ""
+                    val rawQuality = media["quality"]
+                    val qualityStr = when (rawQuality) {
+                        is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
+                        else -> rawQuality?.toString() ?: "Unknown"
                     }
-                }
-                
-                // TAHAP 2: CADANGAN (Fallback ke MP4 jika M3U8 tidak ditemukan)
-                if (!m3u8Ditemukan) {
-                    mediaList.forEach { media ->
-                        val videoUrl = media["videoUrl"] as? String ?: return@forEach
-                        if (videoUrl.isBlank()) return@forEach
-                        
-                        val format = media["format"] as? String ?: ""
-                        if (format.contains("hls", true) || videoUrl.contains(".m3u8")) return@forEach
-                        
-                        val rawQuality = media["quality"]
-                        val qualityStr = when (rawQuality) {
-                            is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
-                            else -> rawQuality?.toString() ?: "Unknown"
-                        }
-                        
-                        if (qualityStr.isBlank() || qualityStr == "Unknown") return@forEach
-                        
-                        val cleanUrl = videoUrl.replace("\\/", "/")
-                        val qualInt = getQualityFromName(qualityStr)
+                    
+                    if (qualityStr.isBlank() || qualityStr == "Unknown") return@forEach
+                    
+                    val cleanUrl = videoUrl.replace("\\/", "/")
+                    val qualInt = getQualityFromName(qualityStr)
+                    val isM3u8 = format.contains("hls", true) || cleanUrl.contains(".m3u8")
 
-                        callback(
-                            newExtractorLink(
-                                source = this@PornhubProvider.name,
-                                name = "PH Player $qualityStr",
-                                url = cleanUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.headers = mapOf(
-                                    "Origin" to mainUrl,
-                                    "Referer" to "$mainUrl/"
-                                )
-                                this.quality = qualInt
-                            }
-                        )
+                    // VALIDASI LINK PINTAR: Mencegah Error 2004!
+                    try {
+                        // Kita ping servernya dulu. Jika benar-benar ada file-nya, akan isSuccessful
+                        val check = app.get(cleanUrl, headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/"))
+                        
+                        if (check.isSuccessful) {
+                            callback(
+                                newExtractorLink(
+                                    source = this@PornhubProvider.name,
+                                    name = "PH Player $qualityStr", // Trek yang sangat rapi
+                                    url = cleanUrl,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.headers = mapOf(
+                                        "Origin" to mainUrl,
+                                        "Referer" to "$mainUrl/"
+                                    )
+                                    this.quality = qualInt
+                                }
+                            )
+                        }
+                    } catch (e: Exception) {
+                        // Jika server memberikan 404 (file tidak ada), kita diam-diam membuang resolusi ini.
+                        // Hasilnya: Error 2004 terblokir total!
                     }
                 }
                 return true
