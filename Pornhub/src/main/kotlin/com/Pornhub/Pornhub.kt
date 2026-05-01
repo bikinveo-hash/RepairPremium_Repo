@@ -13,11 +13,12 @@ class PornhubProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    // Cookies dasar, tidak perlu disalin semua dari Inspect Element
+    // Cookies wajib untuk bypass deteksi bot dan memaksa HTML versi PC
     private val phCookies = mapOf(
         "bs" to "1",
         "accessAgeDisclaimerPH" to "2",
         "age_verified" to "1",
+        "platform" to "pc", // Penyelamat agar tidak dikasih versi Vue.js (layar blank)
         "cookieConsent" to "3"
     )
 
@@ -51,8 +52,8 @@ class PornhubProvider : MainAPI() {
         
         val doc = app.get(url, cookies = phCookies, headers = mapOf("User-Agent" to USER_AGENT)).document
         
-        // PUKUL RATA: Ambil semua daftar di dalam wadah pencarian, entah server ngasih versi PC atau Mobile
-        val selector = "#videoSearchResult li, #videoListSearchResults li, ul.search-video-results li"
+        // PUKUL RATA: Tangkap semua video yang ada di container pencarian
+        val selector = "#videoSearchResult li.pcVideoListItem, #videoSearchResult li.videoblock, ul.search-video-results li"
         
         val results = doc.select(selector).mapNotNull {
             it.toSearchResult()
@@ -62,11 +63,11 @@ class PornhubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // CARA PALING AMAN: Cari elemen apa pun yang menuju link video ("viewkey=")
+        // Amankan link berawalan viewkey
         val linkElement = this.selectFirst("a[href*=\"viewkey=\"]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
-        // Coba cari judul dari class .title, ATAU dari atribut title, ATAU dari teks mentahnya
+        // Taktik tebar jaring untuk dapat judul
         val title = this.selectFirst(".title")?.text()?.takeIf { it.isNotBlank() }
             ?: linkElement.attr("title").takeIf { it.isNotBlank() }
             ?: linkElement.text().takeIf { it.isNotBlank() }
@@ -142,38 +143,72 @@ class PornhubProvider : MainAPI() {
         if (jsonString.isNotBlank()) {
             try {
                 val mediaList = parseJson<List<Map<String, Any>>>(jsonString)
+                var m3u8Ditemukan = false
                 
-                mediaList.forEach { media ->
-                    val videoUrl = media["videoUrl"] as? String ?: return@forEach
-                    if (videoUrl.isBlank()) return@forEach
-                    
-                    val format = media["format"] as? String ?: ""
-                    
-                    val rawQuality = media["quality"]
-                    val qualityStr = when (rawQuality) {
-                        is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
-                        else -> rawQuality?.toString() ?: "Unknown"
-                    }
-                    
-                    val cleanUrl = videoUrl.replace("\\/", "/")
+                // TAHAP 1: KODE PINTAR (Gunakan M3u8Helper)
+                val hlsMedia = mediaList.find { 
+                    val format = it["format"] as? String ?: ""
+                    val videoUrl = it["videoUrl"] as? String ?: ""
+                    format.contains("hls", true) || videoUrl.contains(".m3u8") 
+                }
 
-                    val qualInt = getQualityFromName(qualityStr)
-                    val linkType = if (format.contains("hls", true) || cleanUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-
-                    callback(
-                        newExtractorLink(
-                            source = this@PornhubProvider.name,
-                            name = "PH Player $qualityStr",
-                            url = cleanUrl,
-                            type = linkType
-                        ) {
-                            this.headers = mapOf(
-                                "Origin" to mainUrl,
-                                "Referer" to "$mainUrl/"
+                if (hlsMedia != null) {
+                    val videoUrl = hlsMedia["videoUrl"] as? String ?: ""
+                    if (videoUrl.isNotBlank()) {
+                        val cleanUrl = videoUrl.replace("\\/", "/")
+                        try {
+                            // M3u8Helper akan otomatis menarik resolusi yang BENAR-BENAR TERSEDIA
+                            val m3u8Links = M3u8Helper.generateM3u8(
+                                source = this@PornhubProvider.name,
+                                streamUrl = cleanUrl,
+                                referer = "$mainUrl/",
+                                headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/")
                             )
-                            this.quality = qualInt
+                            if (m3u8Links.isNotEmpty()) {
+                                m3u8Links.forEach { callback(it) }
+                                m3u8Ditemukan = true
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    )
+                    }
+                }
+                
+                // TAHAP 2: CADANGAN (Fallback ke MP4 jika M3U8 tidak ditemukan)
+                if (!m3u8Ditemukan) {
+                    mediaList.forEach { media ->
+                        val videoUrl = media["videoUrl"] as? String ?: return@forEach
+                        if (videoUrl.isBlank()) return@forEach
+                        
+                        val format = media["format"] as? String ?: ""
+                        if (format.contains("hls", true) || videoUrl.contains(".m3u8")) return@forEach
+                        
+                        val rawQuality = media["quality"]
+                        val qualityStr = when (rawQuality) {
+                            is List<*> -> rawQuality.firstOrNull()?.toString() ?: "Unknown"
+                            else -> rawQuality?.toString() ?: "Unknown"
+                        }
+                        
+                        if (qualityStr.isBlank() || qualityStr == "Unknown") return@forEach
+                        
+                        val cleanUrl = videoUrl.replace("\\/", "/")
+                        val qualInt = getQualityFromName(qualityStr)
+
+                        callback(
+                            newExtractorLink(
+                                source = this@PornhubProvider.name,
+                                name = "PH Player $qualityStr",
+                                url = cleanUrl,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.headers = mapOf(
+                                    "Origin" to mainUrl,
+                                    "Referer" to "$mainUrl/"
+                                )
+                                this.quality = qualInt
+                            }
+                        )
+                    }
                 }
                 return true
             } catch (e: Exception) {
