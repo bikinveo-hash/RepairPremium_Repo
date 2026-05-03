@@ -45,7 +45,7 @@ class Majorplay : ExtractorApi() {
                 }
             }
 
-            // Mengambil link video m3u8
+            // Mengambil link video m3u8 atau JSON dari API Majorplay
             val videoUrl = response?.url ?: return
             
             val streamHeaders = mapOf(
@@ -56,7 +56,10 @@ class Majorplay : ExtractorApi() {
             )
 
             // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
-            if (videoUrl.contains(".m3u8")) {
+            // FIX: Menangani URL dari Guravia yang menyamar sebagai .json
+            val isM3u8 = videoUrl.contains(".m3u8") || videoUrl.contains(".json") || videoUrl.contains("guravia")
+
+            if (isM3u8) {
                 M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = videoUrl,
