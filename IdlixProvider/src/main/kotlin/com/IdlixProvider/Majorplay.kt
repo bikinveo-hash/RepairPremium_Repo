@@ -48,26 +48,30 @@ class Majorplay : ExtractorApi() {
             // Mengambil link video m3u8 atau JSON dari API Majorplay
             val videoUrl = response?.url ?: return
             
+            // FIX: Hanya menggunakan Referer dan User-Agent agar CDN tidak curiga (hindari error 2004)
             val streamHeaders = mapOf(
-                "Origin" to "https://z1.idlixku.com",
                 "Referer" to "https://z1.idlixku.com/",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-                "Accept" to "*/*"
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
-            // FIX: Menangani URL dari Guravia yang menyamar sebagai .json
+            // Deteksi URL dari Guravia yang menyamar sebagai .json
             val isM3u8 = videoUrl.contains(".m3u8") || videoUrl.contains(".json") || videoUrl.contains("guravia")
 
             if (isM3u8) {
-                M3u8Helper.generateM3u8(
-                    source = name,
-                    streamUrl = videoUrl,
-                    referer = "https://z1.idlixku.com/",
-                    headers = streamHeaders
-                ).forEach { parsedLink ->
-                    callback.invoke(parsedLink)
-                }
+                // FIX: Langsung lempar ke ExoPlayer sebagai M3U8 tanpa melalui M3u8Helper
+                // Ini mencegah hilangnya token akses (?t=...) pada URL
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "https://z1.idlixku.com/"
+                        this.quality = Qualities.Unknown.value
+                        this.headers = streamHeaders
+                    }
+                )
             } else {
                 callback.invoke(
                     newExtractorLink(
