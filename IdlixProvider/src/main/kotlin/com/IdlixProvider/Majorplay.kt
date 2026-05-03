@@ -22,14 +22,15 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Gunakan User-Agent lengkap
+            // 1. Ambil referer asli dari parameter Cloudstream (bukan hardcode root domain)
+            val actualReferer = referer ?: "https://z1.idlixku.com/"
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
-                    "Referer" to "https://z1.idlixku.com/",
+                    "Referer" to actualReferer,
                     "Accept" to "*/*",
                     "User-Agent" to userAgent
                 ),
@@ -38,9 +39,9 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
+            // 2. KUNCI ANTI-403: HAPUS HEADER "Origin" DAN GUNAKAN ACTUAL REFERER!
             val streamHeaders = mapOf(
-                "Origin" to "https://z1.idlixku.com",
-                "Referer" to "https://z1.idlixku.com/",
+                "Referer" to actualReferer,
                 "User-Agent" to userAgent,
                 "Accept" to "*/*"
             )
@@ -53,18 +54,18 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // KUNCI PERBAIKAN: Gunakan M3u8Helper lagi, tapi tambahkan pengecekan .json
-            // M3u8Helper akan mencegah Error 403 karena ia menggunakan HTTP client bawaan aplikasi
+            // 3. Menggunakan M3u8Helper untuk parsing file .json secara internal
             if (videoUrl.contains(".m3u8") || videoUrl.contains(".json")) {
                 M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = videoUrl,
-                    referer = "https://z1.idlixku.com/",
+                    referer = actualReferer,
                     headers = streamHeaders
                 ).forEach { parsedLink ->
                     callback.invoke(parsedLink)
                 }
             } else {
+                // Sesuai dengan format Cloudstream versi terbaru
                 callback.invoke(
                     newExtractorLink(
                         source = name,
@@ -72,7 +73,7 @@ class Majorplay : ExtractorApi() {
                         url = videoUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = "https://z1.idlixku.com/"
+                        this.referer = actualReferer
                         this.quality = Qualities.Unknown.value
                         this.headers = streamHeaders
                     }
