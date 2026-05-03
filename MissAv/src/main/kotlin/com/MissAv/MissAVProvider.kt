@@ -9,16 +9,19 @@ class MissAvProvider : MainAPI() {
     override var mainUrl = "https://missav.ws"
     override val hasMainPage = true
     override var lang = "id"
+    
+    // PENTING: Jika di CloudStream kamu belum mengaktifkan "Show NSFW content" di Pengaturan,
+    // halaman akan tetap kosong. Jika mau test tanpa ubah pengaturan, ganti TvType.NSFW jadi TvType.Movie
     override val supportedTypes = setOf(TvType.NSFW)
     
-    // Senjata rahasia untuk menembus proteksi Cloudflare "Just a moment..."
+    // Senjata rahasia untuk menyuruh CloudStream memanggil WebView jika terkena Cloudflare
     override val usesWebView = true 
 
     // ==========================================
     // 1. HALAMAN DEPAN (Home Page)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Kita akses langsung rute bahasa Indonesia (/id)
+        // Tembak URL dengan /id agar judul otomatis bahasa Indonesia
         val document = app.get("$mainUrl/id").document
 
         val videos = document.select("div.thumbnail").mapNotNull { element ->
@@ -29,7 +32,7 @@ class MissAvProvider : MainAPI() {
             
             val posterUrl = element.selectFirst("img")?.let { img ->
                 val dataSrc = img.attr("data-src")
-                dataSrc.ifEmpty { img.attr("src") }
+                if (dataSrc.isNullOrEmpty()) img.attr("src") else dataSrc
             }
 
             newMovieSearchResponse(title, url, TvType.NSFW) {
@@ -51,12 +54,12 @@ class MissAvProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // Mengambil data super akurat dari OpenGraph Meta Tags
+        // Mengambil data menggunakan OpenGraph meta tags agar sangat akurat
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: return null
         val posterUrl = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
 
-        // Mengambil Tag, Genre, dan Pemeran
+        // Cari Tag/Genre dan Pemeran
         val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text() }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -76,21 +79,18 @@ class MissAvProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        
-        // Cari script yang di-pack (biasanya diawali eval(function(p,a,c,k,e,d))
-        val scriptElements = document.select("script")
         var m3u8Url: String? = null
 
+        // 1. Cari script yang disembunyikan (Packed JS)
+        val scriptElements = document.select("script")
         for (script in scriptElements) {
             val scriptText = script.data()
             if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
-                // Bongkar enkripsi scriptnya menggunakan fungsi bawaan CloudStream
+                // Bongkar enkripsi scriptnya menggunakan ExtractorApi bawaan CloudStream
                 val unpacked = getAndUnpack(scriptText)
                 
-                // Cari URL yang berakhiran .m3u8 pakai Regex
-                val regex = Regex("""https?://[^"']+\.m3u8[^"']*""")
-                val match = regex.find(unpacked)
-                
+                // Cari URL playlist.m3u8 pakai Regex
+                val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
                 if (match != null) {
                     m3u8Url = match.value
                     break
@@ -98,22 +98,24 @@ class MissAvProvider : MainAPI() {
             }
         }
         
-        // Jika videonya tidak di-pack, kita cari langsung di seluruh HTML sebagai cadangan
+        // 2. Jika tidak di-pack, kita cari langsung di seluruh body HTML
         if (m3u8Url == null) {
             val html = document.html()
-            val regex = Regex("""https?://[^"']+\.m3u8[^"']*""")
-            m3u8Url = regex.find(html)?.value
+            val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
+            if (match != null) {
+                m3u8Url = match.value
+            }
         }
 
-        // Kalau ketemu, kita kirim linknya ke player CloudStream
+        // 3. Kirim ke video player CloudStream jika link m3u8 ditemukan
         if (m3u8Url != null) {
             callback.invoke(
                 ExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
-                    referer = data, // Sangat penting agar tidak diblokir surrit.com
-                    quality = Qualities.Unknown.value, // Exoplayer akan mengurus resolusinya
+                    referer = data, // Wajib ada agar tidak Access Denied oleh server video
+                    quality = Qualities.Unknown.value, // Resolusi 360p/480p/720p akan diatur otomatis oleh ExoPlayer
                     type = ExtractorLinkType.M3U8 
                 )
             )
