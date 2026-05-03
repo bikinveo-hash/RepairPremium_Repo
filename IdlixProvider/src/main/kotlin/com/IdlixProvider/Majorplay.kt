@@ -35,7 +35,7 @@ class Majorplay : ExtractorApi() {
                 json = mapOf("claim" to claimToken)
             ).parsedSafe<NewMajorplayResponse>()
             
-            // Mengekstrak daftar subtitle menggunakan 'for' loop standar dan 'newSubtitleFile'
+            // Mengekstrak daftar subtitle
             val subs = response?.subtitles
             if (subs != null) {
                 for (sub in subs) {
@@ -48,18 +48,19 @@ class Majorplay : ExtractorApi() {
             // Mengambil link video m3u8 atau JSON dari API Majorplay
             val videoUrl = response?.url ?: return
             
-            // FIX: Hanya menggunakan Referer dan User-Agent agar CDN tidak curiga (hindari error 2004)
+            // FIX: Kembalikan Origin dan Accept agar lolos dari blokir 403 (CORS) Pintarverse/Guravia
             val streamHeaders = mapOf(
+                "Origin" to "https://z1.idlixku.com",
                 "Referer" to "https://z1.idlixku.com/",
+                "Accept" to "*/*",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Deteksi URL dari Guravia yang menyamar sebagai .json
-            val isM3u8 = videoUrl.contains(".m3u8") || videoUrl.contains(".json") || videoUrl.contains("guravia")
+            // Deteksi URL dari CDN yang menyamar sebagai .json (guravia / pintarverse)
+            val isM3u8 = videoUrl.contains(".m3u8") || videoUrl.contains(".json") || videoUrl.contains("guravia") || videoUrl.contains("pintarverse")
 
             if (isM3u8) {
-                // FIX: Langsung lempar ke ExoPlayer sebagai M3U8 tanpa melalui M3u8Helper
-                // Ini mencegah hilangnya token akses (?t=...) pada URL
+                // Lempar ke ExoPlayer sebagai M3U8 murni dengan header lengkap
                 callback.invoke(
                     newExtractorLink(
                         source = name,
