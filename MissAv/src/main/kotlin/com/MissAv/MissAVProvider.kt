@@ -15,7 +15,7 @@ class MissAvProvider : MainAPI() {
     override val usesWebView = true 
 
     // ==========================================
-    // 1. HALAMAN DEPAN (Home Page) - REVISI
+    // 1. HALAMAN DEPAN (Home Page)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = ArrayList<HomePageList>()
@@ -37,7 +37,7 @@ class MissAvProvider : MainAPI() {
                     val title = titleElement.text().trim()
                     val videoUrl = titleElement.attr("href")
                     
-                    // Lewati template kosong bawaan Alpine.js
+                    // Lewati template kosong bawaan web
                     if (title.isEmpty() || videoUrl.contains("javascript:") || videoUrl == "#") {
                         return@mapNotNull null
                     }
@@ -62,7 +62,11 @@ class MissAvProvider : MainAPI() {
         // Alarm jika semua kategori gagal dimuat
         if (items.isEmpty()) throw Error("Gagal memuat data. Periksa koneksi atau verifikasi Cloudflare.")
 
-        return HomePageResponse(items)
+        // KODE YANG DIPERBAIKI: Menggunakan newHomePageResponse
+        return newHomePageResponse(
+            list = items,
+            hasNext = false
+        )
     }
 
     // ==========================================
