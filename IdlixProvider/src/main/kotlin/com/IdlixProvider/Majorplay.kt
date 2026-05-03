@@ -25,6 +25,7 @@ class Majorplay : ExtractorApi() {
             val actualReferer = referer ?: "https://z1.idlixku.com/"
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
+            // 1. API Token: Menggunakan referer dari web Idlix karena API dipanggil oleh web induk
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
@@ -38,17 +39,13 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
-            // ==========================================
-            // HEADER SAKTI ANTI-403 (ANTI-BOT BYPASS)
-            // ==========================================
+            // 2. KUNCI JAWABAN: Header Video HARUS menggunakan identitas Iframe Majorplay!
+            // Jika pakai idlixku, Cloudflare CDN Guravia akan memblokir segmen video (Error 403).
             val streamHeaders = mapOf(
-                "Origin" to "https://z1.idlixku.com",
-                "Referer" to actualReferer,
+                "Origin" to "https://e2e.majorplay.net",
+                "Referer" to "https://e2e.majorplay.net/",
                 "User-Agent" to userAgent,
-                "Accept" to "*/*",
-                "Sec-Fetch-Dest" to "empty",
-                "Sec-Fetch-Mode" to "cors",
-                "Sec-Fetch-Site" to "cross-site"
+                "Accept" to "*/*"
             )
 
             response.subtitles?.forEach { sub ->
@@ -59,19 +56,16 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            val isM3u8Stream = videoUrl.contains(".m3u8") || videoUrl.contains(".json")
-            
-            // WAJIB pakai tipe M3U8 agar ExoPlayer tahu cara menyambung videonya sampai tamat
-            val linkType = if (isM3u8Stream) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-
+            // 3. Menggunakan ExtractorLinkType.M3U8 sesuai petunjuk 'newExtractorLink'
+            // Abaikan warning 'M3u8 must contains TS files' di logcat, itu hanya background task thumbnail!
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = linkType
+                    type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = actualReferer
+                    this.referer = "https://e2e.majorplay.net/" // <- WAJIB MAJORPLAY
                     this.quality = Qualities.Unknown.value
                     this.headers = streamHeaders
                 }
