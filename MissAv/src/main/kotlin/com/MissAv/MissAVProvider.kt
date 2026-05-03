@@ -9,7 +9,7 @@ class MissAvProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     
-    // Pastikan "Show NSFW content" di Pengaturan CloudStream aktif ya bro!
+    // Pastikan "Show NSFW content" di Pengaturan CloudStream kamu selalu aktif ya bro!
     override val supportedTypes = setOf(TvType.NSFW)
     
     // Senjata rahasia untuk memanggil WebView saat kena Cloudflare
@@ -30,7 +30,7 @@ class MissAvProvider : MainAPI() {
     // 1. HALAMAN DEPAN (Home Page)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Cukup 1 kali request ke halaman utama
+        // Cukup 1 kali request ke halaman utama, sangat efisien!
         val document = app.get("$mainUrl/id", headers = headers).document
         
         val items = ArrayList<HomePageList>()
