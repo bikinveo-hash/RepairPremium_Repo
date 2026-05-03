@@ -13,27 +13,23 @@ class MissAvProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
     override var sequentialMainPage = true
-    override val usesWebView = true
-
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
-    )
 
     // ==========================================
     // FUNGSI PINTAR UNTUK MENGATASI HALAMAN TRANSIT
     // ==========================================
     private suspend fun getDocument(url: String): Document {
-        var doc = app.get(url, headers = headers).document
+        // Biarkan Cloudstream menggunakan User-Agent bawaannya
+        var response = app.get(url)
+        var doc = response.document
         
-        // Cek apakah web memberi kita halaman "Redirecting to..."
+        // Cek apakah web melempar kita ke halaman "Redirecting to..."
         val isRedirect = doc.selectFirst("meta[http-equiv=refresh]") != null
         if (isRedirect) {
-            // Jika iya, ambil URL tujuan barunya dan muat ulang!
             val newUrl = doc.selectFirst("a")?.attr("href")
             if (newUrl != null) {
-                doc = app.get(newUrl, headers = headers).document
+                // Kejar URL tujuan barunya!
+                response = app.get(newUrl)
+                doc = response.document
             }
         }
         return doc
@@ -48,29 +44,59 @@ class MissAvProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) {
-            "$mainUrl/id/${request.data}"
-        } else {
-            "$mainUrl/id/${request.data}?page=$page"
-        }
-        
-        // Memakai fungsi pintar yang baru kita buat
-        val document = getDocument(url)
-        
-        val home = document.select("div.thumbnail").mapNotNull { 
-            toSearchResult(it) 
-        }
+        return try {
+            val url = if (page == 1) {
+                "$mainUrl/id/${request.data}"
+            } else {
+                "$mainUrl/id/${request.data}?page=$page"
+            }
+            
+            val document = getDocument(url)
+            
+            val home = document.select("div.thumbnail").mapNotNull { 
+                toSearchResult(it) 
+            }.toMutableList()
 
-        return newHomePageResponse(request.name, home)
+            // ==========================================
+            // SISTEM DEBUG: Jika kosong, tampilkan alasannya!
+            // ==========================================
+            if (home.isEmpty()) {
+                home.add(newMovieSearchResponse(
+                    name = "KOSONG: Judul Webnya adalah '${document.title()}'", 
+                    url = url, 
+                    type = TvType.NSFW
+                ) {
+                    this.posterUrl = "https://via.placeholder.com/300x400.png?text=Kosong"
+                })
+            }
+
+            newHomePageResponse(request.name, home)
+            
+        } catch (e: Exception) {
+            // Jika terjadi Error (seperti HTTP 403/503 Cloudflare dsb)
+            val errorList = listOf(
+                newMovieSearchResponse(
+                    name = "ERROR: ${e.message}", 
+                    url = mainUrl, 
+                    type = TvType.NSFW
+                ) {
+                    this.posterUrl = "https://via.placeholder.com/300x400.png?text=Error"
+                }
+            )
+            newHomePageResponse(request.name, errorList)
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/id/search/$query"
-        // Memakai fungsi pintar
-        val document = getDocument(url)
+        return try {
+            val url = "$mainUrl/id/search/$query"
+            val document = getDocument(url)
 
-        return document.select("div.thumbnail").mapNotNull { 
-            toSearchResult(it) 
+            document.select("div.thumbnail").mapNotNull { 
+                toSearchResult(it) 
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
@@ -78,7 +104,7 @@ class MissAvProvider : MainAPI() {
         val href = element.selectFirst("a")?.attr("href") ?: return null
         val title = element.selectFirst("a.text-secondary")?.text() 
             ?: element.selectFirst("img")?.attr("alt") 
-            ?: return null
+            ?: "Tanpa Judul"
             
         val img = element.selectFirst("img")
         val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
@@ -89,7 +115,6 @@ class MissAvProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Memakai fungsi pintar
         val document = getDocument(url)
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: "Tanpa Judul"
@@ -115,7 +140,6 @@ class MissAvProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Memakai fungsi pintar lalu mengambil teks HTML-nya
         val html = getDocument(data).outerHtml()
 
         val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[\\/]+seek""")
