@@ -4,6 +4,8 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.math.BigInteger
 
@@ -18,6 +20,12 @@ class Eporner : MainAPI() {
     override val supportedTypes       = setOf(TvType.NSFW)
     override val vpnStatus            = VPNStatus.MightBeNeeded
 
+    companion object {
+        // KUNCI RAHASIA: Mutex untuk memaksa request berjalan satu-satu (Sistem Antrian)
+        // Ini mencegah server Eporner memblokir kita karena terlalu banyak request serentak.
+        private val mutex = Mutex()
+    }
+
     override val mainPage = mainPageOf(
         "" to "Recent Videos",
         "best-videos" to "Best Videos",
@@ -27,41 +35,35 @@ class Eporner : MainAPI() {
         "cat/japanese" to "Japanese",
         "cat/hd-1080p" to "1080 Porn",
         "cat/4k-porn" to "4K Porn",
-        "country-top/id" to "Indonesia", 
-        "recommendations" to "Recommendation Videos"
+        "country-top/id" to "Indonesia"
+        // "recommendations" DIHAPUS karena Eporner tidak punya halaman ini (Bikin Error 404 dan merusak kategori lain!)
     )
 
     // ==========================================
-    // 1. HALAMAN DEPAN (Home Page) dengan Auto-Retry
+    // 1. HALAMAN DEPAN (Home Page)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Perbaikan URL: Mencegah double slash "//" jika request.data kosong
+        // Perbaikan URL agar tidak ada double slash "//" dan rapi untuk page 1 vs page 2+
         val url = if (request.data.isEmpty()) {
-            "$mainUrl/$page/"
+            if (page == 1) "$mainUrl/" else "$mainUrl/$page/"
         } else {
-            "$mainUrl/${request.data}/$page/"
+            if (page == 1) "$mainUrl/${request.data}/" else "$mainUrl/${request.data}/$page/"
         }
 
         var home: List<SearchResponse> = emptyList()
 
-        // SISTEM RETRY: Coba request hingga 3 kali jika terjadi Time Out / Diblokir
-        for (i in 1..3) {
-            try {
-                // Beri sedikit jeda acak agar 10 request tidak menabrak server di milidetik yang sama
-                delay((50L..250L).random()) 
-                
-                val document = app.get(url, timeout = 15L).document
-                home = document.select("#div-search-results div.mb").mapNotNull { it.toSearchResult() }
-                
-                if (home.isNotEmpty()) break // Jika berhasil dapat data, keluar dari loop
-            } catch (e: Exception) {
-                if (i == 3) {
-                    // Jika percobaan ke-3 masih gagal, lewati saja kategori ini (biar gak bikin aplikasi hang)
-                    return newHomePageResponse(emptyList(), hasNext = false)
+        // Menggunakan Mutex agar request CloudStream tidak menabrak limit server Eporner
+        mutex.withLock {
+            for (i in 1..2) { // Auto-retry: Coba 2 kali jika VPN sedang lelet
+                try {
+                    val document = app.get(url, timeout = 15L).document
+                    home = document.select("#div-search-results div.mb").mapNotNull { it.toSearchResult() }
+                    if (home.isNotEmpty()) break // Jika berhasil dapat data, keluar dari loop
+                } catch (e: Exception) {
+                    delay(1000L) // Tunggu 1 detik sebelum mencoba lagi
                 }
-                // Jeda 1 detik sebelum mencoba lagi
-                delay(1000L)
             }
+            delay(250L) // Jeda nafas untuk server sebelum membiarkan request kategori berikutnya jalan
         }
 
         return newHomePageResponse(
@@ -72,7 +74,7 @@ class Eporner : MainAPI() {
                     isHorizontalImages = true
                 )
             ),
-            hasNext = home.isNotEmpty() // Akan otomatis stop scroll jika data habis
+            hasNext = home.isNotEmpty()
         )
     }
 
@@ -83,7 +85,6 @@ class Eporner : MainAPI() {
         val title = fixTitle(this.select("div.mbunder p.mbtit a").text().ifEmpty { "No Title" }).trim()
         val href = fixUrl(this.select("div.mbcontent a").attr("href"))
         
-        // Logika poster diperingkas agar lebih rapi
         val posterUrl = this.selectFirst("img")?.let { 
             it.attr("data-src").ifBlank { it.attr("src") } 
         }
@@ -98,7 +99,7 @@ class Eporner : MainAPI() {
     // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val subquery = query.replace(" ","-")
-        val document = app.get("${mainUrl}/search/$subquery/$page/").document
+        val document = app.get("$mainUrl/search/$subquery/$page/").document
         val results = document.select("div.mb").mapNotNull { it.toSearchResult() }
         val hasNext = results.isNotEmpty()
         return newSearchResponseList(results, hasNext)
@@ -114,7 +115,6 @@ class Eporner : MainAPI() {
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content"))
         val description = document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
         
-        // Mengambil saran film
         val recommendationsList = document.select("div#relateddiv div.mb").mapNotNull {
             it.toSearchResult()
         }
@@ -130,6 +130,7 @@ class Eporner : MainAPI() {
     // 4. PEMUTAR VIDEO (Load Links)
     // ==========================================
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+        // FIX: Menggunakan .text bukan .toString() karena toString() tidak merender isi body di CloudStream versi terbaru
         val doc = app.get(data).text
         val vid = Regex("EP\\.video\\.player\\.vid = '([^']+)'").find(doc)?.groupValues?.get(1).toString()
         val hash = Regex("EP\\.video\\.player\\.hash = '([^']+)'").find(doc)?.groupValues?.get(1).toString()
@@ -147,12 +148,13 @@ class Eporner : MainAPI() {
             val src = sourceObject.getString("src")
             val labelShort = sourceObject.getString("labelShort") ?: ""
             
+            // Menggunakan fungsi newExtractorLink yg aman dari Deprecated
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = src,
-                    type = ExtractorLinkType.VIDEO // Ganti INFER_TYPE dengan VIDEO agar player langsung baca MP4
+                    type = ExtractorLinkType.VIDEO
                 ) {
                     this.referer = "https://www.eporner.com/"
                     this.quality = getIndexQuality(labelShort)
