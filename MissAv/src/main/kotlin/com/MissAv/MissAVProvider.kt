@@ -3,6 +3,7 @@ package com.MissAv
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 
 class MissAvProvider : MainAPI() {
     override var name = "MissAv"
@@ -12,9 +13,6 @@ class MissAvProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
     override var sequentialMainPage = true
-    
-    // KUNCI SAKTI: Memaksa Cloudstream menggunakan Browser Asli (WebView)
-    // untuk melewati blokir Cloudflare / Anti-Bot
     override val usesWebView = true
 
     private val headers = mapOf(
@@ -22,6 +20,24 @@ class MissAvProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
     )
+
+    // ==========================================
+    // FUNGSI PINTAR UNTUK MENGATASI HALAMAN TRANSIT
+    // ==========================================
+    private suspend fun getDocument(url: String): Document {
+        var doc = app.get(url, headers = headers).document
+        
+        // Cek apakah web memberi kita halaman "Redirecting to..."
+        val isRedirect = doc.selectFirst("meta[http-equiv=refresh]") != null
+        if (isRedirect) {
+            // Jika iya, ambil URL tujuan barunya dan muat ulang!
+            val newUrl = doc.selectFirst("a")?.attr("href")
+            if (newUrl != null) {
+                doc = app.get(newUrl, headers = headers).document
+            }
+        }
+        return doc
+    }
 
     override val mainPage = mainPageOf(
         "new" to "Recent Update",
@@ -38,7 +54,8 @@ class MissAvProvider : MainAPI() {
             "$mainUrl/id/${request.data}?page=$page"
         }
         
-        val document = app.get(url, headers = headers).document
+        // Memakai fungsi pintar yang baru kita buat
+        val document = getDocument(url)
         
         val home = document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
@@ -49,7 +66,8 @@ class MissAvProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/id/search/$query"
-        val document = app.get(url, headers = headers).document
+        // Memakai fungsi pintar
+        val document = getDocument(url)
 
         return document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
@@ -71,7 +89,8 @@ class MissAvProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = headers).document
+        // Memakai fungsi pintar
+        val document = getDocument(url)
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: "Tanpa Judul"
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
@@ -96,7 +115,8 @@ class MissAvProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val html = app.get(data, headers = headers).text
+        // Memakai fungsi pintar lalu mengambil teks HTML-nya
+        val html = getDocument(data).outerHtml()
 
         val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[\\/]+seek""")
         val match = uuidRegex.find(html)
