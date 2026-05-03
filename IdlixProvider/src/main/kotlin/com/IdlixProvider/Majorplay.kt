@@ -23,23 +23,19 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Samakan User-Agent secara global untuk Token dan ExoPlayer
-            val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
-            // FIX 1: Mengirim request POST dengan raw TEXT (meniru jebakan browser asli)
+            // Mengirim request POST dengan parameter 'json'
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
                     "Referer" to "https://z1.idlixku.com/",
                     "Accept" to "*/*",
-                    "Content-Type" to "text/plain", // KUNCI UTAMA ANTI-BOT
-                    "User-Agent" to userAgent
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                 ),
-                text = "{\"claim\":\"$claimToken\"}" // Kirim sebagai string mentah, BUKAN json map
+                json = mapOf("claim" to claimToken)
             ).parsedSafe<NewMajorplayResponse>()
             
-            // Mengekstrak daftar subtitle
+            // Mengekstrak daftar subtitle menggunakan 'for' loop standar dan 'newSubtitleFile'
             val subs = response?.subtitles
             if (subs != null) {
                 for (sub in subs) {
@@ -55,28 +51,37 @@ class Majorplay : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to "https://z1.idlixku.com",
                 "Referer" to "https://z1.idlixku.com/",
-                "User-Agent" to userAgent
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+                "Accept" to "*/*"
             )
 
-            // FIX 2: Tambahkan ekstensi .m3u8 palsu agar parser Cloudstream tidak kebingungan dengan .json
-            val fixedUrl = if (videoUrl.contains("?")) "$videoUrl&type=.m3u8" else "$videoUrl?.m3u8"
-
-            // Langsung lempar ke ExoPlayer sebagai M3U8 utuh
-            callback.invoke(
-                newExtractorLink(
+            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
+            // UPDATE: Pengecekan .json agar playlist m3u8 dari Guravia terekstrak dengan resolusi lengkap
+            if (videoUrl.contains(".m3u8") || videoUrl.contains(".json")) {
+                M3u8Helper.generateM3u8(
                     source = name,
-                    name = name,
-                    url = fixedUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "https://z1.idlixku.com/"
-                    this.quality = Qualities.Unknown.value
-                    this.headers = streamHeaders
+                    streamUrl = videoUrl,
+                    referer = "https://z1.idlixku.com/",
+                    headers = streamHeaders
+                ).forEach { parsedLink ->
+                    callback.invoke(parsedLink)
                 }
-            )
-            
+            } else {
+                 callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = videoUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://z1.idlixku.com/"
+                        this.quality = Qualities.Unknown.value
+                        this.headers = streamHeaders
+                    }
+                )
+            }
         } catch (e: Exception) { 
-            Log.e("adixtream", "Majorplay Error: ${e.message}") 
+             Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
     }
 
