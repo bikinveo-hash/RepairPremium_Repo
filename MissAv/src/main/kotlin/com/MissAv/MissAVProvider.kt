@@ -38,7 +38,6 @@ class MissAvProvider : MainAPI() {
             }
 
             val img = element.selectFirst("img")
-            // KITA TETAP PAKAI cover-t.jpg KARENA INI GAMBAR LANDSCAPE (HORIZONTAL) ASLI YANG TAJAM
             val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
 
             newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
@@ -48,12 +47,34 @@ class MissAvProvider : MainAPI() {
     }
 
     // ==========================================
-    // 1. HALAMAN DEPAN (Home Page)
+    // 1. HALAMAN DEPAN & KATEGORI SCROLL
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = ArrayList<HomePageList>()
 
-        // 1. Ambil kategori bawaan beranda
+        // --- LOGIKA HALAMAN KATEGORI (Jika user mengeklik tombol Panah Kanan / "Lagi") ---
+        // request.name akan terisi nama kategori jika user mengeklik tombol tersebut
+        if (request.name.isNotBlank() && request.data.isNotBlank()) {
+            // URL otomatis ditambahkan ?page=2, ?page=3, dst untuk infinite scroll
+            val pageUrl = if (page == 1) request.data else "${request.data}?page=$page"
+            
+            try {
+                val document = app.get(pageUrl, headers = headers).document
+                val videos = parseVideos(document)
+                
+                if (videos.isNotEmpty()) {
+                    items.add(HomePageList(request.name, videos, isHorizontalImages = true))
+                }
+                
+                // Kalau videonya masih ada 10 atau lebih, berarti masih ada halaman selanjutnya!
+                val hasNext = videos.size >= 10
+                return newHomePageResponse(items, hasNext = hasNext)
+            } catch (e: Exception) {
+                return newHomePageResponse(items, hasNext = false)
+            }
+        }
+
+        // --- LOGIKA BERANDA UTAMA (page == 1) ---
         try {
             val document = app.get("$mainUrl/id", headers = headers).document
             document.select("div.sm\\:container:has(h2)").forEach { section ->
@@ -63,23 +84,27 @@ class MissAvProvider : MainAPI() {
                     return@forEach
                 }
 
+                // Trik: Mengambil URL asli dari tombol "Lagi" di webnya
+                val moreUrl = section.selectFirst("div.flex > a[href]")?.attr("href")
+
                 val videos = parseVideos(section)
                 if (videos.isNotEmpty()) {
-                    // MEMAKSA TAMPILAN HORIZONTAL DI CLOUDSTREAM
-                    items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true))
+                    // Tambahkan parameter 'url = moreUrl' agar tombol panah kanan menyala!
+                    items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true, url = moreUrl))
                 }
             }
         } catch (e: Exception) {
             // Abaikan jika error
         }
 
-        // 2. TAMBAHAN KATEGORI KHUSUS: Kebocoran Tanpa Sensor
+        // KATEGORI KHUSUS: Kebocoran Tanpa Sensor
         try {
-            val uncensoredDoc = app.get("$mainUrl/id/uncensored-leak", headers = headers).document
+            val uncensoredUrl = "$mainUrl/id/uncensored-leak"
+            val uncensoredDoc = app.get(uncensoredUrl, headers = headers).document
             val uncensoredVideos = parseVideos(uncensoredDoc)
             if (uncensoredVideos.isNotEmpty()) {
-                // Tambahkan sebagai baris baru di halaman utama
-                items.add(HomePageList("Kebocoran Tanpa Sensor", uncensoredVideos, isHorizontalImages = true))
+                // Tambahkan url juga ke sini
+                items.add(HomePageList("Kebocoran Tanpa Sensor", uncensoredVideos, isHorizontalImages = true, url = uncensoredUrl))
             }
         } catch (e: Exception) {
             // Abaikan jika error
@@ -115,7 +140,6 @@ class MissAvProvider : MainAPI() {
         val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
         // --- TRIK MENDAPATKAN BANYAK SARAN FILM ---
-        // Kita borong maksimal 3 link Aktris/Genre sekaligus agar sarannya banyak!
         val recUrls = document.select("a[href*=/genres/], a[href*=/actresses/]")
             .mapNotNull { it.attr("href") }
             .distinct()
@@ -124,10 +148,9 @@ class MissAvProvider : MainAPI() {
         val recommendations = ArrayList<SearchResponse>()
         
         for (recUrl in recUrls) {
-            if (recommendations.size >= 16) break // Batasi maksimal 16 saran film
+            if (recommendations.size >= 16) break 
             try {
                 val recDoc = app.get(recUrl, headers = headers).document
-                // Filter agar video yang sedang ditonton tidak muncul di saran
                 val videos = parseVideos(recDoc).filter { it.url != url }
                 recommendations.addAll(videos)
             } catch (e: Exception) {
@@ -139,7 +162,6 @@ class MissAvProvider : MainAPI() {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
-            // Hapus duplikat dan masukkan ke daftar saran
             this.recommendations = recommendations.distinctBy { it.url }
         }
     }
