@@ -11,73 +11,89 @@ class MissAvProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val usesWebView = true 
 
+    // Header penyamaran
     private val headers = mapOf(
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+        "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+        "sec-ch-ua-mobile" to "?1",
+        "sec-ch-ua-platform" to "\"Android\"",
+        "Upgrade-Insecure-Requests" to "1"
     )
 
-    // Helper untuk memparsing daftar video (dipakai di Home & Search)
-    private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("div.my-2 a") ?: return null
-        val title = titleElement.text().trim()
-        val url = titleElement.attr("href")
-
-        if (title.isEmpty() || url.startsWith("javascript")) return null
-
-        val img = this.selectFirst("img")
-        val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
-
-        return newMovieSearchResponse(title, url, TvType.NSFW) {
-            this.posterUrl = posterUrl
-        }
-    }
-
+    // ==========================================
+    // 1. HALAMAN DEPAN (Home Page)
+    // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Cukup 1 kali request ke halaman utama, CloudStream otomatis mengikuti redirect ke dmXYZ
         val document = app.get("$mainUrl/id", headers = headers).document
+        
         val items = ArrayList<HomePageList>()
 
+        // Cari semua container yang punya judul h2 (Keluaran Terbaru, dll)
         document.select("div.sm\\:container:has(h2)").forEach { section ->
             val sectionTitle = section.selectFirst("h2")?.text()?.trim() ?: return@forEach
-            if (sectionTitle.contains("Memuat") || sectionTitle.contains("Rekomendasi")) return@forEach
+            
+            // Abaikan bagian rekomendasi (karena isinya kosong/di-load via JavaScript)
+            if (sectionTitle.contains("Memuat", true) || sectionTitle.contains("Direkomendasikan", true)) {
+                return@forEach
+            }
 
-            val videos = section.select("div.thumbnail").mapNotNull { it.toSearchResult() }
-            if (videos.isNotEmpty()) items.add(HomePageList(sectionTitle, videos))
+            val videos = section.select("div.thumbnail").mapNotNull { element ->
+                val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
+                val title = titleElement.text().trim()
+                val videoUrl = titleElement.attr("href")
+
+                // Lewati template Alpine.js yang kosong
+                if (title.isEmpty() || videoUrl.contains("javascript:") || videoUrl == "#") {
+                    return@mapNotNull null
+                }
+
+                val img = element.selectFirst("img")
+                val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+
+                newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
+                    this.posterUrl = posterUrl
+                }
+            }
+            
+            // Jika container ini punya video, tambahkan ke layar beranda
+            if (videos.isNotEmpty()) {
+                items.add(HomePageList(sectionTitle, videos))
+            }
         }
 
-        return newHomePageResponse(items, false)
+        // Alarm jika murni diblokir Cloudflare
+        if (items.isEmpty()) {
+            throw Error("Gagal memuat data halaman depan. Coba buka di Peramban untuk memverifikasi Cloudflare.")
+        }
+
+        return newHomePageResponse(items, hasNext = false)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        // Kita cari link pencarian yang valid dari halaman utama dulu supaya DM-nya bener
-        val mainDoc = app.get("$mainUrl/id", headers = headers).document
-        val searchBaseUrl = mainDoc.selectFirst("meta[property=og:url]")?.attr("content") ?: "$mainUrl/id"
-        
-        // Bersihkan URL dari path akhiran jika ada, lalu tambah /search/
-        val finalSearchUrl = "${searchBaseUrl.removeSuffix("/")}/search/${query.trim()}"
-        val document = app.get(finalSearchUrl, headers = headers).document
-
-        return document.select("div.thumbnail").mapNotNull { it.toSearchResult() }
-    }
-
+    // ==========================================
+    // 2. HALAMAN DETAIL (Load Info)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: return null
         val posterUrl = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
-        val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
-        // Fitur Saran Video (Recommendations)
-        val recommendations = document.select("div.thumbnail").mapNotNull { it.toSearchResult() }
+        val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
-            this.recommendations = recommendations
         }
     }
 
+    // ==========================================
+    // 3. PEMUTAR VIDEO (Load Links)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -87,25 +103,41 @@ class MissAvProvider : MainAPI() {
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
-        [span_0](start_span)// Coba unpack skrip (Packed JS)[span_0](end_span)
-        document.select("script").forEach { script ->
-            if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
-                [span_1](start_span)val unpacked = getAndUnpack(script.data()) //[span_1](end_span)
-                Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)?.let { m3u8Url = it.value }
+        val scriptElements = document.select("script")
+        for (script in scriptElements) {
+            val scriptText = script.data()
+            if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
+                val unpacked = getAndUnpack(scriptText)
+                val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
+                if (match != null) {
+                    m3u8Url = match.value
+                    break
+                }
             }
         }
         
-        // Backup: Cari link mentah
         if (m3u8Url == null) {
-            Regex("""https?://[^"']+\.m3u8[^"']*""").find(document.html())?.let { m3u8Url = it.value }
+            val html = document.html()
+            val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
+            if (match != null) {
+                m3u8Url = match.value
+            }
         }
 
-        m3u8Url?.let {
+        if (m3u8Url != null) {
             callback.invoke(
-                ExtractorLink(this.name, this.name, it, data, Qualities.Unknown.value, type = ExtractorLinkType.M3U8)
+                ExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = m3u8Url,
+                    referer = data, 
+                    quality = Qualities.Unknown.value,
+                    type = ExtractorLinkType.M3U8 
+                )
             )
             return true
         }
+
         return false
     }
 }
