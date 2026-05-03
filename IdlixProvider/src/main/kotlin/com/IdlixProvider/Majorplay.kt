@@ -22,6 +22,7 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
+            // Referer asli HANYA dipakai untuk menembak API Majorplay (mengambil token)
             val actualReferer = referer ?: "https://z1.idlixku.com/"
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
@@ -38,10 +39,8 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
-            // Header dikembalikan lengkap karena terbukti sukses di simulasi Termux
+            // KUNCI ANTI-403: Header untuk CDN/Video di-set sangat minim, TANPA Origin/Referer
             val streamHeaders = mapOf(
-                "Origin" to "https://z1.idlixku.com",
-                "Referer" to actualReferer,
                 "User-Agent" to userAgent,
                 "Accept" to "*/*"
             )
@@ -54,19 +53,17 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // KUNCI UTAMA: Kita kembalikan M3u8Helper untuk membongkar Master Playlist!
-            // Ini yang akan mencegah Error 403/2004 saat video dimainkan.
+            // PERBAIKAN FATAL: Tambahkan pengecekan .json agar masuk ke M3u8Helper!
             if (videoUrl.contains(".m3u8") || videoUrl.contains(".json")) {
                 M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = videoUrl,
-                    referer = actualReferer,
+                    referer = "", // KOSONGKAN REFERER AGAR LOLOS DARI BLOKIRAN CDN 403
                     headers = streamHeaders
                 ).forEach { parsedLink ->
                     callback.invoke(parsedLink)
                 }
             } else {
-                // Di sini kita pakai newExtractorLink agar tidak ada error 'deprecated' waktu di-build
                 callback.invoke(
                     newExtractorLink(
                         source = name,
@@ -74,7 +71,7 @@ class Majorplay : ExtractorApi() {
                         url = videoUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = actualReferer
+                        this.referer = "" // KOSONGKAN REFERER JUGA DI SINI
                         this.quality = Qualities.Unknown.value
                         this.headers = streamHeaders
                     }
