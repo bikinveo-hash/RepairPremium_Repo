@@ -5,15 +5,19 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class MissAvProvider : MainAPI() {
-    // Konfigurasi Dasar
+    // ==========================================
+    // 1. KONFIGURASI DASAR
+    // ==========================================
     override var name = "MissAv"
     override var mainUrl = "https://missav.ws"
     override val hasMainPage = true
-    override var lang = "id" 
+    override var lang = "id"
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
 
-    // 1. Kategori Halaman Utama
+    // ==========================================
+    // 2. KATEGORI HALAMAN UTAMA (HOMEPAGE)
+    // ==========================================
     override val mainPage = mainPageOf(
         "new" to "Recent Update",
         "release" to "Keluaran Terbaru",
@@ -22,15 +26,15 @@ class MissAvProvider : MainAPI() {
         "weekly-hot" to "Paling Banyak Dilihat Minggu Ini"
     )
 
-    // 2. Mengambil Data Halaman Utama
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Asumsi struktur pagination webnya menggunakan ?page=
+        // Asumsi format halaman web adalah ?page=1, ?page=2 dst
         val url = "$mainUrl/id/${request.data}?page=$page"
         val document = app.get(url).document
         
+        // Ekstrak semua video yang ada di halaman utama
         val home = document.select("div.thumbnail.group").mapNotNull { 
             toSearchResult(it) 
         }
@@ -38,17 +42,21 @@ class MissAvProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    // 3. Fitur Pencarian
+    // ==========================================
+    // 3. FITUR PENCARIAN (SEARCH)
+    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
+        // Format URL pencarian sesuai analisa HTML sebelumnya
         val url = "$mainUrl/id/search/$query"
         val document = app.get(url).document
 
+        // Struktur pencarian sama dengan halaman utama
         return document.select("div.thumbnail.group").mapNotNull { 
             toSearchResult(it) 
         }
     }
 
-    // Fungsi Pembantu: Mengubah HTML Element menjadi format Cloudstream
+    // Fungsi pembantu untuk mengubah elemen HTML "thumbnail" menjadi SearchResponse
     private fun toSearchResult(element: Element): SearchResponse? {
         val href = element.selectFirst("a")?.attr("href") ?: return null
         val title = element.selectFirst("div.truncate a")?.text() ?: return null
@@ -59,18 +67,25 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // 4. Halaman Detail Video
+    // ==========================================
+    // 4. HALAMAN DETAIL (LOAD)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
+        // Mengambil metadata dasar menggunakan Meta Tags OpenGraph
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: "Tanpa Judul"
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
+        
+        // Mengambil tahun rilis dari div text-secondary
         val year = document.selectFirst("div.text-secondary time")?.text()?.split("-")?.firstOrNull()?.toIntOrNull()
         
+        // Mengambil genre dan aktor berdasarkan isi teksnya
         val tags = document.select("div.text-secondary:contains(Genre:) a").map { it.text() }
         val actors = document.select("div.text-secondary:contains(Aktris:) a, div.text-secondary:contains(Aktor:) a").map { it.text() }
 
+        // Parameter 'data' kita isi url untuk dipakai lagi di loadLinks
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.year = year
@@ -80,22 +95,27 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // 5. Mengekstrak Link Video Player
+    // ==========================================
+    // 5. MENGEKSTRAK LINK VIDEO PLAYER (LOAD LINKS)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Ambil source HTML mentah dari halaman detail
         val html = app.get(data).text
 
-        // Mencari UUID menggunakan Regex
-        val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\?/seek/""")
+        // Regex untuk mendeteksi UUID video (contoh: a5b13b9d-fb3b-42e0-b9a4-c53333f4f827)
+        // UUID ini tersembunyi di path gambar thumbnail seperti \/uuid\/seek\/
+        val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[\\/]+seek""")
         val match = uuidRegex.find(html)
 
         if (match != null) {
             val uuid = match.groupValues[1]
-            // Menyusun format m3u8 dari server surrit
+            
+            // Format URL m3u8 dari server video mereka (Surrit)
             val m3u8Url = "https://surrit.com/$uuid/playlist.m3u8"
 
             callback.invoke(
@@ -103,7 +123,7 @@ class MissAvProvider : MainAPI() {
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
-                    referer = mainUrl, // Wajib agar server tidak memblokir (Error 403)
+                    referer = mainUrl, // Wajib ada agar server mengizinkan akses stream
                     quality = Qualities.Unknown.value,
                     isM3u8 = true
                 )
