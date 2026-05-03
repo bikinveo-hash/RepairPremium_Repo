@@ -4,238 +4,112 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-class MissAVProvider : MainAPI() {
-    override var mainUrl = "https://missav.ws/id"
-    override var name = "MissAV"
-    override val supportedTypes = setOf(TvType.NSFW)
-    override var lang = "id"
-    
+class MissAvProvider : MainAPI() {
+    // Konfigurasi Dasar
+    override var name = "MissAv"
+    override var mainUrl = "https://missav.ws"
     override val hasMainPage = true
-    override val hasQuickSearch = false
+    override var lang = "id" 
+    override val supportedTypes = setOf(TvType.NSFW)
+    override val hasDownloadSupport = true
 
-    // ==============================
-    // 1. KONFIGURASI KATEGORI
-    // ==============================
+    // 1. Kategori Halaman Utama
     override val mainPage = mainPageOf(
-        "https://missav.ws/dm628/id/uncensored-leak" to "Kebocoran Tanpa Sensor",
-        "https://missav.ws/dm590/id/release" to "Keluaran Terbaru",
-        "https://missav.ws/dm515/id/new" to "Recent Update",
-        "https://missav.ws/dm68/id/genres/Wanita%20Menikah/Ibu%20Rumah%20Tangga" to "Wanita menikah"
+        "new" to "Recent Update",
+        "release" to "Keluaran Terbaru",
+        "uncensored-leak" to "Tanpa Sensor",
+        "today-hot" to "Paling Banyak Dilihat Hari Ini",
+        "weekly-hot" to "Paling Banyak Dilihat Minggu Ini"
     )
 
-    private fun String.toUrl(): String {
-        // Memastikan tidak ada URL yang rusak karena kurang garis miring (/)
-        return if (this.startsWith("http")) this else {
-            if (this.startsWith("/")) "https://missav.ws$this" else "https://missav.ws/$this"
-        }
-    }
-
-    // ==============================
-    // 2. HOME PAGE
-    // ==============================
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val url = if (page == 1) {
-            request.data
-        } else {
-            val separator = if (request.data.contains("?")) "&" else "?"
-            "${request.data}${separator}page=$page"
-        }
-
+    // 2. Mengambil Data Halaman Utama
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        // Asumsi struktur pagination webnya menggunakan ?page=
+        val url = "$mainUrl/id/${request.data}?page=$page"
         val document = app.get(url).document
         
-        val items = document.select("div.thumbnail.group").mapNotNull { element ->
-            toSearchResult(element)
+        val home = document.select("div.thumbnail.group").mapNotNull { 
+            toSearchResult(it) 
         }
 
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+        return newHomePageResponse(request.name, home)
     }
 
-    private fun toSearchResult(element: Element): SearchResponse? {
-        // 1. Ambil tag <a> pertama. Ini biasanya membungkus gambar dan PASTI mengarah ke URL video
-        val linkElement = element.selectFirst("a") ?: return null
-        val url = linkElement.attr("href").toUrl()
-        
-        // 2. Ambil elemen gambar untuk poster
-        val imgElement = element.selectFirst("img")
-        val posterUrl = imgElement?.attr("data-src")?.ifEmpty { imgElement.attr("src") }
-        
-        // 3. Prioritaskan mengambil judul dari atribut 'alt' pada gambar karena lebih akurat.
-        // Jika kosong, baru gunakan cara lama (teks dari link) sebagai cadangan.
-        val title = imgElement?.attr("alt")?.trim()?.ifEmpty {
-            element.selectFirst("a.text-secondary")?.text()?.trim()
-        } ?: "Unknown Title"
+    // 3. Fitur Pencarian
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/id/search/$query"
+        val document = app.get(url).document
 
-        return newMovieSearchResponse(title, url, TvType.NSFW) {
+        return document.select("div.thumbnail.group").mapNotNull { 
+            toSearchResult(it) 
+        }
+    }
+
+    // Fungsi Pembantu: Mengubah HTML Element menjadi format Cloudstream
+    private fun toSearchResult(element: Element): SearchResponse? {
+        val href = element.selectFirst("a")?.attr("href") ?: return null
+        val title = element.selectFirst("div.truncate a")?.text() ?: return null
+        val posterUrl = element.selectFirst("img")?.attr("data-src")
+
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
         }
     }
 
-    // ==============================
-    // 3. PENCARIAN
-    // ==============================
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search/$query"
-        val document = app.get(url).document
-        
-        return document.select("div.thumbnail.group").mapNotNull { element ->
-            toSearchResult(element)
-        }
-    }
-
-    // ==============================
-    // 4. DETAIL VIDEO
-    // ==============================
-    override suspend fun load(url: String): LoadResponse? {
+    // 4. Halaman Detail Video
+    override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.text-base.text-nord6")?.text()?.trim() 
-            ?: document.selectFirst("h1")?.text()?.trim() 
-            ?: "Unknown Title"
-
-        val description = document.selectFirst("div.text-secondary.break-all")?.text()?.trim()
-            ?: document.selectFirst("meta[name=description]")?.attr("content")
-
+        val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: "Tanpa Judul"
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
-
-        val tags = document.select("div.text-secondary a[href*='/genres/']").map { it.text() }
+        val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
+        val year = document.selectFirst("div.text-secondary time")?.text()?.split("-")?.firstOrNull()?.toIntOrNull()
         
-        val actors = document.select("div.text-secondary a[href*='/actresses/'], div.text-secondary a[href*='/actors/']")
-            .map { element ->
-                ActorData(Actor(element.text(), null))
-            }
-
-        val year = document.selectFirst("time")?.text()?.trim()?.take(4)?.toIntOrNull()
-
-        val durationSeconds = document.selectFirst("meta[property=og:video:duration]")
-            ?.attr("content")?.toIntOrNull()
-        val durationMinutes = durationSeconds?.div(60)
+        val tags = document.select("div.text-secondary:contains(Genre:) a").map { it.text() }
+        val actors = document.select("div.text-secondary:contains(Aktris:) a, div.text-secondary:contains(Aktor:) a").map { it.text() }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
-            this.plot = description
+            this.year = year
+            this.plot = plot
             this.tags = tags
             this.actors = actors
-            this.year = year
-            this.duration = durationMinutes
         }
     }
 
-    // ==============================
-    // 5. PLAYER + SMART ACCURATE SUBTITLE
-    // ==============================
+    // 5. Mengekstrak Link Video Player
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
-        val text = document.html()
-        
-        val regex = """nineyu\.com\\/([0-9a-fA-F-]+)\\/seek""".toRegex()
-        val match = regex.find(text)
-        
+        val html = app.get(data).text
+
+        // Mencari UUID menggunakan Regex
+        val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\?/seek/""")
+        val match = uuidRegex.find(html)
+
         if (match != null) {
             val uuid = match.groupValues[1]
-            val videoUrl = "https://surrit.com/$uuid/playlist.m3u8"
+            // Menyusun format m3u8 dari server surrit
+            val m3u8Url = "https://surrit.com/$uuid/playlist.m3u8"
 
             callback.invoke(
-                newExtractorLink(
-                    source = "MissAV",
-                    name = "MissAV (Surrit)",
-                    url = videoUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = data
-                    this.quality = Qualities.Unknown.value
-                }
+                ExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = m3u8Url,
+                    referer = mainUrl, // Wajib agar server tidak memblokir (Error 403)
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
+                )
             )
-
-            // --- LOGIKA AKURASI TINGGI ---
-            val title = document.selectFirst("h1.text-base.text-nord6")?.text()?.trim() ?: ""
-            
-            // 1. Ekstrak KODE ID (Wajib ada). Contoh: SSIS-669, IPX-123
-            val codeRegex = """([A-Za-z]{2,5}-[0-9]{3,5})""".toRegex()
-            val codeMatch = codeRegex.find(title)
-            val code = codeMatch?.value
-            
-            // Hanya cari subtitle jika KODE ditemukan.
-            // Jika tidak ada kode, jangan cari (karena pencarian judul teks biasa sering salah film)
-            if (!code.isNullOrEmpty()) {
-                fetchSubtitleCatStrict(code, subtitleCallback)
-            }
-            
-            return true
         }
 
-        return false
-    }
-
-    // ==============================
-    // 6. HELPER SUBTITLE STRICT MODE
-    // ==============================
-    private suspend fun fetchSubtitleCatStrict(codeId: String, subtitleCallback: (SubtitleFile) -> Unit) {
-        try {
-            // Langkah 1: Cari berdasarkan KODE ID saja agar hasil relevan
-            val searchUrl = "https://www.subtitlecat.com/index.php?search=$codeId"
-            val searchDoc = app.get(searchUrl).document
-
-            // Ambil baris tabel hasil pencarian
-            val rows = searchDoc.select("table.sub-table tbody tr")
-
-            // Variabel counter agar tidak mengambil terlalu banyak (maksimal 3 varian teratas)
-            var variantsFound = 0
-            val maxVariants = 3 
-
-            // Loop setiap hasil pencarian
-            for (row in rows) {
-                if (variantsFound >= maxVariants) break
-
-                val linkElement = row.selectFirst("td a") ?: continue
-                val resultTitle = linkElement.text()
-                val resultHref = linkElement.attr("href")
-
-                // --- VALIDASI KETAT (STRICT CHECK) ---
-                // Pastikan judul hasil pencarian MENGANDUNG Kode ID. Case insensitive (huruf besar/kecil dianggap sama)
-                if (resultTitle.contains(codeId, ignoreCase = true)) {
-                    
-                    val detailPageUrl = if (resultHref.startsWith("http")) resultHref else "https://www.subtitlecat.com/$resultHref"
-                    
-                    // Langkah 2: Masuk ke halaman detail untuk varian ini
-                    val detailDoc = app.get(detailPageUrl).document
-                    
-                    // Ambil nama varian dari judul hasil (misal: "JUR-613.ver1") untuk label
-                    // Kita potong string agar tidak kepanjangan di layar
-                    val shortVariantName = if (resultTitle.length > 20) resultTitle.take(20) + "..." else resultTitle
-
-                    detailDoc.select("div.sub-single").forEach { subBox ->
-                        val lang = subBox.select("span").getOrNull(1)?.text()?.trim() ?: "Unknown"
-                        val downloadLink = subBox.select("a[href$='.srt']").firstOrNull()?.attr("href")
-
-                        if (!downloadLink.isNullOrEmpty()) {
-                            val fullDownloadUrl = if (downloadLink.startsWith("http")) downloadLink else "https://www.subtitlecat.com$downloadLink"
-                            
-                            // Ekstrak nama file asli untuk label (opsional, biar user tahu ini file yg mana)
-                            val fileName = downloadLink.substringAfterLast("/").replace(".srt", "")
-                            
-                            // Format Label: "Indonesia [Nama File/Varian]"
-                            // Contoh: "Indonesian [JUR-613.ver1]"
-                            val label = "$lang [$fileName]"
-
-                            subtitleCallback.invoke(
-                                SubtitleFile(lang, fullDownloadUrl).apply {
-                                    // Kita override label agar muncul varian di pilihan player
-                                    // Catatan: Cloudstream mungkin menggunakan 'lang' sebagai label utama, 
-                                    // tapi url unik tetap akan membedakannya.
-                                }
-                            )
-                        }
-                    }
-                    variantsFound++
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        return true
     }
 }
