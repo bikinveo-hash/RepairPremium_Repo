@@ -23,16 +23,20 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Mengirim request POST dengan parameter 'json'
+            // Samakan User-Agent secara global untuk Token dan ExoPlayer
+            val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+            // FIX 1: Mengirim request POST dengan raw TEXT (meniru jebakan browser asli)
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
                     "Referer" to "https://z1.idlixku.com/",
                     "Accept" to "*/*",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                    "Content-Type" to "text/plain", // KUNCI UTAMA ANTI-BOT
+                    "User-Agent" to userAgent
                 ),
-                json = mapOf("claim" to claimToken)
+                text = "{\"claim\":\"$claimToken\"}" // Kirim sebagai string mentah, BUKAN json map
             ).parsedSafe<NewMajorplayResponse>()
             
             // Mengekstrak daftar subtitle
@@ -45,48 +49,32 @@ class Majorplay : ExtractorApi() {
                 }
             }
 
-            // Mengambil link video m3u8 atau JSON dari API Majorplay
+            // Mengambil link video
             val videoUrl = response?.url ?: return
             
-            // FIX: Kembalikan Origin dan Accept agar lolos dari blokir 403 (CORS) Pintarverse/Guravia
             val streamHeaders = mapOf(
                 "Origin" to "https://z1.idlixku.com",
                 "Referer" to "https://z1.idlixku.com/",
-                "Accept" to "*/*",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                "User-Agent" to userAgent
             )
 
-            // Deteksi URL dari CDN yang menyamar sebagai .json (guravia / pintarverse)
-            val isM3u8 = videoUrl.contains(".m3u8") || videoUrl.contains(".json") || videoUrl.contains("guravia") || videoUrl.contains("pintarverse")
+            // FIX 2: Tambahkan ekstensi .m3u8 palsu agar parser Cloudstream tidak kebingungan dengan .json
+            val fixedUrl = if (videoUrl.contains("?")) "$videoUrl&type=.m3u8" else "$videoUrl?.m3u8"
 
-            if (isM3u8) {
-                // Lempar ke ExoPlayer sebagai M3U8 murni dengan header lengkap
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "https://z1.idlixku.com/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = streamHeaders
-                    }
-                )
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://z1.idlixku.com/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = streamHeaders
-                    }
-                )
-            }
+            // Langsung lempar ke ExoPlayer sebagai M3U8 utuh
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = fixedUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "https://z1.idlixku.com/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = streamHeaders
+                }
+            )
+            
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
