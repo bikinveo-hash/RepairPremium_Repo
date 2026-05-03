@@ -6,15 +6,23 @@ import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
 
 class MissAvProvider : MainAPI() {
+    // ==========================================
+    // 1. KONFIGURASI DASAR
+    // ==========================================
     override var name = "MissAv"
     override var mainUrl = "https://missav.ws"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
+    
+    // Mencegah pemblokiran karena memuat banyak kategori sekaligus
     override var sequentialMainPage = true
+    
+    // KUNCI SAKTI: Memaksa Cloudstream memakai Browser Asli untuk menembus Cloudflare
     override val usesWebView = true
 
+    // Headers penyamaran
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -22,17 +30,19 @@ class MissAvProvider : MainAPI() {
     )
 
     // ==========================================
-    // FUNGSI PINTAR UNTUK MENGATASI HALAMAN TRANSIT
+    // FUNGSI PINTAR UNTUK MENGATASI HALAMAN TRANSIT / REDIRECT
     // ==========================================
     private suspend fun getDocument(url: String): Document {
-        var response = app.get(url)
+        var response = app.get(url, headers = headers)
         var doc = response.document
         
+        // Mengecek apakah Cloudflare melempar kita ke halaman "Redirecting to..."
         val isRedirect = doc.selectFirst("meta[http-equiv=refresh]") != null
         if (isRedirect) {
             val newUrl = doc.selectFirst("a")?.attr("href")
             if (newUrl != null) {
-                response = app.get(newUrl)
+                // Kejar URL tujuan barunya!
+                response = app.get(newUrl, headers = headers)
                 doc = response.document
             }
         }
@@ -40,7 +50,7 @@ class MissAvProvider : MainAPI() {
     }
 
     // ==========================================
-    // MENGGUNAKAN KATEGORI LINK LANGSUNG (DIRECT URL)
+    // 2. KATEGORI HALAMAN UTAMA (MENGGUNAKAN DIRECT URL)
     // ==========================================
     override val mainPage = mainPageOf(
         "https://missav.ws/dm628/id/uncensored-leak" to "Kebocoran Tanpa Sensor",
@@ -51,8 +61,6 @@ class MissAvProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return try {
-            // Karena request.data sekarang berisi URL penuh, 
-            // kita tidak perlu lagi menggabungkannya dengan mainUrl.
             val url = if (page == 1) {
                 request.data
             } else {
@@ -65,10 +73,10 @@ class MissAvProvider : MainAPI() {
                 toSearchResult(it) 
             }.toMutableList()
 
-            // Jika kosong, tampilkan alasannya!
+            // Menampilkan pesan error di layar jika halaman kosong
             if (home.isEmpty()) {
                 home.add(newMovieSearchResponse(
-                    name = "KOSONG: Judul Webnya '${document.title()}'", 
+                    name = "KOSONG: Web merespons dengan judul '${document.title()}'", 
                     url = url, 
                     type = TvType.NSFW
                 ) {
@@ -92,6 +100,9 @@ class MissAvProvider : MainAPI() {
         }
     }
 
+    // ==========================================
+    // 3. FITUR PENCARIAN (SEARCH)
+    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
         return try {
             val url = "$mainUrl/id/search/$query"
@@ -107,6 +118,8 @@ class MissAvProvider : MainAPI() {
 
     private fun toSearchResult(element: Element): SearchResponse? {
         val href = element.selectFirst("a")?.attr("href") ?: return null
+        
+        // Pengambilan judul yang lebih kuat
         val title = element.selectFirst("a.text-secondary")?.text() 
             ?: element.selectFirst("img")?.attr("alt") 
             ?: "Tanpa Judul"
@@ -119,6 +132,9 @@ class MissAvProvider : MainAPI() {
         }
     }
 
+    // ==========================================
+    // 4. HALAMAN DETAIL (LOAD)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val document = getDocument(url)
 
@@ -139,12 +155,16 @@ class MissAvProvider : MainAPI() {
         }
     }
 
+    // ==========================================
+    // 5. MENGEKSTRAK LINK VIDEO PLAYER (LOAD LINKS)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Karena HTML yang mengandung UUID ada di body, kita pakai outerHtml()
         val html = getDocument(data).outerHtml()
 
         val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[\\/]+seek""")
