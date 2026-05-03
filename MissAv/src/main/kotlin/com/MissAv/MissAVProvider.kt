@@ -13,21 +13,25 @@ class MissAvProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
     override var sequentialMainPage = true
+    override val usesWebView = true
+
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+    )
 
     // ==========================================
     // FUNGSI PINTAR UNTUK MENGATASI HALAMAN TRANSIT
     // ==========================================
     private suspend fun getDocument(url: String): Document {
-        // Biarkan Cloudstream menggunakan User-Agent bawaannya
         var response = app.get(url)
         var doc = response.document
         
-        // Cek apakah web melempar kita ke halaman "Redirecting to..."
         val isRedirect = doc.selectFirst("meta[http-equiv=refresh]") != null
         if (isRedirect) {
             val newUrl = doc.selectFirst("a")?.attr("href")
             if (newUrl != null) {
-                // Kejar URL tujuan barunya!
                 response = app.get(newUrl)
                 doc = response.document
             }
@@ -35,20 +39,24 @@ class MissAvProvider : MainAPI() {
         return doc
     }
 
+    // ==========================================
+    // MENGGUNAKAN KATEGORI LINK LANGSUNG (DIRECT URL)
+    // ==========================================
     override val mainPage = mainPageOf(
-        "new" to "Recent Update",
-        "release" to "Keluaran Terbaru",
-        "uncensored-leak" to "Tanpa Sensor",
-        "today-hot" to "Paling Banyak Dilihat Hari Ini",
-        "weekly-hot" to "Paling Banyak Dilihat Minggu Ini"
+        "https://missav.ws/dm628/id/uncensored-leak" to "Kebocoran Tanpa Sensor",
+        "https://missav.ws/dm590/id/release" to "Keluaran Terbaru",
+        "https://missav.ws/dm515/id/new" to "Recent Update",
+        "https://missav.ws/dm68/id/genres/Wanita%20Menikah/Ibu%20Rumah%20Tangga" to "Ibu Rumah Tangga"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return try {
+            // Karena request.data sekarang berisi URL penuh, 
+            // kita tidak perlu lagi menggabungkannya dengan mainUrl.
             val url = if (page == 1) {
-                "$mainUrl/id/${request.data}"
+                request.data
             } else {
-                "$mainUrl/id/${request.data}?page=$page"
+                "${request.data}?page=$page"
             }
             
             val document = getDocument(url)
@@ -57,12 +65,10 @@ class MissAvProvider : MainAPI() {
                 toSearchResult(it) 
             }.toMutableList()
 
-            // ==========================================
-            // SISTEM DEBUG: Jika kosong, tampilkan alasannya!
-            // ==========================================
+            // Jika kosong, tampilkan alasannya!
             if (home.isEmpty()) {
                 home.add(newMovieSearchResponse(
-                    name = "KOSONG: Judul Webnya adalah '${document.title()}'", 
+                    name = "KOSONG: Judul Webnya '${document.title()}'", 
                     url = url, 
                     type = TvType.NSFW
                 ) {
@@ -73,7 +79,6 @@ class MissAvProvider : MainAPI() {
             newHomePageResponse(request.name, home)
             
         } catch (e: Exception) {
-            // Jika terjadi Error (seperti HTTP 403/503 Cloudflare dsb)
             val errorList = listOf(
                 newMovieSearchResponse(
                     name = "ERROR: ${e.message}", 
