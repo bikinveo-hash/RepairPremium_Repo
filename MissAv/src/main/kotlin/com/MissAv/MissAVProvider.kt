@@ -52,11 +52,15 @@ class MissAvProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = ArrayList<HomePageList>()
 
-        // --- LOGIKA HALAMAN KATEGORI (Jika user mengeklik tombol Panah Kanan / "Lagi") ---
-        // request.name akan terisi nama kategori jika user mengeklik tombol tersebut
-        if (request.name.isNotBlank() && request.data.isNotBlank()) {
-            // URL otomatis ditambahkan ?page=2, ?page=3, dst untuk infinite scroll
-            val pageUrl = if (page == 1) request.data else "${request.data}?page=$page"
+        // --- LOGIKA HALAMAN KATEGORI (Scroll Terus Ke Bawah) ---
+        if (request.name.isNotBlank()) {
+            // Kita terjemahkan Nama Kategori yang diklik menjadi URL yang benar
+            val pageUrl = when {
+                request.name.contains("Keluaran", ignoreCase = true) -> "$mainUrl/id/release?page=$page"
+                request.name.contains("Recent", ignoreCase = true) -> "$mainUrl/id/new?page=$page"
+                request.name.contains("Tanpa Sensor", ignoreCase = true) -> "$mainUrl/id/uncensored-leak?page=$page"
+                else -> "$mainUrl/id/release?page=$page" // Default
+            }
             
             try {
                 val document = app.get(pageUrl, headers = headers).document
@@ -66,7 +70,7 @@ class MissAvProvider : MainAPI() {
                     items.add(HomePageList(request.name, videos, isHorizontalImages = true))
                 }
                 
-                // Kalau videonya masih ada 10 atau lebih, berarti masih ada halaman selanjutnya!
+                // Kalau video di halaman ini masih 10 atau lebih, berarti bisa lanjut ke halaman berikutnya
                 val hasNext = videos.size >= 10
                 return newHomePageResponse(items, hasNext = hasNext)
             } catch (e: Exception) {
@@ -74,7 +78,7 @@ class MissAvProvider : MainAPI() {
             }
         }
 
-        // --- LOGIKA BERANDA UTAMA (page == 1) ---
+        // --- LOGIKA BERANDA UTAMA (Awal Buka Aplikasi) ---
         try {
             val document = app.get("$mainUrl/id", headers = headers).document
             document.select("div.sm\\:container:has(h2)").forEach { section ->
@@ -84,13 +88,10 @@ class MissAvProvider : MainAPI() {
                     return@forEach
                 }
 
-                // Trik: Mengambil URL asli dari tombol "Lagi" di webnya
-                val moreUrl = section.selectFirst("div.flex > a[href]")?.attr("href")
-
                 val videos = parseVideos(section)
                 if (videos.isNotEmpty()) {
-                    // Tambahkan parameter 'url = moreUrl' agar tombol panah kanan menyala!
-                    items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true, url = moreUrl))
+                    // BEBAS ERROR: Tanpa parameter url=
+                    items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true))
                 }
             }
         } catch (e: Exception) {
@@ -103,8 +104,8 @@ class MissAvProvider : MainAPI() {
             val uncensoredDoc = app.get(uncensoredUrl, headers = headers).document
             val uncensoredVideos = parseVideos(uncensoredDoc)
             if (uncensoredVideos.isNotEmpty()) {
-                // Tambahkan url juga ke sini
-                items.add(HomePageList("Kebocoran Tanpa Sensor", uncensoredVideos, isHorizontalImages = true, url = uncensoredUrl))
+                // BEBAS ERROR: Tanpa parameter url=
+                items.add(HomePageList("Kebocoran Tanpa Sensor", uncensoredVideos, isHorizontalImages = true))
             }
         } catch (e: Exception) {
             // Abaikan jika error
