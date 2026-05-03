@@ -9,51 +9,60 @@ class MissAvProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     
-    // SEMENTARA kita gunakan TvType.Movie agar pasti muncul di beranda dan tidak difilter
+    // Gunakan TvType.Movie untuk memastikan tidak di-hide oleh filter aplikasi
     override val supportedTypes = setOf(TvType.Movie)
     
     override val usesWebView = true 
 
     // ==========================================
-    // 1. HALAMAN DEPAN (Home Page)
+    // 1. HALAMAN DEPAN (Home Page) - REVISI
     // ==========================================
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val document = app.get("$mainUrl/id").document
-
-        // ALARM CLOUDFLARE: Biar kita tahu kalau diam-diam diblokir
-        if (document.title().contains("Just a moment") || document.title().contains("Cloudflare")) {
-            throw Error("Terhalang Cloudflare! Tolong buka webview/pengaturan untuk verifikasi.")
-        }
-
-        val videos = document.select("div.thumbnail").mapNotNull { element ->
-            // Cari link (tag <a>) yang memuat judul
-            val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
-            
-            val title = titleElement.text().trim()
-            val url = titleElement.attr("href")
-            
-            // Lewati template kosong bawaan web
-            if (title.isEmpty() || url.contains("javascript:") || url == "#") {
-                return@mapNotNull null
-            }
-            
-            val posterUrl = element.selectFirst("img")?.let { img ->
-                val dataSrc = img.attr("data-src")
-                if (dataSrc.isNullOrEmpty()) img.attr("src") else dataSrc
-            }
-
-            // Gunakan TvType.Movie sementara untuk bypass filter
-            newMovieSearchResponse(title, url, TvType.Movie) {
-                this.posterUrl = posterUrl
-            }
-        }
-
-        if (videos.isEmpty()) return null
-
-        return newHomePageResponse(
-            list = HomePageList("Update Terbaru", videos),
-            hasNext = false
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val items = ArrayList<HomePageList>()
+        
+        // Kita bypass beranda utama dan langsung ambil dari halaman kategori!
+        val urls = listOf(
+            Pair("Keluaran Terbaru", "$mainUrl/id/release"),
+            Pair("Baru Ditambahkan", "$mainUrl/id/new"),
+            Pair("Tanpa Sensor", "$mainUrl/id/uncensored-leak")
         )
+
+        for ((name, url) in urls) {
+            try {
+                val document = app.get(url).document
+                
+                val videos = document.select("div.thumbnail").mapNotNull { element ->
+                    val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
+                    
+                    val title = titleElement.text().trim()
+                    val videoUrl = titleElement.attr("href")
+                    
+                    // Lewati template kosong bawaan Alpine.js
+                    if (title.isEmpty() || videoUrl.contains("javascript:") || videoUrl == "#") {
+                        return@mapNotNull null
+                    }
+                    
+                    val img = element.selectFirst("img")
+                    val posterUrl = img?.attr("data-src")?.takeIf { it.isNotEmpty() } ?: img?.attr("src")
+
+                    newMovieSearchResponse(title, videoUrl, TvType.Movie) {
+                        this.posterUrl = posterUrl
+                    }
+                }
+                
+                // Jika berhasil mendapat video, masukkan ke dalam baris kategori
+                if (videos.isNotEmpty()) {
+                    items.add(HomePageList(name, videos))
+                }
+            } catch (e: Exception) {
+                // Abaikan error pada satu kategori agar kategori lain tetap bisa dimuat
+            }
+        }
+
+        // Alarm jika semua kategori gagal dimuat
+        if (items.isEmpty()) throw Error("Gagal memuat data. Periksa koneksi atau verifikasi Cloudflare.")
+
+        return HomePageResponse(items)
     }
 
     // ==========================================
