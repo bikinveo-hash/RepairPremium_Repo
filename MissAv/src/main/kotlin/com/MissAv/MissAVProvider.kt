@@ -15,6 +15,10 @@ class MissAvProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
 
+    // FIX 1: Mencegah pemblokiran dari Cloudflare dengan memuat kategori 
+    // secara berurutan (tidak menyerang server web sekaligus).
+    override var sequentialMainPage = true
+
     // ==========================================
     // 2. KATEGORI HALAMAN UTAMA (HOMEPAGE)
     // ==========================================
@@ -30,10 +34,17 @@ class MissAvProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = "$mainUrl/id/${request.data}?page=$page"
+        // FIX 2: Jika halaman 1, jangan gunakan parameter ?page=1
+        val url = if (page == 1) {
+            "$mainUrl/id/${request.data}"
+        } else {
+            "$mainUrl/id/${request.data}?page=$page"
+        }
+        
         val document = app.get(url).document
         
-        val home = document.select("div.thumbnail.group").mapNotNull { 
+        // FIX 3: Menyederhanakan selector ke "div.thumbnail" saja
+        val home = document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
         }
 
@@ -47,15 +58,22 @@ class MissAvProvider : MainAPI() {
         val url = "$mainUrl/id/search/$query"
         val document = app.get(url).document
 
-        return document.select("div.thumbnail.group").mapNotNull { 
+        return document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
         }
     }
 
+    // Fungsi pembantu untuk mengubah elemen HTML "thumbnail" menjadi SearchResponse
     private fun toSearchResult(element: Element): SearchResponse? {
         val href = element.selectFirst("a")?.attr("href") ?: return null
-        val title = element.selectFirst("div.truncate a")?.text() ?: return null
-        val posterUrl = element.selectFirst("img")?.attr("data-src")
+        
+        // FIX 4: Pengambilan Judul dan Gambar yang lebih kuat (fallback berjenjang)
+        val title = element.selectFirst("a.text-secondary")?.text() 
+            ?: element.selectFirst("img")?.attr("alt") 
+            ?: return null
+            
+        val img = element.selectFirst("img")
+        val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
 
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
@@ -82,7 +100,6 @@ class MissAvProvider : MainAPI() {
             this.year = year
             this.plot = plot
             this.tags = tags
-            // FIX: Mengubah List<String> menjadi List<ActorData>
             this.actors = actorsList.map { ActorData(Actor(it)) } 
         }
     }
@@ -105,7 +122,6 @@ class MissAvProvider : MainAPI() {
             val uuid = match.groupValues[1]
             val m3u8Url = "https://surrit.com/$uuid/playlist.m3u8"
 
-            // FIX: Menggunakan builder newExtractorLink sesuai aturan baru Cloudstream
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
