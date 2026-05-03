@@ -5,23 +5,21 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class MissAvProvider : MainAPI() {
-    // ==========================================
-    // 1. KONFIGURASI DASAR
-    // ==========================================
     override var name = "MissAv"
     override var mainUrl = "https://missav.ws"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.NSFW)
     override val hasDownloadSupport = true
-
-    // FIX 1: Mencegah pemblokiran dari Cloudflare dengan memuat kategori 
-    // secara berurutan (tidak menyerang server web sekaligus).
     override var sequentialMainPage = true
 
-    // ==========================================
-    // 2. KATEGORI HALAMAN UTAMA (HOMEPAGE)
-    // ==========================================
+    // Headers penyamaran agar tidak dicegat oleh sistem anti-bot (Cloudflare)
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+    )
+
     override val mainPage = mainPageOf(
         "new" to "Recent Update",
         "release" to "Keluaran Terbaru",
@@ -30,20 +28,16 @@ class MissAvProvider : MainAPI() {
         "weekly-hot" to "Paling Banyak Dilihat Minggu Ini"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        // FIX 2: Jika halaman 1, jangan gunakan parameter ?page=1
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) {
             "$mainUrl/id/${request.data}"
         } else {
             "$mainUrl/id/${request.data}?page=$page"
         }
         
-        val document = app.get(url).document
+        // Memasukkan headers ke dalam request app.get
+        val document = app.get(url, headers = headers).document
         
-        // FIX 3: Menyederhanakan selector ke "div.thumbnail" saja
         val home = document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
         }
@@ -51,23 +45,17 @@ class MissAvProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    // ==========================================
-    // 3. FITUR PENCARIAN (SEARCH)
-    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/id/search/$query"
-        val document = app.get(url).document
+        val document = app.get(url, headers = headers).document
 
         return document.select("div.thumbnail").mapNotNull { 
             toSearchResult(it) 
         }
     }
 
-    // Fungsi pembantu untuk mengubah elemen HTML "thumbnail" menjadi SearchResponse
     private fun toSearchResult(element: Element): SearchResponse? {
         val href = element.selectFirst("a")?.attr("href") ?: return null
-        
-        // FIX 4: Pengambilan Judul dan Gambar yang lebih kuat (fallback berjenjang)
         val title = element.selectFirst("a.text-secondary")?.text() 
             ?: element.selectFirst("img")?.attr("alt") 
             ?: return null
@@ -80,18 +68,14 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // ==========================================
-    // 4. HALAMAN DETAIL (LOAD)
-    // ==========================================
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, headers = headers).document
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: "Tanpa Judul"
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
         
         val year = document.selectFirst("div.text-secondary time")?.text()?.split("-")?.firstOrNull()?.toIntOrNull()
-        
         val tags = document.select("div.text-secondary:contains(Genre:) a").map { it.text() }
         val actorsList = document.select("div.text-secondary:contains(Aktris:) a, div.text-secondary:contains(Aktor:) a").map { it.text() }
 
@@ -104,16 +88,13 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // ==========================================
-    // 5. MENGEKSTRAK LINK VIDEO PLAYER (LOAD LINKS)
-    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val html = app.get(data).text
+        val html = app.get(data, headers = headers).text
 
         val uuidRegex = Regex("""([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[\\/]+seek""")
         val match = uuidRegex.find(html)
@@ -134,7 +115,6 @@ class MissAvProvider : MainAPI() {
                 }
             )
         }
-
         return true
     }
 }
