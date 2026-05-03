@@ -55,19 +55,22 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // 3. LANGSUNG lempar link master playlist ke player. Bypass M3u8Helper!
+            // 3. Menentukan tipe video: M3U8 atau MP4 biasa
             val isM3u8Stream = videoUrl.contains(".m3u8") || videoUrl.contains(".json")
-            
+            val linkType = if (isM3u8Stream) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+
+            // 4. Menggunakan newExtractorLink sesuai aturan Cloudstream terbaru
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    referer = "https://z1.idlixku.com/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = isM3u8Stream,
-                    headers = streamHeaders
-                )
+                    type = linkType
+                ) {
+                    this.referer = "https://z1.idlixku.com/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = streamHeaders
+                }
             )
 
         } catch (e: Exception) { 
