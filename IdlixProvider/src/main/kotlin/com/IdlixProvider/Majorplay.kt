@@ -19,73 +19,63 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengambil token 'claim' dari URL iframe palsu yang dikirim IdlixProvider
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // Mengirim request POST dengan parameter 'json'
+            // 1. Gunakan User-Agent lengkap layaknya browser HP asli agar lolos anti-bot
+            val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
                     "Referer" to "https://z1.idlixku.com/",
                     "Accept" to "*/*",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                    "User-Agent" to userAgent
                 ),
                 json = mapOf("claim" to claimToken)
-            ).parsedSafe<NewMajorplayResponse>()
-            
-            // Mengekstrak daftar subtitle menggunakan 'for' loop standar dan 'newSubtitleFile'
-            val subs = response?.subtitles
-            if (subs != null) {
-                for (sub in subs) {
-                    val lang = sub.label ?: sub.lang ?: "Indonesian"
-                    val subUrl = sub.path ?: continue
-                    subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
-                }
-            }
+            ).parsedSafe<NewMajorplayResponse>() ?: return
 
-            // Mengambil link video
-            val videoUrl = response?.url ?: return
+            val videoUrl = response.url ?: return
             
+            // Header super ketat untuk player video
             val streamHeaders = mapOf(
                 "Origin" to "https://z1.idlixku.com",
                 "Referer" to "https://z1.idlixku.com/",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+                "User-Agent" to userAgent,
                 "Accept" to "*/*"
             )
 
-            // Mengirimkan link stream ini agar bisa diputar di aplikasi Cloudstream
-            // UPDATE: Pengecekan .json agar playlist m3u8 dari Guravia terekstrak dengan resolusi lengkap
-            if (videoUrl.contains(".m3u8") || videoUrl.contains(".json")) {
-                M3u8Helper.generateM3u8(
-                    source = name,
-                    streamUrl = videoUrl,
-                    referer = "https://z1.idlixku.com/",
-                    headers = streamHeaders
-                ).forEach { parsedLink ->
-                    callback.invoke(parsedLink)
-                }
-            } else {
-                 callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://z1.idlixku.com/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = streamHeaders
-                    }
+            // 2. Ambil dan kirim subtitle ke player
+            response.subtitles?.forEach { sub ->
+                val subUrl = sub.path ?: return@forEach
+                val subLang = sub.label ?: sub.lang ?: "Unknown"
+                subtitleCallback.invoke(
+                    SubtitleFile(subLang, subUrl)
                 )
             }
+
+            // 3. LANGSUNG lempar link master playlist ke player. Bypass M3u8Helper!
+            val isM3u8Stream = videoUrl.contains(".m3u8") || videoUrl.contains(".json")
+            
+            callback.invoke(
+                ExtractorLink(
+                    source = name,
+                    name = name,
+                    url = videoUrl,
+                    referer = "https://z1.idlixku.com/",
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = isM3u8Stream,
+                    headers = streamHeaders
+                )
+            )
+
         } catch (e: Exception) { 
-             Log.e("adixtream", "Majorplay Error: ${e.message}") 
+            Log.e("adixtream", "Majorplay Error: ${e.message}") 
         }
     }
 
-    // Struktur Data (JSON)
+    // Struktur Data API
     data class NewMajorplayResponse(
         @JsonProperty("code") val code: String? = null,
         @JsonProperty("url") val url: String? = null, 
