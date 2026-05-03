@@ -22,15 +22,18 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            val actualReferer = referer ?: "https://z1.idlixku.com/"
+            // 1. WAJIB menggunakan User-Agent panjang agar tidak dikira bot oleh CDN
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            
+            // 2. WAJIB menggunakan Root Domain sebagai Referer. 
+            // Jika menggunakan link episode full, server Guravia akan memberikan Error 403.
+            val rootDomain = "https://z1.idlixku.com/"
 
-            // Saat meminta token (API /play), kita tetap harus pakai header lengkap
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to "https://z1.idlixku.com",
-                    "Referer" to actualReferer,
+                    "Referer" to rootDomain,
                     "Accept" to "*/*",
                     "User-Agent" to userAgent
                 ),
@@ -39,10 +42,12 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
-            // KUNCI JAWABAN DARI SCREENSHOT:
-            // Kosongkan Origin dan Referer untuk stream video! Cukup User-Agent saja.
+            // 3. Header murni yang akan dipakai ExoPlayer untuk menyedot kepingan videonya
             val streamHeaders = mapOf(
-                "User-Agent" to userAgent
+                "Origin" to "https://z1.idlixku.com",
+                "Referer" to rootDomain,
+                "User-Agent" to userAgent,
+                "Accept" to "*/*"
             )
 
             response.subtitles?.forEach { sub ->
@@ -53,18 +58,16 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            val isM3u8Stream = videoUrl.contains(".m3u8") || videoUrl.contains(".json")
-            val linkType = if (isM3u8Stream) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-
-            // Menggunakan ExtractorLink bawaan Cloudstream (tanpa M3u8Helper)
+            // 4. WAJIB menggunakan ExtractorLinkType.VIDEO agar tidak crash di M3u8Helper.
+            // Jangan khawatir, ExoPlayer sangat pintar dan akan otomatis mengenalinya sebagai HLS (M3U8).
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = linkType
+                    type = ExtractorLinkType.VIDEO
                 ) {
-                    // Sengaja TIDAK MENGISI this.referer agar ExoPlayer tidak membocorkannya ke CDN
+                    this.referer = rootDomain
                     this.quality = Qualities.Unknown.value
                     this.headers = streamHeaders
                 }
