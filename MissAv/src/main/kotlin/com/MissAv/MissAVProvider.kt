@@ -49,6 +49,7 @@ class MissAvProvider : MainAPI() {
             }
 
             val img = element.selectFirst("img")
+            // Menggunakan cover-t.jpg agar gambar pas di slot Horizontal (Landscape)
             val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
 
             newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
@@ -70,7 +71,7 @@ class MissAvProvider : MainAPI() {
             
             return newHomePageResponse(
                 list = listOf(HomePageList(request.name, videos, isHorizontalImages = true)),
-                // Jika videonya ada 10 atau lebih, CloudStream akan otomatis membuka kunci untuk memuat halaman berikutnya!
+                // Jika videonya ada 10 atau lebih, CloudStream otomatis membuka kunci halaman berikutnya!
                 hasNext = videos.size >= 10 
             )
         } catch (e: Exception) {
@@ -100,6 +101,7 @@ class MissAvProvider : MainAPI() {
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
         val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
+        // Tembak 3 link pertama dari Aktris/Genre untuk mengumpulkan saran film
         val recUrls = document.select("a[href*=/genres/], a[href*=/actresses/]")
             .mapNotNull { it.attr("href") }
             .distinct()
@@ -160,14 +162,15 @@ class MissAvProvider : MainAPI() {
         }
 
         if (m3u8Url != null) {
+            // FIX: Menggunakan newExtractorLink sesuai peringatan Deprecated API terbaru
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
                     referer = data, 
                     quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8 
+                    isM3u8 = true
                 )
             )
             return true
