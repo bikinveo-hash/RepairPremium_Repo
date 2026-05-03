@@ -9,7 +9,7 @@ class MissAvProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     
-    // PENTING: Pastikan opsi "Show NSFW content" di Pengaturan CloudStream aktif!
+    // Pastikan "Show NSFW content" di Pengaturan CloudStream kamu selalu aktif
     override val supportedTypes = setOf(TvType.NSFW)
     
     // Memicu WebView ketika terkena validasi captcha Cloudflare
@@ -30,16 +30,13 @@ class MissAvProvider : MainAPI() {
     // 1. HALAMAN DEPAN (Home Page)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Cukup 1x request ke halaman utama
         val document = app.get("$mainUrl/id", headers = headers).document
-        
         val items = ArrayList<HomePageList>()
 
-        // Cari semua container yang punya judul h2 (Keluaran Terbaru, dll)
         document.select("div.sm\\:container:has(h2)").forEach { section ->
             val sectionTitle = section.selectFirst("h2")?.text()?.trim() ?: return@forEach
             
-            // Abaikan bagian rekomendasi (karena isinya di-load via API JavaScript Recombee)
+            // Abaikan bagian rekomendasi bawaan yg dikunci API
             if (sectionTitle.contains("Memuat", true) || sectionTitle.contains("Direkomendasikan", true)) {
                 return@forEach
             }
@@ -49,26 +46,27 @@ class MissAvProvider : MainAPI() {
                 val title = titleElement.text().trim()
                 val videoUrl = titleElement.attr("href")
 
-                // Lewati template Alpine.js yang kosong
                 if (title.isEmpty() || videoUrl.contains("javascript:") || videoUrl == "#") {
                     return@mapNotNull null
                 }
 
                 val img = element.selectFirst("img")
-                val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+                var posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+                
+                // TRIK GAMBAR TAJAM: Ubah cover-t (Thumbnail/Blur) menjadi cover-n (Normal/Tajam)
+                posterUrl = posterUrl?.replace("cover-t.jpg", "cover-n.jpg")
 
                 newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
                     this.posterUrl = posterUrl
                 }
             }
             
-            // Jika container ini punya video, tambahkan ke layar beranda
             if (videos.isNotEmpty()) {
-                items.add(HomePageList(sectionTitle, videos))
+                // TRIK POSTER HORIZONTAL: Tambahkan parameter isHorizontalImages = true
+                items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true))
             }
         }
 
-        // Alarm jika murni diblokir Cloudflare
         if (items.isEmpty()) {
             throw Error("Gagal memuat data. Coba klik 'Buka di Peramban' untuk melewati verifikasi Cloudflare.")
         }
@@ -80,16 +78,13 @@ class MissAvProvider : MainAPI() {
     // 2. FITUR PENCARIAN (Search)
     // ==========================================
     override suspend fun search(query: String): List<SearchResponse>? {
-        // Ubah spasi menjadi format URL yang aman (+) agar request tidak ditolak
         val formattedQuery = query.replace(" ", "+")
         val searchUrl = "$mainUrl/id/search/$formattedQuery"
         
         val document = app.get(searchUrl, headers = headers).document
 
-        // Ambil elemen div.thumbnail secara langsung
         return document.select("div.thumbnail").mapNotNull { element ->
             val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
-            
             val title = titleElement.text().trim()
             val videoUrl = titleElement.attr("href")
             
@@ -98,7 +93,8 @@ class MissAvProvider : MainAPI() {
             }
             
             val img = element.selectFirst("img")
-            val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+            var posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+            posterUrl = posterUrl?.replace("cover-t.jpg", "cover-n.jpg") // Gambar tajam
 
             newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
                 this.posterUrl = posterUrl
@@ -112,47 +108,40 @@ class MissAvProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
-        // Ambil data super akurat dari OpenGraph Meta Tags
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: return null
         val posterUrl = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
-
-        // Ambil Tags/Genre dan Aktor
         val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
-        // --- TRIK MENDAPATKAN SARAN FILM (RECOMMENDATIONS) ---
-        // Karena API bawaannya ribet, kita "pinjam" video dari fitur Pencarian!
-        // Ambil nama Aktris pertama, jika tidak ada, ambil Genre pertama.
-        val actressOrGenre = document.selectFirst("a[href*=/actresses/]")?.text()?.trim() 
-            ?: document.selectFirst("a[href*=/genres/]")?.text()?.trim()
+        // --- TRIK MENDAPATKAN BANYAK SARAN FILM ---
+        // Kita kunjungi link profil aktris (atau genre) secara langsung!
+        val targetRecUrl = document.selectFirst("a[href*=/actresses/]")?.attr("href") 
+            ?: document.selectFirst("a[href*=/genres/]")?.attr("href")
 
         var recommendations: List<SearchResponse>? = null
 
-        if (actressOrGenre != null) {
+        if (targetRecUrl != null) {
             try {
-                val formattedQuery = actressOrGenre.replace(" ", "+")
-                val searchUrl = "$mainUrl/id/search/$formattedQuery"
-                val recDoc = app.get(searchUrl, headers = headers).document
-
+                val recDoc = app.get(targetRecUrl, headers = headers).document
                 recommendations = recDoc.select("div.thumbnail").mapNotNull { element ->
                     val recTitleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
                     val recTitle = recTitleElement.text().trim()
                     val recVideoUrl = recTitleElement.attr("href")
 
-                    // Lewati jika kosong, template js, atau URL sama dengan video yang sedang ditonton
                     if (recTitle.isEmpty() || recVideoUrl.contains("javascript:") || recVideoUrl == "#" || recVideoUrl == url) {
                         return@mapNotNull null
                     }
 
                     val img = element.selectFirst("img")
-                    val recPosterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+                    var recPosterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+                    recPosterUrl = recPosterUrl?.replace("cover-t.jpg", "cover-n.jpg") // Gambar tajam
 
                     newMovieSearchResponse(recTitle, recVideoUrl, TvType.NSFW) {
                         this.posterUrl = recPosterUrl
                     }
                 }
             } catch (e: Exception) {
-                // Abaikan jika pencarian saran gagal agar halaman utama tetap bisa terbuka
+                // Abaikan jika pencarian saran gagal
             }
         }
 
@@ -160,7 +149,6 @@ class MissAvProvider : MainAPI() {
             this.posterUrl = posterUrl
             this.plot = plot
             this.tags = tags
-            // Sematkan video rekomendasi ke sini agar tombol/tab saran film muncul!
             this.recommendations = recommendations
         }
     }
@@ -177,15 +165,11 @@ class MissAvProvider : MainAPI() {
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
-        // Cari script yang di-pack (biasanya diawali eval(function(p,a,c,k,e,d))
         val scriptElements = document.select("script")
         for (script in scriptElements) {
             val scriptText = script.data()
             if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
-                // Bongkar enkripsi scriptnya menggunakan Extractor Api CloudStream
                 val unpacked = getAndUnpack(scriptText)
-                
-                // Cari URL playlist.m3u8 pakai Regex
                 val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
                 if (match != null) {
                     m3u8Url = match.value
@@ -194,7 +178,6 @@ class MissAvProvider : MainAPI() {
             }
         }
         
-        // Jika videonya tidak di-pack, kita cari langsung di seluruh HTML sebagai cadangan
         if (m3u8Url == null) {
             val html = document.html()
             val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
@@ -203,15 +186,14 @@ class MissAvProvider : MainAPI() {
             }
         }
 
-        // Kalau ketemu, kita kirim linknya ke player CloudStream
         if (m3u8Url != null) {
             callback.invoke(
                 ExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
-                    referer = data, // Sangat penting agar tidak diblokir surrit.com
-                    quality = Qualities.Unknown.value, // Exoplayer akan mengurus resolusinya otomatis
+                    referer = data, 
+                    quality = Qualities.Unknown.value,
                     type = ExtractorLinkType.M3U8 
                 )
             )
