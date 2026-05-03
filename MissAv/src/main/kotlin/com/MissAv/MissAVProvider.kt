@@ -2,7 +2,6 @@ package com.MissAv
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Document
 
 class MissAvProvider : MainAPI() {
     override var name = "MissAv"
@@ -10,20 +9,10 @@ class MissAvProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     
-    // Dikembalikan ke NSFW sesuai kodratnya (Pastikan "Show NSFW" di Pengaturan CloudStream aktif ya bro!)
+    // Dikembalikan ke habitat aslinya: NSFW
     override val supportedTypes = setOf(TvType.NSFW)
+    
     override val usesWebView = true 
-
-    // Header ajaib untuk menipu Cloudflare agar mengira kita adalah browser HP asli
-    private val headers = mapOf(
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-        "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-        "sec-ch-ua-mobile" to "?1",
-        "sec-ch-ua-platform" to "\"Android\"",
-        "Upgrade-Insecure-Requests" to "1"
-    )
 
     // ==========================================
     // 1. HALAMAN DEPAN (Home Page)
@@ -31,14 +20,14 @@ class MissAvProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = ArrayList<HomePageList>()
         
-        // 1. Ambil halaman utama untuk membaca menu navigasi (Mencuri URL server dmXYZ terbaru)
-        val document = app.get("$mainUrl/id", headers = headers).document
+        // LANGKAH 1: Kita singgah sebentar di halaman utama untuk 'mencuri' link kategori dengan kode DM terbaru (contoh: dm628)
+        val mainDoc = app.get("$mainUrl/id").document
         
-        // Trik jitu: Cari link yang "berakhiran" (/release, /new, /uncensored-leak)
-        val urlRelease = document.selectFirst("a[href\$=/release]")?.attr("href") ?: "$mainUrl/id/release"
-        val urlNew = document.selectFirst("a[href\$=/new]")?.attr("href") ?: "$mainUrl/id/new"
-        val urlUncensored = document.selectFirst("a[href\$=/uncensored-leak]")?.attr("href") ?: "$mainUrl/id/uncensored-leak"
+        val urlRelease = mainDoc.select("a:contains(Keluaran terbaru)").attr("href").takeIf { it.isNotBlank() } ?: "$mainUrl/id/release"
+        val urlNew = mainDoc.select("a:contains(Recent update)").attr("href").takeIf { it.isNotBlank() } ?: "$mainUrl/id/new"
+        val urlUncensored = mainDoc.select("a:contains(Kebocoran tanpa sensor)").attr("href").takeIf { it.isNotBlank() } ?: "$mainUrl/id/uncensored-leak"
 
+        // LANGKAH 2: Masukkan link yang sudah akurat ke dalam daftar scraping kita
         val urls = listOf(
             Pair("Keluaran Terbaru", urlRelease),
             Pair("Baru Ditambahkan", urlNew),
@@ -47,22 +36,24 @@ class MissAvProvider : MainAPI() {
 
         for ((name, url) in urls) {
             try {
-                // 2. Tembak langsung ke server kategorinya
-                val catDoc = app.get(url, headers = headers).document
+                // Tembak halamannya
+                val document = app.get(url).document
                 
-                val videos = catDoc.select("div.thumbnail").mapNotNull { element ->
+                val videos = document.select("div.thumbnail").mapNotNull { element ->
                     val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
+                    
                     val title = titleElement.text().trim()
                     val videoUrl = titleElement.attr("href")
-
-                    // Lewati kerangka kosong bawaan template
+                    
+                    // Lewati template Alpine.js yang kosong
                     if (title.isEmpty() || videoUrl.contains("javascript:") || videoUrl == "#") {
                         return@mapNotNull null
                     }
-
+                    
                     val img = element.selectFirst("img")
-                    val posterUrl = img?.attr("data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("src")
+                    val posterUrl = img?.attr("data-src")?.takeIf { it.isNotEmpty() } ?: img?.attr("src")
 
+                    // Pastikan menggunakan TvType.NSFW
                     newMovieSearchResponse(title, videoUrl, TvType.NSFW) {
                         this.posterUrl = posterUrl
                     }
@@ -72,22 +63,21 @@ class MissAvProvider : MainAPI() {
                     items.add(HomePageList(name, videos))
                 }
             } catch (e: Exception) {
-                // Abaikan jika satu gagal, biarkan yang lain tetap jalan
+                // Biarkan saja kalau ada 1 kategori yang gagal, lanjut ke kategori berikutnya
             }
         }
 
-        if (items.isEmpty()) {
-            throw Error("Halaman kosong. Kemungkinan dicegat Cloudflare.")
-        }
-
-        return newHomePageResponse(items, hasNext = false)
+        return newHomePageResponse(
+            list = items,
+            hasNext = false
+        )
     }
 
     // ==========================================
     // 2. HALAMAN DETAIL (Load Info)
     // ==========================================
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers).document
+        val document = app.get(url).document
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content") ?: return null
         val posterUrl = document.selectFirst("meta[property=og:image]")?.attr("content")
@@ -111,7 +101,7 @@ class MissAvProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers).document
+        val document = app.get(data).document
         var m3u8Url: String? = null
 
         val scriptElements = document.select("script")
