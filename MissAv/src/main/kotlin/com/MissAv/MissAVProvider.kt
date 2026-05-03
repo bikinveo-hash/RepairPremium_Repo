@@ -25,6 +25,17 @@ class MissAvProvider : MainAPI() {
     )
 
     // ==========================================
+    // DAFTAR KATEGORI (Otomatis dibuatkan Tab/Baris oleh CloudStream)
+    // ==========================================
+    override val mainPage = mainPageOf(
+        "$mainUrl/id/release" to "Keluaran Terbaru",
+        "$mainUrl/id/new" to "Baru Ditambahkan",
+        "$mainUrl/id/uncensored-leak" to "Kebocoran Tanpa Sensor",
+        "$mainUrl/id/monthly-hot" to "Paling Populer Bulan Ini",
+        "$mainUrl/id/siro" to "Koleksi Amatir SIRO"
+    )
+
+    // ==========================================
     // FUNGSI BANTUAN UNTUK EKSTRAK VIDEO
     // ==========================================
     private fun parseVideos(document: Element): List<SearchResponse> {
@@ -47,75 +58,24 @@ class MissAvProvider : MainAPI() {
     }
 
     // ==========================================
-    // 1. HALAMAN DEPAN & KATEGORI SCROLL
+    // 1. HALAMAN DEPAN & INFINITE SCROLL
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val items = ArrayList<HomePageList>()
-
-        // --- LOGIKA HALAMAN KATEGORI (Scroll Terus Ke Bawah) ---
-        if (request.name.isNotBlank()) {
-            // Kita terjemahkan Nama Kategori yang diklik menjadi URL yang benar
-            val pageUrl = when {
-                request.name.contains("Keluaran", ignoreCase = true) -> "$mainUrl/id/release?page=$page"
-                request.name.contains("Recent", ignoreCase = true) -> "$mainUrl/id/new?page=$page"
-                request.name.contains("Tanpa Sensor", ignoreCase = true) -> "$mainUrl/id/uncensored-leak?page=$page"
-                else -> "$mainUrl/id/release?page=$page" // Default
-            }
+        // Logika Pintar: Kalau page 1, buka URL asli. Kalau page 2 dst, tambahkan ?page=X
+        val pageUrl = if (page == 1) request.data else "${request.data}?page=$page"
+        
+        try {
+            val document = app.get(pageUrl, headers = headers).document
+            val videos = parseVideos(document)
             
-            try {
-                val document = app.get(pageUrl, headers = headers).document
-                val videos = parseVideos(document)
-                
-                if (videos.isNotEmpty()) {
-                    items.add(HomePageList(request.name, videos, isHorizontalImages = true))
-                }
-                
-                // Kalau video di halaman ini masih 10 atau lebih, berarti bisa lanjut ke halaman berikutnya
-                val hasNext = videos.size >= 10
-                return newHomePageResponse(items, hasNext = hasNext)
-            } catch (e: Exception) {
-                return newHomePageResponse(items, hasNext = false)
-            }
-        }
-
-        // --- LOGIKA BERANDA UTAMA (Awal Buka Aplikasi) ---
-        try {
-            val document = app.get("$mainUrl/id", headers = headers).document
-            document.select("div.sm\\:container:has(h2)").forEach { section ->
-                val sectionTitle = section.selectFirst("h2")?.text()?.trim() ?: return@forEach
-                
-                if (sectionTitle.contains("Memuat", true) || sectionTitle.contains("Direkomendasikan", true)) {
-                    return@forEach
-                }
-
-                val videos = parseVideos(section)
-                if (videos.isNotEmpty()) {
-                    // BEBAS ERROR: Tanpa parameter url=
-                    items.add(HomePageList(sectionTitle, videos, isHorizontalImages = true))
-                }
-            }
+            return newHomePageResponse(
+                list = listOf(HomePageList(request.name, videos, isHorizontalImages = true)),
+                // Jika videonya ada 10 atau lebih, CloudStream akan otomatis membuka kunci untuk memuat halaman berikutnya!
+                hasNext = videos.size >= 10 
+            )
         } catch (e: Exception) {
-            // Abaikan jika error
+            return newHomePageResponse(emptyList(), hasNext = false)
         }
-
-        // KATEGORI KHUSUS: Kebocoran Tanpa Sensor
-        try {
-            val uncensoredUrl = "$mainUrl/id/uncensored-leak"
-            val uncensoredDoc = app.get(uncensoredUrl, headers = headers).document
-            val uncensoredVideos = parseVideos(uncensoredDoc)
-            if (uncensoredVideos.isNotEmpty()) {
-                // BEBAS ERROR: Tanpa parameter url=
-                items.add(HomePageList("Kebocoran Tanpa Sensor", uncensoredVideos, isHorizontalImages = true))
-            }
-        } catch (e: Exception) {
-            // Abaikan jika error
-        }
-
-        if (items.isEmpty()) {
-            throw Error("Gagal memuat data. Coba klik 'Buka di Peramban' untuk verifikasi Cloudflare.")
-        }
-
-        return newHomePageResponse(items, hasNext = false)
     }
 
     // ==========================================
@@ -140,7 +100,6 @@ class MissAvProvider : MainAPI() {
         val plot = document.selectFirst("meta[property=og:description]")?.attr("content")
         val tags = document.select("a[href*=/genres/], a[href*=/actresses/]").map { it.text().trim() }
 
-        // --- TRIK MENDAPATKAN BANYAK SARAN FILM ---
         val recUrls = document.select("a[href*=/genres/], a[href*=/actresses/]")
             .mapNotNull { it.attr("href") }
             .distinct()
