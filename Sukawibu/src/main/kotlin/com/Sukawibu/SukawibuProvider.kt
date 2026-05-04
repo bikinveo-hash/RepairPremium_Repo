@@ -127,26 +127,22 @@ class SukawibuProvider : MainAPI() {
                 val unpackedJs = JsUnpacker(iframeHtml).unpack()
                 
                 if (unpackedJs != null) {
+                    
                     // 3. Menangkap URL video (.m3u8)
                     val m3u8Regex = """(["'])([^"']+\.m3u8[^"']*)\1""".toRegex()
                     val m3u8Match = m3u8Regex.find(unpackedJs)
                     
                     if (m3u8Match != null) {
-                        var videoLink = m3u8Match.groupValues[2]
+                        val extractedVideo = m3u8Match.groupValues[2]
                         
-                        // --- PERBAIKAN URL RELATIF MULAI ---
-                        if (videoLink.startsWith("//")) {
-                            videoLink = "https:$videoLink"
-                        } else if (videoLink.startsWith("/")) {
-                            val uri = URI(iframeUrl)
-                            val baseDomain = "${uri.scheme}://${uri.host}"
-                            videoLink = "$baseDomain$videoLink"
-                        } else if (!videoLink.startsWith("http")) {
-                            videoLink = fixUrl(videoLink) 
+                        // PERBAIKAN: Jadikan link video Absolute (Lengkap)
+                        val videoLink = if (extractedVideo.startsWith("http")) {
+                            extractedVideo
+                        } else {
+                            URI(iframeUrl).resolve(extractedVideo).toString()
                         }
-                        // --- PERBAIKAN URL RELATIF SELESAI ---
                         
-                        // 4. Kirim link video ke pemutar aplikasi menggunakan format newExtractorLink
+                        // 4. Kirim link video ke pemutar aplikasi
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
@@ -163,7 +159,14 @@ class SukawibuProvider : MainAPI() {
                     // 5. Menangkap URL Subtitle (.vtt)
                     val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
                     vttRegex.findAll(unpackedJs).forEach { match ->
-                        val subUrl = match.groupValues[2]
+                        val extractedSub = match.groupValues[2]
+                        
+                        // PERBAIKAN: Jadikan link subtitle Absolute (Lengkap) juga
+                        val subUrl = if (extractedSub.startsWith("http")) {
+                            extractedSub
+                        } else {
+                            URI(iframeUrl).resolve(extractedSub).toString()
+                        }
                         
                         // Kirim link subtitle ke pemutar aplikasi
                         subtitleCallback.invoke(
