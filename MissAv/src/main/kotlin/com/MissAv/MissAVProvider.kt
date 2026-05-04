@@ -26,7 +26,7 @@ class MissAvProvider : MainAPI() {
     )
 
     // ==========================================
-    // DAFTAR KATEGORI (Otomatis dibuatkan Tab/Baris oleh CloudStream)
+    // DAFTAR KATEGORI
     // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/release" to "Keluaran Terbaru",
@@ -83,7 +83,6 @@ class MissAvProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
         
-        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
         val searchUrl = if (page == 1) {
             "$mainUrl/id/search/$formattedQuery"
         } else {
@@ -93,7 +92,6 @@ class MissAvProvider : MainAPI() {
         val document = app.get(searchUrl, headers = headers).document
         val videos = parseVideos(document)
         
-        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
         return newSearchResponseList(
             list = videos,
             hasNext = videos.isNotEmpty()
@@ -149,7 +147,6 @@ class MissAvProvider : MainAPI() {
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
-        // WADAH PENCEGAH SUBTITLE DUPLIKAT (Dari Sukawibu)
         val addedSubtitles = mutableSetOf<String>()
 
         val scriptElements = document.select("script")
@@ -158,18 +155,17 @@ class MissAvProvider : MainAPI() {
             if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
                 val unpacked = getAndUnpack(scriptText)
                 
-                // 1. Menangkap Video
+                // Menangkap URL Video (.m3u8)
                 val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
                 if (match != null) {
                     m3u8Url = match.value
                 }
 
-                // 2. Menangkap Subtitle (.vtt) di dalam script
+                // Menangkap Subtitle (.vtt) & menambah header Origin/Referer
                 val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
                 vttRegex.findAll(unpacked).forEach { vttMatch ->
                     val extractedSub = vttMatch.groupValues[2]
                     
-                    // Jadikan link absolut jika masih relatif
                     val subUrl = if (extractedSub.startsWith("http")) {
                         extractedSub
                     } else {
@@ -177,8 +173,19 @@ class MissAvProvider : MainAPI() {
                     }
                     
                     if (addedSubtitles.add(subUrl)) {
+                        val uri = URI(data)
+                        val originDomain = "${uri.scheme}://${uri.host}"
+                        
                         subtitleCallback.invoke(
-                            SubtitleFile("Indonesia", subUrl)
+                            SubtitleFile(
+                                lang = "Indonesia",
+                                url = subUrl,
+                                headers = mapOf(
+                                    "Referer" to data,
+                                    "Origin" to originDomain,
+                                    "Accept" to "*/*"
+                                )
+                            )
                         )
                     }
                 }
@@ -187,17 +194,15 @@ class MissAvProvider : MainAPI() {
             }
         }
         
-        // JIKA video tidak ketemu di script, cari di HTML
+        // JIKA video tidak ketemu di script, cari di HTML biasa (Fallback)
         if (m3u8Url == null) {
             val html = document.html()
             
-            // 3. Menangkap Video dari HTML
             val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
             if (match != null) {
                 m3u8Url = match.value
             }
 
-            // 4. Menangkap Subtitle (.vtt) dari HTML (Sebagai Cadangan)
             val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
             vttRegex.findAll(html).forEach { vttMatch ->
                 val extractedSub = vttMatch.groupValues[2]
@@ -209,15 +214,25 @@ class MissAvProvider : MainAPI() {
                 }
                 
                 if (addedSubtitles.add(subUrl)) {
+                    val uri = URI(data)
+                    val originDomain = "${uri.scheme}://${uri.host}"
+                    
                     subtitleCallback.invoke(
-                        SubtitleFile("Indonesia", subUrl)
+                        SubtitleFile(
+                            lang = "Indonesia",
+                            url = subUrl,
+                            headers = mapOf(
+                                "Referer" to data,
+                                "Origin" to originDomain,
+                                "Accept" to "*/*"
+                            )
+                        )
                     )
                 }
             }
         }
 
         if (m3u8Url != null) {
-            // Menggunakan pola Lambda Builder dari API CloudStream terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
