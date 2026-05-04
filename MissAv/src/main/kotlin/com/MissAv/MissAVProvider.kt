@@ -3,7 +3,6 @@ package com.MissAv
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URI
 
 class MissAvProvider : MainAPI() {
     override var name = "MissAv"
@@ -26,7 +25,7 @@ class MissAvProvider : MainAPI() {
     )
 
     // ==========================================
-    // DAFTAR KATEGORI
+    // DAFTAR KATEGORI (Otomatis dibuatkan Tab/Baris oleh CloudStream)
     // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/release" to "Keluaran Terbaru",
@@ -83,6 +82,7 @@ class MissAvProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
         
+        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
         val searchUrl = if (page == 1) {
             "$mainUrl/id/search/$formattedQuery"
         } else {
@@ -92,6 +92,7 @@ class MissAvProvider : MainAPI() {
         val document = app.get(searchUrl, headers = headers).document
         val videos = parseVideos(document)
         
+        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
         return newSearchResponseList(
             list = videos,
             hasNext = videos.isNotEmpty()
@@ -147,90 +148,29 @@ class MissAvProvider : MainAPI() {
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
-        val addedSubtitles = mutableSetOf<String>()
-
         val scriptElements = document.select("script")
         for (script in scriptElements) {
             val scriptText = script.data()
             if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
                 val unpacked = getAndUnpack(scriptText)
-                
-                // Menangkap URL Video (.m3u8)
                 val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
                 if (match != null) {
                     m3u8Url = match.value
+                    break
                 }
-
-                // Menangkap Subtitle (.vtt) & menambah header Origin/Referer
-                val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
-                vttRegex.findAll(unpacked).forEach { vttMatch ->
-                    val extractedSub = vttMatch.groupValues[2]
-                    
-                    val subUrl = if (extractedSub.startsWith("http")) {
-                        extractedSub
-                    } else {
-                        URI(data).resolve(extractedSub).toString()
-                    }
-                    
-                    if (addedSubtitles.add(subUrl)) {
-                        val uri = URI(data)
-                        val originDomain = "${uri.scheme}://${uri.host}"
-                        
-                        // FIX: Memakai newSubtitleFile sesuai standar API Cloudstream
-                        subtitleCallback.invoke(
-                            newSubtitleFile("Indonesia", subUrl) {
-                                this.headers = mapOf(
-                                    "Referer" to data,
-                                    "Origin" to originDomain,
-                                    "Accept" to "*/*"
-                                )
-                            }
-                        )
-                    }
-                }
-                
-                if (m3u8Url != null) break
             }
         }
         
-        // JIKA video tidak ketemu di script, cari di HTML biasa (Fallback)
         if (m3u8Url == null) {
             val html = document.html()
-            
             val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
             if (match != null) {
                 m3u8Url = match.value
             }
-
-            val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
-            vttRegex.findAll(html).forEach { vttMatch ->
-                val extractedSub = vttMatch.groupValues[2]
-                
-                val subUrl = if (extractedSub.startsWith("http")) {
-                    extractedSub
-                } else {
-                    URI(data).resolve(extractedSub).toString()
-                }
-                
-                if (addedSubtitles.add(subUrl)) {
-                    val uri = URI(data)
-                    val originDomain = "${uri.scheme}://${uri.host}"
-                    
-                    // FIX: Memakai newSubtitleFile sesuai standar API Cloudstream
-                    subtitleCallback.invoke(
-                        newSubtitleFile("Indonesia", subUrl) {
-                            this.headers = mapOf(
-                                "Referer" to data,
-                                "Origin" to originDomain,
-                                "Accept" to "*/*"
-                            )
-                        }
-                    )
-                }
-            }
         }
 
         if (m3u8Url != null) {
+            // FIX: Menggunakan pola Lambda Builder dari API CloudStream terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
