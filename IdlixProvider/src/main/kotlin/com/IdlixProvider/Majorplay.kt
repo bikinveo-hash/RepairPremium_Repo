@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.*
 
 class Majorplay : ExtractorApi() {
@@ -22,14 +21,18 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
+            // Mengambil referer dinamis dari IdlixProvider (biasanya https://z1.idlixku.com/)
             val actualReferer = referer ?: "https://z1.idlixku.com/"
+            // Menentukan Origin dari referer (membuang path belakangnya)
+            val actualOrigin = actualReferer.trimEnd('/') 
+            
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-            // 1. API Token: Menggunakan referer dari web Idlix karena API dipanggil oleh web induk
+            // 1. Menukar Token Claim
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
-                    "Origin" to "https://z1.idlixku.com",
+                    "Origin" to actualOrigin,
                     "Referer" to actualReferer,
                     "Accept" to "*/*",
                     "User-Agent" to userAgent
@@ -39,15 +42,16 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
-            // 2. KUNCI JAWABAN: Header Video HARUS menggunakan identitas Iframe Majorplay!
-            // Jika pakai idlixku, Cloudflare CDN Guravia akan memblokir segmen video (Error 403).
+            // 2. KUNCI JAWABAN TERBARU: 
+            // Header video sekarang WAJIB menggunakan identitas web induk (Idlix), bukan Majorplay!
             val streamHeaders = mapOf(
-                "Origin" to "https://e2e.majorplay.net",
-                "Referer" to "https://e2e.majorplay.net/",
+                "Origin" to actualOrigin,
+                "Referer" to actualReferer,
                 "User-Agent" to userAgent,
                 "Accept" to "*/*"
             )
 
+            // Mengambil Subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -56,16 +60,15 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // 3. Menggunakan ExtractorLinkType.M3U8 sesuai petunjuk 'newExtractorLink'
-            // Abaikan warning 'M3u8 must contains TS files' di logcat, itu hanya background task thumbnail!
+            // 3. Melempar file config.json/M3U8 ke ExoPlayer
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = ExtractorLinkType.M3U8
+                    type = ExtractorLinkType.M3U8 // Otomatis membaca segmen "gambar palsu" g5.xxx
                 ) {
-                    this.referer = "https://e2e.majorplay.net/" // <- WAJIB MAJORPLAY
+                    this.referer = actualReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = streamHeaders
                 }
