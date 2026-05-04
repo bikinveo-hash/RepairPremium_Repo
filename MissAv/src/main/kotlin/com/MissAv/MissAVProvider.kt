@@ -176,16 +176,15 @@ class MissAvProvider : MainAPI() {
                         val uri = URI(data)
                         val originDomain = "${uri.scheme}://${uri.host}"
                         
+                        // FIX: Memakai newSubtitleFile sesuai standar API Cloudstream
                         subtitleCallback.invoke(
-                            SubtitleFile(
-                                lang = "Indonesia",
-                                url = subUrl,
-                                headers = mapOf(
+                            newSubtitleFile("Indonesia", subUrl) {
+                                this.headers = mapOf(
                                     "Referer" to data,
                                     "Origin" to originDomain,
                                     "Accept" to "*/*"
                                 )
-                            )
+                            }
                         )
                     }
                 }
@@ -217,16 +216,15 @@ class MissAvProvider : MainAPI() {
                     val uri = URI(data)
                     val originDomain = "${uri.scheme}://${uri.host}"
                     
+                    // FIX: Memakai newSubtitleFile sesuai standar API Cloudstream
                     subtitleCallback.invoke(
-                        SubtitleFile(
-                            lang = "Indonesia",
-                            url = subUrl,
-                            headers = mapOf(
+                        newSubtitleFile("Indonesia", subUrl) {
+                            this.headers = mapOf(
                                 "Referer" to data,
                                 "Origin" to originDomain,
                                 "Accept" to "*/*"
                             )
-                        )
+                        }
                     )
                 }
             }
