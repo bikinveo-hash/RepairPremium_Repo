@@ -108,6 +108,9 @@ class SukawibuProvider : MainAPI() {
         val serverButtons = document.select("div.server-nav button")
         
         serverButtons.forEach { btn ->
+            // 1. Ambil nama server dari teks tombol
+            val serverName = btn.text().trim()
+            
             val onClickAttr = btn.attr("onclick")
             val regex = """changeServer\('([^']+)'""".toRegex()
             val matchResult = regex.find(onClickAttr)
@@ -120,33 +123,33 @@ class SukawibuProvider : MainAPI() {
                     iframeUrl = "https:$iframeUrl"
                 }
 
-                // 1. Kunjungi halaman iframe pemutar
+                // 2. Kunjungi halaman iframe pemutar
                 val iframeHtml = app.get(iframeUrl).text
                 
-                // 2. Bongkar Javascript yang dikunci (JsUnpacker)
+                // 3. Bongkar Javascript yang dikunci (JsUnpacker)
                 val unpackedJs = JsUnpacker(iframeHtml).unpack()
                 
                 if (unpackedJs != null) {
                     
-                    // 3. Menangkap URL video (.m3u8)
+                    // 4. Menangkap URL video (.m3u8)
                     val m3u8Regex = """(["'])([^"']+\.m3u8[^"']*)\1""".toRegex()
                     val m3u8Match = m3u8Regex.find(unpackedJs)
                     
                     if (m3u8Match != null) {
                         val extractedVideo = m3u8Match.groupValues[2]
                         
-                        // PERBAIKAN: Jadikan link video Absolute (Lengkap)
+                        // Jadikan link video Absolute (Lengkap)
                         val videoLink = if (extractedVideo.startsWith("http")) {
                             extractedVideo
                         } else {
                             URI(iframeUrl).resolve(extractedVideo).toString()
                         }
                         
-                        // 4. Kirim link video ke pemutar aplikasi
+                        // Kirim link video ke pemutar aplikasi dengan nama server yang spesifik
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
-                                name = "Sukawibu Server",
+                                name = "Sukawibu - $serverName", // Menggunakan nama tombol
                                 url = videoLink,
                                 type = ExtractorLinkType.M3U8
                             ) {
@@ -161,7 +164,7 @@ class SukawibuProvider : MainAPI() {
                     vttRegex.findAll(unpackedJs).forEach { match ->
                         val extractedSub = match.groupValues[2]
                         
-                        // PERBAIKAN: Jadikan link subtitle Absolute (Lengkap) juga
+                        // Jadikan link subtitle Absolute (Lengkap) juga
                         val subUrl = if (extractedSub.startsWith("http")) {
                             extractedSub
                         } else {
