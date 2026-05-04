@@ -3,6 +3,7 @@ package com.MissAv
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URI
 
 class MissAvProvider : MainAPI() {
     override var name = "MissAv"
@@ -24,6 +25,9 @@ class MissAvProvider : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
+    // ==========================================
+    // DAFTAR KATEGORI (Otomatis dibuatkan Tab/Baris oleh CloudStream)
+    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/release" to "Keluaran Terbaru",
         "$mainUrl/id/new" to "Baru Ditambahkan",
@@ -32,6 +36,9 @@ class MissAvProvider : MainAPI() {
         "$mainUrl/id/siro" to "Koleksi Amatir SIRO"
     )
 
+    // ==========================================
+    // FUNGSI BANTUAN UNTUK EKSTRAK VIDEO
+    // ==========================================
     private fun parseVideos(document: Element): List<SearchResponse> {
         return document.select("div.thumbnail").mapNotNull { element ->
             val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
@@ -51,32 +58,51 @@ class MissAvProvider : MainAPI() {
         }
     }
 
+    // ==========================================
+    // 1. HALAMAN DEPAN & INFINITE SCROLL
+    // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val pageUrl = if (page == 1) request.data else "${request.data}?page=$page"
+        
         try {
             val document = app.get(pageUrl, headers = headers).document
             val videos = parseVideos(document)
+            
             return newHomePageResponse(
                 list = listOf(HomePageList(request.name, videos, isHorizontalImages = true)),
                 hasNext = videos.size >= 10 
-             )
+            )
         } catch (e: Exception) {
             return newHomePageResponse(emptyList(), hasNext = false)
         }
     }
 
+    // ==========================================
+    // 2. FITUR PENCARIAN (Search)
+    // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
+        
+        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
         val searchUrl = if (page == 1) {
             "$mainUrl/id/search/$formattedQuery"
         } else {
             "$mainUrl/id/search/$formattedQuery?page=$page"
         }
+        
         val document = app.get(searchUrl, headers = headers).document
         val videos = parseVideos(document)
-        return newSearchResponseList(list = videos, hasNext = videos.isNotEmpty())
+        
+        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
+        return newSearchResponseList(
+            list = videos,
+            hasNext = videos.isNotEmpty()
+        )
     }
 
+    // ==========================================
+    // 3. HALAMAN DETAIL & SARAN FILM (Load Info)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
@@ -91,13 +117,16 @@ class MissAvProvider : MainAPI() {
             .take(3) 
 
         val recommendations = ArrayList<SearchResponse>()
+        
         for (recUrl in recUrls) {
             if (recommendations.size >= 16) break 
             try {
                 val recDoc = app.get(recUrl, headers = headers).document
                 val videos = parseVideos(recDoc).filter { it.url != url }
                 recommendations.addAll(videos)
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                // Abaikan jika salah satu link gagal
+            }
         }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -108,128 +137,91 @@ class MissAvProvider : MainAPI() {
         }
     }
 
+    // ==========================================
+    // 4. PEMUTAR VIDEO (Load Links)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        
-        // ==========================================
-        // FITUR MENGAMBIL VIDEO & SUBTITLE DARI SUKAWIBU
-        // ==========================================
-        try {
-            val videoCodeMatch = Regex("""/([a-zA-Z0-9-]+)$""").find(data)
-            
-            if (videoCodeMatch != null) {
-                val videoCode = videoCodeMatch.groupValues[1].uppercase() 
-                println("MISSAV_SUB: Mencari SukaWibu -> $videoCode")
-
-                val searchUrl = "https://sukawibu.com/?s=$videoCode"
-                val searchDoc = app.get(searchUrl, headers = headers).document
-                val postUrl = searchDoc.selectFirst("article.video-preview-item a")?.attr("href")
-                
-                if (postUrl != null) {
-                    val postDoc = app.get(postUrl, headers = headers).document
-                    var iframeUrl = postDoc.selectFirst("iframe#videoPlayer")?.attr("src")
-                    
-                    if (iframeUrl != null) {
-                        if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
-                        
-                        // Menembus Iframe Lapis 1
-                        val iframeHtml = app.get(iframeUrl, headers = mapOf("Referer" to postUrl)).text
-                        val nestedIframeMatch = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+/e/[^"']+)["']""").find(iframeHtml)
-                        
-                        var finalUrl = iframeUrl
-                        var finalHtml = iframeHtml
-                        
-                        // Kalau ada Iframe Lapis 2, kita masuk ke dalamnya
-                        if (nestedIframeMatch != null) {
-                            finalUrl = nestedIframeMatch.groupValues[1]
-                            if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
-                            finalHtml = app.get(finalUrl, headers = mapOf("Referer" to iframeUrl)).text
-                        }
-
-                        // KITA BONGKAR SEMUA SCRIPT YANG DI-PACK
-                        var unpackedHtml = finalHtml
-                        val packedRegex = Regex("""eval\(function\(p,a,c,k,e,.*?\)\)""")
-                        packedRegex.findAll(finalHtml).forEach { match ->
-                            try {
-                                val unpacked = getAndUnpack(match.value)
-                                unpackedHtml += "\n$unpacked"
-                            } catch (e: Exception) {}
-                        }
-
-                        // Setelah dibongkar, VTT dan M3U8 pasti kelihatan telanjang
-                        val m3u8Match = Regex("""(?:file|src)\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(unpackedHtml)
-                        val vttMatch = Regex("""(?:file|src)\s*:\s*["'](https?://[^"']+\.vtt[^"']*)["']""").find(unpackedHtml)
-
-                        if (m3u8Match != null) {
-                            val m3u8Url = m3u8Match.groupValues[1].replace("\\/", "/")
-                            println("MISSAV_SUB: Sukses nemu M3U8 -> $m3u8Url")
-                            
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "SukaWibu (Sub Indo)",
-                                    name = "SukaWibu (Sub Indo)",
-                                    url = m3u8Url,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = finalUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                            
-                            if (vttMatch != null) {
-                                val vttUrl = vttMatch.groupValues[1].replace("\\/", "/")
-                                println("MISSAV_SUB: Sukses nemu VTT -> $vttUrl")
-                                
-                                subtitleCallback.invoke(
-                                    SubtitleFile(
-                                        lang = "Indonesia",
-                                        url = vttUrl
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            println("MISSAV_SUB: Error -> ${e.message}")
-        }
-        // ==========================================
-
-        // KODE ASLI UNTUK SERVER MISSAV
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
+
+        // WADAH PENCEGAH SUBTITLE DUPLIKAT (Dari Sukawibu)
+        val addedSubtitles = mutableSetOf<String>()
 
         val scriptElements = document.select("script")
         for (script in scriptElements) {
             val scriptText = script.data()
             if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
                 val unpacked = getAndUnpack(scriptText)
+                
+                // 1. Menangkap Video
                 val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(unpacked)
                 if (match != null) {
                     m3u8Url = match.value
-                    break
                 }
+
+                // 2. Menangkap Subtitle (.vtt) di dalam script
+                val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
+                vttRegex.findAll(unpacked).forEach { vttMatch ->
+                    val extractedSub = vttMatch.groupValues[2]
+                    
+                    // Jadikan link absolut jika masih relatif
+                    val subUrl = if (extractedSub.startsWith("http")) {
+                        extractedSub
+                    } else {
+                        URI(data).resolve(extractedSub).toString()
+                    }
+                    
+                    if (addedSubtitles.add(subUrl)) {
+                        subtitleCallback.invoke(
+                            SubtitleFile("Indonesia", subUrl)
+                        )
+                    }
+                }
+                
+                if (m3u8Url != null) break
             }
         }
         
+        // JIKA video tidak ketemu di script, cari di HTML
         if (m3u8Url == null) {
             val html = document.html()
+            
+            // 3. Menangkap Video dari HTML
             val match = Regex("""https?://[^"']+\.m3u8[^"']*""").find(html)
             if (match != null) {
                 m3u8Url = match.value
             }
+
+            // 4. Menangkap Subtitle (.vtt) dari HTML (Sebagai Cadangan)
+            val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
+            vttRegex.findAll(html).forEach { vttMatch ->
+                val extractedSub = vttMatch.groupValues[2]
+                
+                val subUrl = if (extractedSub.startsWith("http")) {
+                    extractedSub
+                } else {
+                    URI(data).resolve(extractedSub).toString()
+                }
+                
+                if (addedSubtitles.add(subUrl)) {
+                    subtitleCallback.invoke(
+                        SubtitleFile("Indonesia", subUrl)
+                    )
+                }
+            }
         }
 
         if (m3u8Url != null) {
+            // Menggunakan pola Lambda Builder dari API CloudStream terbaru
             callback.invoke(
                 newExtractorLink(
-                    source = "MissAv Asli",
-                    name = "MissAv Asli",
+                    source = this.name,
+                    name = this.name,
                     url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
