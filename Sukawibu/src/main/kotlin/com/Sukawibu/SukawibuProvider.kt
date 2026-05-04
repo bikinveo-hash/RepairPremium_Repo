@@ -3,6 +3,7 @@ package com.Sukawibu
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URI
 
 class SukawibuProvider : MainAPI() {
     override var name = "Sukawibu"
@@ -131,7 +132,19 @@ class SukawibuProvider : MainAPI() {
                     val m3u8Match = m3u8Regex.find(unpackedJs)
                     
                     if (m3u8Match != null) {
-                        val videoLink = m3u8Match.groupValues[2]
+                        var videoLink = m3u8Match.groupValues[2]
+                        
+                        // --- PERBAIKAN URL RELATIF MULAI ---
+                        if (videoLink.startsWith("//")) {
+                            videoLink = "https:$videoLink"
+                        } else if (videoLink.startsWith("/")) {
+                            val uri = URI(iframeUrl)
+                            val baseDomain = "${uri.scheme}://${uri.host}"
+                            videoLink = "$baseDomain$videoLink"
+                        } else if (!videoLink.startsWith("http")) {
+                            videoLink = fixUrl(videoLink) 
+                        }
+                        // --- PERBAIKAN URL RELATIF SELESAI ---
                         
                         // 4. Kirim link video ke pemutar aplikasi menggunakan format newExtractorLink
                         callback.invoke(
