@@ -15,7 +15,6 @@ class SukawibuProvider : MainAPI() {
     // Karena ini konten 18+, kita set tipenya ke NSFW
     override val supportedTypes = setOf(TvType.NSFW) 
 
-    // Mendefinisikan tab/kategori yang akan muncul di halaman beranda aplikasi
     override val mainPage = mainPageOf(
         "$mainUrl/?filter=latest" to "Latest Videos",
         "$mainUrl/?filter=popular" to "Popular Videos",
@@ -23,79 +22,53 @@ class SukawibuProvider : MainAPI() {
         "$mainUrl/category/bokep-indo/" to "Bokep Indo"
     )
 
-    // ==========================================
-    // BAGIAN 1: HALAMAN UTAMA (HOMEPAGE)
-    // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) {
             request.data
         } else {
-            // Jika URL mengandung parameter filter, sisipkan nomor page sebelumnya
             if (request.data.contains("?filter=")) {
                 request.data.replace("?", "page/$page/?")
             } else {
                 "${request.data}page/$page/"
             }
         }
-
         val document = app.get(url).document
-        
-        // Menggunakan article.loop-video agar berlaku di beranda maupun di pencarian
-        val home = document.select("article.loop-video").mapNotNull {
-            it.toSearchResult()
-        }
-
+        val home = document.select("article.loop-video").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
-    // ==========================================
-    // BAGIAN 2: PENCARIAN (SEARCH)
-    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-        
-        return document.select("article.loop-video").mapNotNull {
-            it.toSearchResult()
-        }
+        return document.select("article.loop-video").mapNotNull { it.toSearchResult() }
     }
 
-    // ==========================================
-    // FUNGSI BANTUAN EKSTRAK ITEM VIDEO
-    // ==========================================
     private fun Element.toSearchResult(): SearchResponse? {
         val href = this.selectFirst("a")?.attr("href") ?: return null
         val title = this.selectFirst("a")?.attr("title") ?: return null
         val posterUrl = this.attr("data-main-thumb") 
-        
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
         }
     }
 
-    // ==========================================
-    // BAGIAN 3: DETAIL ANIME/VIDEO (LOAD)
-    // ==========================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-
         val title = document.selectFirst("h1.entry-title")?.text() ?: return null
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.selectFirst("div.video-description div.desc p")?.text()
         val tags = document.select("div.tags-list a").map { it.text() }
         val actors = document.select("div#video-actors a").map { it.text() }
 
-        // Parameter terakhir (url) dikirim sebagai 'data' ke loadLinks
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = plot
             this.tags = tags
-            // Mapping daftar teks menjadi objek ActorData
             this.actors = actors.map { ActorData(Actor(it)) } 
         }
     }
 
     // ==========================================
-    // BAGIAN 4: PEMUTARAN VIDEO (LOAD LINKS)
+    // BAGIAN 4: PEMUTARAN VIDEO (LOAD LINKS) - VERSI SUPER ROBUST
     // ==========================================
     override suspend fun loadLinks(
         data: String,
@@ -103,75 +76,86 @@ class SukawibuProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 'data' berisi URL halaman detail
         val document = app.get(data).document
-        val serverButtons = document.select("div.server-nav button")
         
+        // 1. Kumpulkan semua sumber Iframe ke dalam wadah List (Nama Server, URL)
+        val iframeSources = mutableListOf<Pair<String, String>>()
+        
+        // Coba cari dari tombol Server (Cara Pertama)
+        val serverButtons = document.select("div.server-nav button")
         serverButtons.forEach { btn ->
-            // 1. Ambil nama server dari teks tombol
             val serverName = btn.text().trim()
-            
             val onClickAttr = btn.attr("onclick")
-            val regex = """changeServer\('([^']+)'""".toRegex()
-            val matchResult = regex.find(onClickAttr)
-            
+            val matchResult = """changeServer\('([^']+)'""".toRegex().find(onClickAttr)
             if (matchResult != null) {
-                var iframeUrl = matchResult.groupValues[1]
-                
-                // Pastikan URL memiliki awalan http/https
-                if (iframeUrl.startsWith("//")) {
-                    iframeUrl = "https:$iframeUrl"
+                iframeSources.add(serverName to matchResult.groupValues[1])
+            }
+        }
+        
+        // JIKA tombol tidak ada, cari langsung tag Iframe di halaman (Cara Kedua - Fallback)
+        if (iframeSources.isEmpty()) {
+            document.select("iframe").forEachIndexed { index, iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotBlank() && (src.contains("minochinos") || src.contains("masukestin") || src.contains("hgcloud"))) {
+                    iframeSources.add("Server ${index + 1}" to src)
                 }
+            }
+        }
 
-                // 2. Kunjungi halaman iframe pemutar
+        // Wadah pencegah subtitle ganda
+        val addedSubtitles = mutableSetOf<String>()
+        
+        // 2. Eksekusi semua iframe yang ditemukan
+        iframeSources.forEach { (serverName, url) ->
+            var iframeUrl = url
+            if (iframeUrl.startsWith("//")) {
+                iframeUrl = "https:$iframeUrl"
+            }
+
+            // Gunakan Try-Catch agar jika satu server gagal, server lain tetap dieksekusi
+            try {
                 val iframeHtml = app.get(iframeUrl).text
                 
-                // 3. Bongkar Javascript yang dikunci (JsUnpacker)
-                val unpackedJs = JsUnpacker(iframeHtml).unpack()
+                // Jika script dikemas, unpack. Jika tidak, gunakan HTML aslinya.
+                val unpackedJs = JsUnpacker(iframeHtml).unpack() ?: iframeHtml
                 
-                if (unpackedJs != null) {
-                    
-                    // 4. Menangkap URL video (.m3u8)
-                    val m3u8Regex = """(["'])([^"']+\.m3u8[^"']*)\1""".toRegex()
-                    val m3u8Match = m3u8Regex.find(unpackedJs)
-                    
-                    if (m3u8Match != null) {
-                        val extractedVideo = m3u8Match.groupValues[2]
-                        
-                        // Jadikan link video Absolute (Lengkap)
-                        val videoLink = if (extractedVideo.startsWith("http")) {
-                            extractedVideo
-                        } else {
-                            URI(iframeUrl).resolve(extractedVideo).toString()
-                        }
-                        
-                        // Kirim link video ke pemutar aplikasi dengan nama server yang spesifik
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = "Sukawibu - $serverName", // Menggunakan nama tombol
-                                url = videoLink,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
+                // Menangkap Video
+                val m3u8Regex = """(["'])([^"']+\.m3u8[^"']*)\1""".toRegex()
+                val m3u8Match = m3u8Regex.find(unpackedJs)
+                
+                if (m3u8Match != null) {
+                    val extractedVideo = m3u8Match.groupValues[2]
+                    val videoLink = if (extractedVideo.startsWith("http")) {
+                        extractedVideo
+                    } else {
+                        URI(iframeUrl).resolve(extractedVideo).toString()
                     }
-
-                    // 5. Menangkap URL Subtitle (.vtt)
-                    val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
-                    vttRegex.findAll(unpackedJs).forEach { match ->
-                        val extractedSub = match.groupValues[2]
-                        
-                        // Jadikan link subtitle Absolute (Lengkap) juga
-                        val subUrl = if (extractedSub.startsWith("http")) {
-                            extractedSub
-                        } else {
-                            URI(iframeUrl).resolve(extractedSub).toString()
+                    
+                    // Memanggil newExtractorLink sesuai ExtractorApi.kt
+                    callback.invoke(
+                        newExtractorLink(
+                            source = this.name,
+                            name = if (serverName.isNotEmpty()) "Sukawibu - $serverName" else "Sukawibu Server",
+                            url = videoLink,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = iframeUrl
+                            this.quality = Qualities.Unknown.value
                         }
-                        
-                        // Kirim link subtitle ke pemutar aplikasi
+                    )
+                }
+
+                // Menangkap Subtitle
+                val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
+                vttRegex.findAll(unpackedJs).forEach { match ->
+                    val extractedSub = match.groupValues[2]
+                    val subUrl = if (extractedSub.startsWith("http")) {
+                        extractedSub
+                    } else {
+                        URI(iframeUrl).resolve(extractedSub).toString()
+                    }
+                    
+                    if (addedSubtitles.add(subUrl)) {
                         subtitleCallback.invoke(
                             SubtitleFile(
                                 "Indonesia", 
@@ -180,6 +164,9 @@ class SukawibuProvider : MainAPI() {
                         )
                     }
                 }
+            } catch (e: Exception) {
+                // Abaikan error pada server ini, lanjutkan loop ke server berikutnya
+                e.printStackTrace()
             }
         }
         
