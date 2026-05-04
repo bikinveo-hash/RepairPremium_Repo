@@ -79,12 +79,24 @@ class MissAvProvider : MainAPI() {
     // ==========================================
     // 2. FITUR PENCARIAN (Search)
     // ==========================================
-    override suspend fun search(query: String): List<SearchResponse>? {
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
-        val searchUrl = "$mainUrl/id/search/$formattedQuery"
-        val document = app.get(searchUrl, headers = headers).document
         
-        return parseVideos(document)
+        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
+        val searchUrl = if (page == 1) {
+            "$mainUrl/id/search/$formattedQuery"
+        } else {
+            "$mainUrl/id/search/$formattedQuery?page=$page"
+        }
+        
+        val document = app.get(searchUrl, headers = headers).document
+        val videos = parseVideos(document)
+        
+        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
+        return newSearchResponseList(
+            list = videos,
+            hasNext = videos.isNotEmpty()
+        )
     }
 
     // ==========================================
