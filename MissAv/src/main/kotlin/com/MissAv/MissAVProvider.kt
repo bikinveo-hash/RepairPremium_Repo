@@ -70,7 +70,7 @@ class MissAvProvider : MainAPI() {
             return newHomePageResponse(
                 list = listOf(HomePageList(request.name, videos, isHorizontalImages = true)),
                 hasNext = videos.size >= 10 
-            )
+             )
         } catch (e: Exception) {
             return newHomePageResponse(emptyList(), hasNext = false)
         }
@@ -96,7 +96,7 @@ class MissAvProvider : MainAPI() {
         return newSearchResponseList(
             list = videos,
             hasNext = videos.isNotEmpty()
-        )
+         )
     }
 
     // ==========================================
@@ -145,6 +145,58 @@ class MissAvProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        
+        // ==========================================
+        // TAMBAHAN: FITUR PENCURI SUBTITLE DARI SUKAWIBU
+        // ==========================================
+        try {
+            // 1. Ambil kode JAV dari URL MissAV (Contoh: https://missav.ws/jur-687 -> jur-687)
+            val videoCodeMatch = Regex("""/([a-zA-Z0-9-]+)$""").find(data)
+            
+            if (videoCodeMatch != null) {
+                // Jadikan huruf besar agar pencarian di SukaWibu lebih akurat (cth: JUR-687)
+                val videoCode = videoCodeMatch.groupValues[1].uppercase() 
+
+                // 2. Lakukan pencarian di SukaWibu
+                val searchUrl = "https://sukawibu.com/?s=$videoCode"
+                val searchDoc = app.get(searchUrl, headers = headers).document
+                
+                // 3. Ambil URL video dari hasil pencarian teratas
+                val postUrl = searchDoc.selectFirst("article.video-preview-item a")?.attr("href")
+                
+                if (postUrl != null) {
+                    // 4. Buka halaman video SukaWibu
+                    val postDoc = app.get(postUrl, headers = headers).document
+                    
+                    // 5. Cari link iframe pemutar video
+                    val iframeUrl = postDoc.selectFirst("iframe#videoPlayer")?.attr("src")
+                    
+                    if (iframeUrl != null) {
+                        // 6. Buka source code dari Iframe tersebut
+                        val iframeHtml = app.get(iframeUrl, headers = headers).text
+                        
+                        // 7. Cari link berakhiran .vtt
+                        val vttMatch = Regex("""https?://[^"']+\.vtt""").find(iframeHtml)
+                        
+                        if (vttMatch != null) {
+                            // 8. Kirim subtitle ke CloudStream
+                            subtitleCallback.invoke(
+                                SubtitleFile(
+                                    lang = "Indonesia",
+                                    url = vttMatch.value
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Jika pencarian gagal atau SukaWibu down, abaikan error agar video MissAV tetap diputar.
+        }
+        // ==========================================
+        // AKHIR FITUR SUBTITLE
+        // ==========================================
+
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
