@@ -25,7 +25,7 @@ class MissAvProvider : MainAPI() {
     )
 
     // ==========================================
-    // DAFTAR KATEGORI (Otomatis dibuatkan Tab/Baris oleh CloudStream)
+    // DAFTAR KATEGORI
     // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/release" to "Keluaran Terbaru",
@@ -35,9 +35,6 @@ class MissAvProvider : MainAPI() {
         "$mainUrl/id/siro" to "Koleksi Amatir SIRO"
     )
 
-    // ==========================================
-    // FUNGSI BANTUAN UNTUK EKSTRAK VIDEO
-    // ==========================================
     private fun parseVideos(document: Element): List<SearchResponse> {
         return document.select("div.thumbnail").mapNotNull { element ->
             val titleElement = element.selectFirst("div.my-2 a") ?: return@mapNotNull null
@@ -57,16 +54,11 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // ==========================================
-    // 1. HALAMAN DEPAN & INFINITE SCROLL
-    // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val pageUrl = if (page == 1) request.data else "${request.data}?page=$page"
-        
         try {
             val document = app.get(pageUrl, headers = headers).document
             val videos = parseVideos(document)
-            
             return newHomePageResponse(
                 list = listOf(HomePageList(request.name, videos, isHorizontalImages = true)),
                 hasNext = videos.size >= 10 
@@ -76,32 +68,18 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // ==========================================
-    // 2. FITUR PENCARIAN (Search)
-    // ==========================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
-        
-        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
         val searchUrl = if (page == 1) {
             "$mainUrl/id/search/$formattedQuery"
         } else {
             "$mainUrl/id/search/$formattedQuery?page=$page"
         }
-        
         val document = app.get(searchUrl, headers = headers).document
         val videos = parseVideos(document)
-        
-        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
-        return newSearchResponseList(
-            list = videos,
-            hasNext = videos.isNotEmpty()
-         )
+        return newSearchResponseList(list = videos, hasNext = videos.isNotEmpty())
     }
 
-    // ==========================================
-    // 3. HALAMAN DETAIL & SARAN FILM (Load Info)
-    // ==========================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
@@ -116,16 +94,13 @@ class MissAvProvider : MainAPI() {
             .take(3) 
 
         val recommendations = ArrayList<SearchResponse>()
-        
         for (recUrl in recUrls) {
             if (recommendations.size >= 16) break 
             try {
                 val recDoc = app.get(recUrl, headers = headers).document
                 val videos = parseVideos(recDoc).filter { it.url != url }
                 recommendations.addAll(videos)
-            } catch (e: Exception) {
-                // Abaikan jika salah satu link gagal
-            }
+            } catch (e: Exception) {}
         }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -136,9 +111,6 @@ class MissAvProvider : MainAPI() {
         }
     }
 
-    // ==========================================
-    // 4. PEMUTAR VIDEO (Load Links)
-    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -147,82 +119,52 @@ class MissAvProvider : MainAPI() {
     ): Boolean {
         
         // ==========================================
-        // FITUR PENCURI SUBTITLE DARI SUKAWIBU
+        // FITUR ALTERNATIF SERVER SUKAWIBU (DENGAN SUBTITLE)
         // ==========================================
         try {
             val videoCodeMatch = Regex("""/([a-zA-Z0-9-]+)$""").find(data)
             
             if (videoCodeMatch != null) {
                 val videoCode = videoCodeMatch.groupValues[1].uppercase() 
-                println("MISSAV_SUB: Kode video -> $videoCode")
+                println("MISSAV_SUB: Mencari SukaWibu -> $videoCode")
 
                 val searchUrl = "https://sukawibu.com/?s=$videoCode"
                 val searchDoc = app.get(searchUrl, headers = headers).document
                 val postUrl = searchDoc.selectFirst("article.video-preview-item a")?.attr("href")
-                println("MISSAV_SUB: URL Post SukaWibu -> $postUrl")
                 
                 if (postUrl != null) {
                     val postDoc = app.get(postUrl, headers = headers).document
                     var iframeUrl = postDoc.selectFirst("iframe#videoPlayer")?.attr("src")
-                    println("MISSAV_SUB: URL Iframe Lapis 1 -> $iframeUrl")
                     
                     if (iframeUrl != null) {
-                        val iframeHeaders = mapOf(
-                            "Referer" to postUrl,
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-                        )
-                        var iframeHtml = app.get(iframeUrl, headers = iframeHeaders).text
+                        if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
                         
-                        // 1. TEMBUS PERTAHANAN IFRAME BERLAPIS
-                        val nestedIframeMatch = Regex("""<iframe[^>]+src=["'](https?://[^"']+/e/[^"']+)["']""").find(iframeHtml)
+                        // Menembus Iframe Lapis 1
+                        val iframeHtml = app.get(iframeUrl, headers = mapOf("Referer" to postUrl)).text
+                        val nestedIframeMatch = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+/e/[^"']+)["']""").find(iframeHtml)
+                        
+                        var targetExtractorUrl = iframeUrl
                         if (nestedIframeMatch != null) {
-                            iframeUrl = nestedIframeMatch.groupValues[1]
-                            println("MISSAV_SUB: URL Iframe Lapis 2 -> $iframeUrl")
-                            iframeHtml = app.get(iframeUrl, headers = mapOf("Referer" to "https://hgcloud.to/")).text
-                        }
-
-                        // 2. TEMBUS PERTAHANAN KARAKTER DISAMARKAN (\/)
-                        val cleanHtml = iframeHtml.replace("\\/", "/")
-                        var vttUrl = Regex("""https?://[^"']+\.vtt""").find(cleanHtml)?.value
-                        
-                        // 3. TEMBUS PERTAHANAN JAVASCRIPT PACKED
-                        if (vttUrl == null) {
-                            val evalMatches = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").findAll(iframeHtml)
-                            for (match in evalMatches) {
-                                val unpacked = getAndUnpack(match.value).replace("\\/", "/")
-                                val unpackedMatch = Regex("""https?://[^"']+\.vtt""").find(unpacked)
-                                if (unpackedMatch != null) {
-                                    vttUrl = unpackedMatch.value
-                                    println("MISSAV_SUB: VTT ketemu dari dalam Script Unpacked!")
-                                    break
-                                }
+                            targetExtractorUrl = nestedIframeMatch.groupValues[1]
+                            if (targetExtractorUrl.startsWith("//")) {
+                                targetExtractorUrl = "https:$targetExtractorUrl"
                             }
                         }
 
-                        println("MISSAV_SUB: FINAL VTT URL -> $vttUrl")
+                        println("MISSAV_SUB: URL Ditemukan! Lempar ke Extractor -> $targetExtractorUrl")
                         
-                        // KIRIM KE CLOUDSTREAM
-                        if (vttUrl != null) {
-                            subtitleCallback.invoke(
-                                SubtitleFile(
-                                    lang = "Indonesia",
-                                    url = vttUrl
-                                )
-                            )
-                            println("MISSAV_SUB: SUKSES MENGIRIM SUBTITLE!")
-                        } else {
-                            println("MISSAV_SUB: GAGAL MENEMUKAN LINK VTT DARI HTML")
-                        }
+                        // CloudStream akan menggunakan file Extractor bawaannya
+                        // untuk membongkar URL ini dan menarik video beserta VTT-nya otomatis.
+                        loadExtractor(targetExtractorUrl, subtitleCallback, callback)
                     }
                 }
             }
         } catch (e: Exception) {
-            println("MISSAV_SUB: ERROR -> ${e.message}")
+            println("MISSAV_SUB: SukaWibu Error -> ${e.message}")
         }
         // ==========================================
-        // AKHIR FITUR SUBTITLE
-        // ==========================================
 
+        // KODE ASLI UNTUK SERVER MISSAV
         val document = app.get(data, headers = headers).document
         var m3u8Url: String? = null
 
@@ -248,7 +190,6 @@ class MissAvProvider : MainAPI() {
         }
 
         if (m3u8Url != null) {
-            // FIX: Menggunakan pola Lambda Builder dari API CloudStream terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
