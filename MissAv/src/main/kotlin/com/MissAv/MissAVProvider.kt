@@ -147,51 +147,77 @@ class MissAvProvider : MainAPI() {
     ): Boolean {
         
         // ==========================================
-        // TAMBAHAN: FITUR PENCURI SUBTITLE DARI SUKAWIBU
+        // FITUR PENCURI SUBTITLE DARI SUKAWIBU
         // ==========================================
         try {
-            // 1. Ambil kode JAV dari URL MissAV (Contoh: https://missav.ws/jur-687 -> jur-687)
             val videoCodeMatch = Regex("""/([a-zA-Z0-9-]+)$""").find(data)
             
             if (videoCodeMatch != null) {
-                // Jadikan huruf besar agar pencarian di SukaWibu lebih akurat (cth: JUR-687)
                 val videoCode = videoCodeMatch.groupValues[1].uppercase() 
+                println("MISSAV_SUB: Kode video -> $videoCode")
 
-                // 2. Lakukan pencarian di SukaWibu
                 val searchUrl = "https://sukawibu.com/?s=$videoCode"
                 val searchDoc = app.get(searchUrl, headers = headers).document
-                
-                // 3. Ambil URL video dari hasil pencarian teratas
                 val postUrl = searchDoc.selectFirst("article.video-preview-item a")?.attr("href")
+                println("MISSAV_SUB: URL Post SukaWibu -> $postUrl")
                 
                 if (postUrl != null) {
-                    // 4. Buka halaman video SukaWibu
                     val postDoc = app.get(postUrl, headers = headers).document
-                    
-                    // 5. Cari link iframe pemutar video
-                    val iframeUrl = postDoc.selectFirst("iframe#videoPlayer")?.attr("src")
+                    var iframeUrl = postDoc.selectFirst("iframe#videoPlayer")?.attr("src")
+                    println("MISSAV_SUB: URL Iframe Lapis 1 -> $iframeUrl")
                     
                     if (iframeUrl != null) {
-                        // 6. Buka source code dari Iframe tersebut
-                        val iframeHtml = app.get(iframeUrl, headers = headers).text
+                        val iframeHeaders = mapOf(
+                            "Referer" to postUrl,
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                        )
+                        var iframeHtml = app.get(iframeUrl, headers = iframeHeaders).text
                         
-                        // 7. Cari link berakhiran .vtt
-                        val vttMatch = Regex("""https?://[^"']+\.vtt""").find(iframeHtml)
+                        // 1. TEMBUS PERTAHANAN IFRAME BERLAPIS
+                        val nestedIframeMatch = Regex("""<iframe[^>]+src=["'](https?://[^"']+/e/[^"']+)["']""").find(iframeHtml)
+                        if (nestedIframeMatch != null) {
+                            iframeUrl = nestedIframeMatch.groupValues[1]
+                            println("MISSAV_SUB: URL Iframe Lapis 2 -> $iframeUrl")
+                            iframeHtml = app.get(iframeUrl, headers = mapOf("Referer" to "https://hgcloud.to/")).text
+                        }
+
+                        // 2. TEMBUS PERTAHANAN KARAKTER DISAMARKAN (\/)
+                        val cleanHtml = iframeHtml.replace("\\/", "/")
+                        var vttUrl = Regex("""https?://[^"']+\.vtt""").find(cleanHtml)?.value
                         
-                        if (vttMatch != null) {
-                            // 8. Kirim subtitle ke CloudStream
+                        // 3. TEMBUS PERTAHANAN JAVASCRIPT PACKED
+                        if (vttUrl == null) {
+                            val evalMatches = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").findAll(iframeHtml)
+                            for (match in evalMatches) {
+                                val unpacked = getAndUnpack(match.value).replace("\\/", "/")
+                                val unpackedMatch = Regex("""https?://[^"']+\.vtt""").find(unpacked)
+                                if (unpackedMatch != null) {
+                                    vttUrl = unpackedMatch.value
+                                    println("MISSAV_SUB: VTT ketemu dari dalam Script Unpacked!")
+                                    break
+                                }
+                            }
+                        }
+
+                        println("MISSAV_SUB: FINAL VTT URL -> $vttUrl")
+                        
+                        // KIRIM KE CLOUDSTREAM
+                        if (vttUrl != null) {
                             subtitleCallback.invoke(
                                 SubtitleFile(
                                     lang = "Indonesia",
-                                    url = vttMatch.value
+                                    url = vttUrl
                                 )
                             )
+                            println("MISSAV_SUB: SUKSES MENGIRIM SUBTITLE!")
+                        } else {
+                            println("MISSAV_SUB: GAGAL MENEMUKAN LINK VTT DARI HTML")
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            // Jika pencarian gagal atau SukaWibu down, abaikan error agar video MissAV tetap diputar.
+            println("MISSAV_SUB: ERROR -> ${e.message}")
         }
         // ==========================================
         // AKHIR FITUR SUBTITLE
