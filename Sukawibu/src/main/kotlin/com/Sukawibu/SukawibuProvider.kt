@@ -53,7 +53,6 @@ class SukawibuProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
         
-        // Menggunakan article.loop-video sesuai perbaikan kita
         return document.select("article.loop-video").mapNotNull {
             it.toSearchResult()
         }
@@ -89,7 +88,8 @@ class SukawibuProvider : MainAPI() {
             this.posterUrl = poster
             this.plot = plot
             this.tags = tags
-            addActors(actors)
+            // Mapping daftar teks menjadi objek ActorData
+            this.actors = actors.map { ActorData(Actor(it)) } 
         }
     }
 
@@ -133,20 +133,21 @@ class SukawibuProvider : MainAPI() {
                     if (m3u8Match != null) {
                         val videoLink = m3u8Match.groupValues[2]
                         
-                        // Kirim link video ke pemutar aplikasi
+                        // 4. Kirim link video ke pemutar aplikasi menggunakan format newExtractorLink
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this.name,
                                 name = "Sukawibu Server",
                                 url = videoLink,
-                                referer = iframeUrl, // Referer penting agar tidak error 403 Forbidden
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = true
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = iframeUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
 
-                    // 4. Menangkap URL Subtitle (.vtt)
+                    // 5. Menangkap URL Subtitle (.vtt)
                     val vttRegex = """(["'])([^"']+\.vtt[^"']*)\1""".toRegex()
                     vttRegex.findAll(unpackedJs).forEach { match ->
                         val subUrl = match.groupValues[2]
