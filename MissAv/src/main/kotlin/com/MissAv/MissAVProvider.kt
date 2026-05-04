@@ -24,9 +24,6 @@ class MissAvProvider : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
-    // ==========================================
-    // DAFTAR KATEGORI
-    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/release" to "Keluaran Terbaru",
         "$mainUrl/id/new" to "Baru Ditambahkan",
@@ -119,14 +116,14 @@ class MissAvProvider : MainAPI() {
     ): Boolean {
         
         // ==========================================
-        // FITUR ALTERNATIF SERVER SUKAWIBU (DENGAN SUBTITLE)
+        // FITUR MENGAMBIL VIDEO & SUBTITLE LANGSUNG DARI API
         // ==========================================
         try {
             val videoCodeMatch = Regex("""/([a-zA-Z0-9-]+)$""").find(data)
             
             if (videoCodeMatch != null) {
                 val videoCode = videoCodeMatch.groupValues[1].uppercase() 
-                println("MISSAV_SUB: Mencari SukaWibu -> $videoCode")
+                println("MISSAV_SUB: Sedang mencari -> $videoCode di SukaWibu")
 
                 val searchUrl = "https://sukawibu.com/?s=$videoCode"
                 val searchDoc = app.get(searchUrl, headers = headers).document
@@ -139,28 +136,87 @@ class MissAvProvider : MainAPI() {
                     if (iframeUrl != null) {
                         if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
                         
-                        // Menembus Iframe Lapis 1
+                        // Menembus Iframe Lapis 1 (hgcloud)
                         val iframeHtml = app.get(iframeUrl, headers = mapOf("Referer" to postUrl)).text
                         val nestedIframeMatch = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+/e/[^"']+)["']""").find(iframeHtml)
                         
                         var targetExtractorUrl = iframeUrl
                         if (nestedIframeMatch != null) {
                             targetExtractorUrl = nestedIframeMatch.groupValues[1]
-                            if (targetExtractorUrl.startsWith("//")) {
-                                targetExtractorUrl = "https:$targetExtractorUrl"
-                            }
+                            if (targetExtractorUrl.startsWith("//")) targetExtractorUrl = "https:$targetExtractorUrl"
                         }
 
-                        println("MISSAV_SUB: URL Ditemukan! Lempar ke Extractor -> $targetExtractorUrl")
+                        println("MISSAV_SUB: Final Iframe URL -> $targetExtractorUrl")
                         
-                        // CloudStream akan menggunakan file Extractor bawaannya
-                        // untuk membongkar URL ini dan menarik video beserta VTT-nya otomatis.
-                        loadExtractor(targetExtractorUrl, subtitleCallback, callback)
+                        // MENGAKALI API VIBUXER / MASUKESTIN
+                        // Kita ekstrak ID Videonya (Contoh: iqus31epfbjj)
+                        val fileCodeMatch = Regex("""/e/([a-zA-Z0-9]+)""").find(targetExtractorUrl)
+                        if (fileCodeMatch != null) {
+                            val fileCode = fileCodeMatch.groupValues[1]
+                            val host = targetExtractorUrl.substringBefore("/e/") // Contoh: https://vibuxer.com
+                            
+                            // Kita pancing API mereka untuk memberikan JSON berisi link m3u8 dan VTT
+                            // Menggunakan endpoint /api/source/
+                            val apiUrl = "$host/api/source/$fileCode"
+                            val apiHeaders = mapOf(
+                                "Referer" to targetExtractorUrl,
+                                "User-Agent" to "Mozilla/5.0",
+                                "Accept" to "application/json"
+                            )
+                            
+                            // Nembak API! Minta data mentahnya (Post Request kosong biasanya berhasil untuk JWPlayer)
+                            val apiResponse = app.post(apiUrl, headers = apiHeaders, data = mapOf("r" to "", "d" to host.replace("https://", ""))).text
+                            
+                            println("MISSAV_SUB: Respon API -> $apiResponse")
+                            
+                            // 1. Tangkap link M3U8
+                            val m3u8Match = Regex("""\"file\"\s*:\s*\"(https?://[^\"]+\.m3u8[^\"]*)\"""").find(apiResponse)
+                            // 2. Tangkap link VTT
+                            val vttMatch = Regex("""\"file\"\s*:\s*\"(https?://[^\"]+\.vtt[^\"]*)\"""").find(apiResponse)
+                            
+                            if (m3u8Match != null) {
+                                println("MISSAV_SUB: SUKSES EKSTRAK M3U8 -> ${m3u8Match.groupValues[1]}")
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = "SukaWibu (Sub Indo)",
+                                        name = "SukaWibu (Sub Indo)",
+                                        url = m3u8Match.groupValues[1].replace("\\/", "/"),
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = targetExtractorUrl
+                                        this.quality = Qualities.Unknown.value
+                                    }
+                                )
+                                
+                                if (vttMatch != null) {
+                                    println("MISSAV_SUB: SUKSES EKSTRAK VTT -> ${vttMatch.groupValues[1]}")
+                                    subtitleCallback.invoke(
+                                        SubtitleFile(
+                                            lang = "Indonesia",
+                                            url = vttMatch.groupValues[1].replace("\\/", "/")
+                                        )
+                                    )
+                                } else {
+                                    // Backup plan jika VTT tidak ada di JSON, cari langsung di HTML iframe-nya
+                                    val iframeFinalHtml = app.get(targetExtractorUrl, headers = mapOf("Referer" to iframeUrl)).text
+                                    val fallbackVttMatch = Regex("""https?://[^\s\"']+\.vtt""").find(iframeFinalHtml)
+                                    if (fallbackVttMatch != null) {
+                                         println("MISSAV_SUB: SUKSES EKSTRAK VTT (Fallback) -> ${fallbackVttMatch.value}")
+                                         subtitleCallback.invoke(
+                                            SubtitleFile(
+                                                lang = "Indonesia",
+                                                url = fallbackVttMatch.value
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
-            println("MISSAV_SUB: SukaWibu Error -> ${e.message}")
+            println("MISSAV_SUB: Error -> ${e.message}")
         }
         // ==========================================
 
@@ -192,8 +248,8 @@ class MissAvProvider : MainAPI() {
         if (m3u8Url != null) {
             callback.invoke(
                 newExtractorLink(
-                    source = this.name,
-                    name = this.name,
+                    source = "MissAv Asli",
+                    name = "MissAv Asli",
                     url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
