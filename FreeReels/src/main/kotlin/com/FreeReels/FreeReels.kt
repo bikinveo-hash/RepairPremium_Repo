@@ -2,7 +2,9 @@ package com.freereels
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import java.security.SecureRandom
 import java.util.*
@@ -21,7 +23,6 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // Konfigurasi Keamanan dari File Java
     private val cryptoKey = "2r36789f45q01ae5"
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
     private val secureRandom = SecureRandom()
@@ -61,19 +62,22 @@ class FreeReels : MainAPI() {
         if (nativeSessionToken != null) return
 
         val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
-        val payload = encrypt("{\"device_id\":\"$deviceId\",\"brand\":\"Redmi\",\"model\":\"23090RA98G\"}")
+        val payload = encrypt(mapOf("device_id" to deviceId, "brand" to "Redmi", "model" to "23090RA98G").toJson())
         
         val response = app.post(
             "$nativeApiUrl/auth/anonymous-login",
             data = mapOf("payload" to payload)
-        ).parsed<NativeAuthResponse>()
+        ).text
         
-        nativeSessionToken = response.data?.token
+        val authData = tryParseJson<NativeAuthResponse>(response)
+        nativeSessionToken = authData?.data?.token
     }
 
     private suspend fun executeNativeRequest(endpoint: String, params: Map<String, Any>): String {
         ensureNativeSession()
-        val jsonPayload = encrypt(app.base64Canany(params)) // Versi simpel dari JSON
+        
+        // Perbaikan: Menggunakan toJson() yang merupakan standar CloudStream
+        val jsonPayload = encrypt(params.toJson()) 
         
         val headers = mapOf(
             "Authorization" to "Bearer $nativeSessionToken",
@@ -89,30 +93,45 @@ class FreeReels : MainAPI() {
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val res = executeNativeRequest("drama/list", mapOf("type" to request.data, "page" to page))
-        val data = parseJson<NativeCategoryResponse>(res)
         
-        val items = data.data?.items?.map { 
-            newTvSeriesSearchResponse(it.title ?: "", it.id.toString()) { this.posterUrl = it.cover }
+        // Perbaikan: Menggunakan tryParseJson
+        val data = tryParseJson<NativeCategoryResponse>(res)
+        
+        // Perbaikan: Memberi nama 'item' secara eksplisit untuk mencegah error shadowed 'it'
+        val items = data?.data?.items?.map { item -> 
+            newTvSeriesSearchResponse(item.title ?: "", item.id.toString()) { 
+                this.posterUrl = item.cover 
+            }
         } ?: emptyList()
 
-        return newHomePageResponse(request.name, items, hasNext = data.data?.hasNext ?: false)
+        return newHomePageResponse(request.name, items, hasNext = data?.data?.hasNext ?: false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val res = executeNativeRequest("drama/search", mapOf("keyword" to query))
-        val data = parseJson<NativeCategoryResponse>(res)
-        return data.data?.items?.map {
-            newTvSeriesSearchResponse(it.title ?: "", it.id.toString()) { this.posterUrl = it.cover }
+        val data = tryParseJson<NativeCategoryResponse>(res)
+        
+        return data?.data?.items?.map { item ->
+            newTvSeriesSearchResponse(item.title ?: "", item.id.toString()) { 
+                this.posterUrl = item.cover 
+            }
         } ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
         val res = executeNativeRequest("drama/detail", mapOf("id" to url))
-        val data = parseJson<NativeDetailResponse>(res).data!!
+        val parsedData = tryParseJson<NativeDetailResponse>(res) ?: throw ErrorLoadingException("Gagal memuat data")
+        val data = parsedData.data ?: throw ErrorLoadingException("Data detail kosong")
 
-        return newTvSeriesLoadResponse(data.title ?: "", url, TvType.AsianDrama, 
-            data.episodes?.map { Episode(it.id.toString(), "Eps ${it.episodeNumber}", episode = it.episodeNumber) } ?: emptyList()
-        ) {
+        // Perbaikan: Menggunakan newEpisode builder
+        val episodeList = data.episodes?.map { ep -> 
+            newEpisode(ep.id.toString()) {
+                this.name = "Eps ${ep.episodeNumber}"
+                this.episode = ep.episodeNumber
+            } 
+        } ?: emptyList()
+
+        return newTvSeriesLoadResponse(data.title ?: "", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = data.cover
             this.plot = data.description
         }
@@ -120,19 +139,23 @@ class FreeReels : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val res = executeNativeRequest("episode/links", mapOf("id" to data))
-        val videoData = parseJson<NativeVideoResponse>(res).data
+        val videoData = tryParseJson<NativeVideoResponse>(res)?.data
 
         videoData?.links?.forEach { link ->
+            val videoUrl = link.url ?: return@forEach
+            
+            // Perbaikan: Menggunakan newExtractorLink builder
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
-                    url = link.url ?: "",
-                    referer = "$mainUrl/", // Penting!
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = link.url?.contains(".m3u8") == true,
-                    headers = mapOf("Authorization" to "Bearer $nativeSessionToken") // Header wajib
-                )
+                    url = videoUrl,
+                    type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf("Authorization" to "Bearer $nativeSessionToken")
+                }
             )
         }
         return true
