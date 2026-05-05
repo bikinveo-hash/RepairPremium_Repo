@@ -1,8 +1,8 @@
-package com.FreeReels // Perbaikan: Disesuaikan dengan nama folder agar terbaca oleh Plugin
+package com.FreeReels
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.* // Perbaikan: Import semua utilitas termasuk ExtractorLink dan newExtractorLink
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import java.security.SecureRandom
@@ -46,12 +46,24 @@ class FreeReels : MainAPI() {
     }
 
     private fun decrypt(encryptedText: String): String {
-        val decoded = Base64.decode(encryptedText, Base64.DEFAULT)
-        val iv = decoded.copyOfRange(0, 16)
-        val payload = decoded.copyOfRange(16, decoded.size)
-        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
-        return String(cipher.doFinal(payload))
+        // PERBAIKAN: Menambahkan Try-Catch dan Cek Ukuran Data
+        return try {
+            val decoded = Base64.decode(encryptedText, Base64.DEFAULT)
+            
+            // Cek apakah data cukup panjang untuk diambil IV-nya (minimal 16 byte)
+            if (decoded.size < 16) {
+                return encryptedText 
+            }
+            
+            val iv = decoded.copyOfRange(0, 16)
+            val payload = decoded.copyOfRange(16, decoded.size)
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
+            String(cipher.doFinal(payload))
+        } catch (e: Exception) {
+            // Jika gagal dekripsi (misal karena server mengirim teks biasa), kembalikan teks aslinya
+            encryptedText
+        }
     }
 
     // ==========================================
