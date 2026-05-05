@@ -79,7 +79,7 @@ class FreeReels : MainAPI() {
         if (nativeSessionToken != null) return
 
         val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
-        val sign = md5(deviceId + nativeLoginSalt) // Sign digital dari Java
+        val sign = md5(deviceId + nativeLoginSalt)
         
         val payload = mapOf(
             "device_id" to deviceId, 
@@ -138,14 +138,11 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Menggunakan info_v2 sesuai kode Java
         val res = executeNativeRequest("drama/info_v2", mapOf("series_id" to url))
         val parsedData = tryParseJson<NativeDetailResponse>(res) ?: throw ErrorLoadingException("Gagal memuat data")
         val info = parsedData.data?.info ?: throw ErrorLoadingException("Data detail kosong")
 
         val episodeList = info.episodeList?.map { ep -> 
-            // Trik Spesial: Kita simpan seluruh struktur episode ini sebagai String
-            // agar loadLinks tidak perlu konek ke server lagi!
             newEpisode(ep.toJson()) {
                 this.name = ep.name ?: "Eps ${ep.index}"
                 this.episode = ep.index
@@ -165,36 +162,33 @@ class FreeReels : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Ekstrak data langsung dari String tanpa perlu nembak API lagi
         val ep = tryParseJson<DramaEpisode>(data) ?: return false
 
-        // Daftar semua kemungkinan link yang ada di Java
-        val videoLinks = listOfNotNull(
-            ep.m3u8Url to "M3U8",
-            ep.videoUrl to "MP4",
-            ep.h264M3u8 to "H264 M3U8",
-            ep.h265M3u8 to "H265 M3U8"
-        )
+        // PERBAIKAN: Memastikan URL tidak null sebelum dimasukkan ke daftar
+        val videoLinks = mutableListOf<Pair<String, String>>()
+        ep.m3u8Url?.let { videoLinks.add(it to "M3U8") }
+        ep.videoUrl?.let { videoLinks.add(it to "MP4") }
+        ep.h264M3u8?.let { videoLinks.add(it to "H264 M3U8") }
+        ep.h265M3u8?.let { videoLinks.add(it to "H265 M3U8") }
 
-        // Memancarkan (Emit) Video
         videoLinks.forEach { (url, typeName) ->
             if (url.isNotBlank()) {
+                // PERBAIKAN: Penulisan ExtractorLink yang sesuai dengan standar baru
                 callback.invoke(
                     newExtractorLink(
                         source = name,
                         name = "$name - $typeName",
                         url = url,
-                        referer = "$mainUrl/",
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = url.contains(".m3u8")
+                        type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.Unknown.value
                         this.headers = mapOf("Authorization" to "Bearer $nativeSessionToken")
                     }
                 )
             }
         }
 
-        // Memancarkan (Emit) Subtitle
         ep.subtitleList?.forEach { sub ->
             val subUrl = sub.vtt ?: sub.subtitle
             if (!subUrl.isNullOrBlank()) {
