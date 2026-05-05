@@ -1,11 +1,10 @@
-package com.freereels
+package com.FreeReels // Perbaikan: Disesuaikan dengan nama folder agar terbaca oleh Plugin
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.* // Perbaikan: Import semua utilitas termasuk ExtractorLink dan newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import java.security.SecureRandom
 import java.util.*
 import javax.crypto.Cipher
@@ -76,7 +75,6 @@ class FreeReels : MainAPI() {
     private suspend fun executeNativeRequest(endpoint: String, params: Map<String, Any>): String {
         ensureNativeSession()
         
-        // Perbaikan: Menggunakan toJson() yang merupakan standar CloudStream
         val jsonPayload = encrypt(params.toJson()) 
         
         val headers = mapOf(
@@ -93,11 +91,8 @@ class FreeReels : MainAPI() {
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val res = executeNativeRequest("drama/list", mapOf("type" to request.data, "page" to page))
-        
-        // Perbaikan: Menggunakan tryParseJson
         val data = tryParseJson<NativeCategoryResponse>(res)
         
-        // Perbaikan: Memberi nama 'item' secara eksplisit untuk mencegah error shadowed 'it'
         val items = data?.data?.items?.map { item -> 
             newTvSeriesSearchResponse(item.title ?: "", item.id.toString()) { 
                 this.posterUrl = item.cover 
@@ -123,7 +118,6 @@ class FreeReels : MainAPI() {
         val parsedData = tryParseJson<NativeDetailResponse>(res) ?: throw ErrorLoadingException("Gagal memuat data")
         val data = parsedData.data ?: throw ErrorLoadingException("Data detail kosong")
 
-        // Perbaikan: Menggunakan newEpisode builder
         val episodeList = data.episodes?.map { ep -> 
             newEpisode(ep.id.toString()) {
                 this.name = "Eps ${ep.episodeNumber}"
@@ -137,14 +131,18 @@ class FreeReels : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val res = executeNativeRequest("episode/links", mapOf("id" to data))
         val videoData = tryParseJson<NativeVideoResponse>(res)?.data
 
         videoData?.links?.forEach { link ->
             val videoUrl = link.url ?: return@forEach
             
-            // Perbaikan: Menggunakan newExtractorLink builder
             callback.invoke(
                 newExtractorLink(
                     source = name,
