@@ -15,7 +15,6 @@ import javax.crypto.spec.SecretKeySpec
 
 class FreeReels : MainAPI() {
     override var mainUrl = "https://free-reels.com"
-    private val nativeApiUrl = "https://apiv2.free-reels.com/frv2-api"
     
     override var name = "FreeReels"
     override var lang = "id"
@@ -29,9 +28,9 @@ class FreeReels : MainAPI() {
     private val nativeLoginSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv"
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
     private val secureRandom = SecureRandom()
-    private var nativeSessionToken: String? = null
+    private var sessionToken: String? = null
 
-    // Kategori Baru Sesuai API /homepage/v2/tab/feed
+    // Kategori Sesuai API Feed
     override val mainPage = mainPageOf(
         "993" to "Populer",
         "995" to "Terbaru",
@@ -58,10 +57,12 @@ class FreeReels : MainAPI() {
         return Base64.encodeToString(iv + encrypted, Base64.NO_WRAP)
     }
 
-    private fun decrypt(encryptedText: String): String {
+    private fun decryptIfNeeded(encryptedText: String): String {
+        val clean = encryptedText.trim()
+        if (clean.startsWith("{") || clean.startsWith("[")) return clean
         return try {
-            val decoded = Base64.decode(encryptedText, Base64.DEFAULT)
-            if (decoded.size < 16) return encryptedText 
+            val decoded = Base64.decode(clean, Base64.DEFAULT)
+            if (decoded.size < 16) return clean 
             
             val iv = decoded.copyOfRange(0, 16)
             val payload = decoded.copyOfRange(16, decoded.size)
@@ -69,96 +70,105 @@ class FreeReels : MainAPI() {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
             String(cipher.doFinal(payload))
         } catch (e: Exception) {
-            encryptedText
+            clean
         }
     }
 
     // ==========================================
-    // SISTEM LOGIN & REQUEST API NATIVE
+    // SISTEM LOGIN & REQUEST API (DUAL CORE)
     // ==========================================
-    private suspend fun ensureNativeSession() {
-        if (nativeSessionToken != null) return
+    private suspend fun ensureSession() {
+        if (sessionToken != null) return
 
         val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
         val sign = md5(deviceId + nativeLoginSalt)
         
-        val payloadObj = mapOf(
-            "device_id" to deviceId, 
-            "device_name" to "Redmi", 
-            "sign" to sign
-        )
-        val encryptedPayload = encrypt(payloadObj.toJson())
-        val headers = mapOf("X-Auth-Salt" to authSalt)
-        
-        // Auto-Scanner: Mencoba berbagai kemungkinan rute login API
-        val endpoints = listOf(
-            "/auth/anonymous_login",
-            "/auth/anonymous-login",
-            "/user/anonymous_login",
-            "/user/anonymous-login",
-            "/v1/auth/anonymous_login",
-            "/v1/user/anonymous_login",
-            "/api/auth/anonymous_login",
-            "/api/user/anonymous_login"
+        val headers = mapOf(
+            "X-Auth-Salt" to authSalt,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
+            "Accept" to "application/json"
         )
         
-        var success = false
+        // AUTO-SCANNER: Coba login pakai API H5 (mydramawave), kalau 404 baru pakai API Native
+        val loginConfigs = listOf(
+            "https://api.mydramawave.com/h5-api/auth/anonymous-login" to mapOf("device_id" to deviceId),
+            "https://apiv2.free-reels.com/frv2-api/auth/anonymous-login" to mapOf("device_id" to deviceId, "device_name" to "Redmi", "sign" to sign)
+        )
+        
         var lastError = ""
-
-        for (endpoint in endpoints) {
+        for ((url, body) in loginConfigs) {
             try {
-                // Perbaikan: Menggunakan 'json =' agar Content-Type dikenali sebagai Application/JSON
-                val response = app.post(
-                    "$nativeApiUrl$endpoint",
-                    headers = headers,
-                    json = mapOf("payload" to encryptedPayload)
-                ).text
+                val reqBody = mapOf("payload" to encrypt(body.toJson()))
+                val res = app.post(url, headers = headers, json = reqBody).text
                 
-                val decrypted = if (response.startsWith("{") || response.startsWith("[")) response else decrypt(response)
-                val authData = tryParseJson<NativeAuthResponse>(decrypted)
-                
+                val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
                 val token = authData?.data?.authKey ?: authData?.data?.token
                 if (token != null) {
-                    nativeSessionToken = token
-                    success = true
-                    break
+                    sessionToken = token
+                    return // Login Berhasil!
                 }
             } catch (e: Exception) {
                 lastError = e.message ?: "404 Not Found"
             }
         }
+        throw ErrorLoadingException("Sistem Gagal Login! Kedua API (H5 & Native) menolak akses. Error: $lastError")
+    }
+
+    private suspend fun executePost(path: String, body: Any): String {
+        ensureSession()
+        val reqBody = mapOf("payload" to encrypt(body.toJson()))
+        val headers = mapOf(
+            "Authorization" to "Bearer $sessionToken",
+            "X-Auth-Salt" to authSalt,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36",
+            "Accept" to "application/json"
+        )
         
-        if (!success) {
-            throw ErrorLoadingException("Gagal Login Anonim! Semua rute ditolak. Error terakhir: $lastError")
+        val urlsToTry = listOf(
+            "https://api.mydramawave.com/h5-api/$path",
+            "https://apiv2.free-reels.com/frv2-api/$path"
+        )
+        
+        var lastError = ""
+        for (url in urlsToTry) {
+            try {
+                val res = app.post(url, headers = headers, json = reqBody).text
+                return decryptIfNeeded(res)
+            } catch (e: Exception) {
+                lastError = e.message ?: "404 Not Found"
+            }
         }
+        throw ErrorLoadingException("Gagal mengambil data (POST $path). Error: $lastError")
     }
 
-    private suspend fun nativeApiGet(path: String, query: Map<String, String> = emptyMap()): String {
-        ensureNativeSession()
-        val cleanPath = if (path.startsWith("/")) path else "/$path"
+    private suspend fun executeGet(path: String, query: Map<String, String>): String {
+        ensureSession()
         val queryStr = query.entries.joinToString("&") { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }
-        val url = if (queryStr.isEmpty()) "$nativeApiUrl$cleanPath" else "$nativeApiUrl$cleanPath?$queryStr"
+        val headers = mapOf(
+            "Authorization" to "Bearer $sessionToken",
+            "X-Auth-Salt" to authSalt,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36",
+            "Accept" to "application/json"
+        )
         
-        val headers = mapOf(
-            "Authorization" to "Bearer $nativeSessionToken",
-            "X-Auth-Salt" to authSalt
+        // H5 API pakai rute /info, sedangkan Native pakai /info_v2
+        val h5Path = path.replace("info_v2", "info")
+        val urlsToTry = listOf(
+            "https://api.mydramawave.com/h5-api/$h5Path",
+            "https://apiv2.free-reels.com/frv2-api/$path"
         )
-
-        val res = app.get(url, headers = headers).text
-        return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
-    }
-
-    private suspend fun nativeApiPost(path: String, body: Any): String {
-        ensureNativeSession()
-        val cleanPath = if (path.startsWith("/")) path else "/$path"
-        val jsonPayload = encrypt(body.toJson()) 
-        val headers = mapOf(
-            "Authorization" to "Bearer $nativeSessionToken",
-            "X-Auth-Salt" to authSalt
-        )
-
-        val res = app.post("$nativeApiUrl$cleanPath", headers = headers, json = mapOf("payload" to jsonPayload)).text
-        return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
+        
+        var lastError = ""
+        for (urlBase in urlsToTry) {
+            try {
+                val url = if (queryStr.isEmpty()) urlBase else "$urlBase?$queryStr"
+                val res = app.get(url, headers = headers).text
+                return decryptIfNeeded(res)
+            } catch (e: Exception) {
+                lastError = e.message ?: "404 Not Found"
+            }
+        }
+        throw ErrorLoadingException("Gagal mengambil data (GET $path). Error: $lastError")
     }
 
     // ==========================================
@@ -166,10 +176,10 @@ class FreeReels : MainAPI() {
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val nextCursor = if (page == 1) "" else page.toString()
-        val res = nativeApiPost("/homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
+        val res = executePost("homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
         
         val data = tryParseJson<FeedResponse>(res) 
-            ?: throw ErrorLoadingException("Gagal muat homepage, respons tidak terduga:\n$res")
+            ?: throw ErrorLoadingException("Format respons homepage tidak dikenali.")
         
         val items = data.data?.items?.mapNotNull { item -> 
             if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
@@ -182,11 +192,10 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val res = nativeApiPost("/drama/search", mapOf("keyword" to query))
+        val res = executePost("drama/search", mapOf("keyword" to query))
         val data = tryParseJson<NativeCategoryResponse>(res)
-            ?: throw ErrorLoadingException("Gagal mencari, respons tidak terduga:\n$res")
         
-        return data.data?.items?.mapNotNull { item ->
+        return data?.data?.items?.mapNotNull { item ->
             if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
             newTvSeriesSearchResponse(item.title, item.key) { 
                 this.posterUrl = item.cover 
@@ -195,11 +204,11 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val res = nativeApiGet("/drama/info_v2", mapOf("series_id" to url))
+        val res = executeGet("drama/info_v2", mapOf("series_id" to url))
         val parsedData = tryParseJson<NativeDetailResponse>(res) 
-            ?: throw ErrorLoadingException("Gagal memuat detail info:\n$res")
+            ?: throw ErrorLoadingException("Gagal membaca struktur detail JSON.")
         
-        val info = parsedData.data?.info ?: throw ErrorLoadingException("Data detail kosong")
+        val info = parsedData.data?.info ?: throw ErrorLoadingException("Data film ini kosong di server.")
 
         val episodeList = info.episodeList?.map { ep -> 
             newEpisode(ep.toJson()) {
@@ -209,7 +218,7 @@ class FreeReels : MainAPI() {
             } 
         } ?: emptyList()
 
-        return newTvSeriesLoadResponse(info.name ?: "Unknown Title", url, TvType.AsianDrama, episodeList) {
+        return newTvSeriesLoadResponse(info.name ?: "Tanpa Judul", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = info.cover
             this.plot = info.desc
         }
@@ -221,7 +230,7 @@ class FreeReels : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val ep = tryParseJson<DramaEpisode>(data) ?: throw ErrorLoadingException("Format episode tidak valid")
+        val ep = tryParseJson<DramaEpisode>(data) ?: throw ErrorLoadingException("Data video cacat.")
 
         val videoLinks = mutableListOf<Pair<String, String>>()
         ep.m3u8Url?.let { videoLinks.add(it to "M3U8") }
@@ -240,7 +249,7 @@ class FreeReels : MainAPI() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
-                        this.headers = mapOf("Authorization" to "Bearer $nativeSessionToken")
+                        this.headers = mapOf("Authorization" to "Bearer $sessionToken")
                     }
                 )
             }
