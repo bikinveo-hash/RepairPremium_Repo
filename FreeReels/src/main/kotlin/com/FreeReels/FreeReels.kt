@@ -1,12 +1,13 @@
 package com.FreeReels
 
 import android.util.Base64
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -22,38 +23,44 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
+    // Rahasia dari aplikasi aslinya
     private val cryptoKey = "2r36789f45q01ae5"
+    private val nativeLoginSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv"
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
     private val secureRandom = SecureRandom()
     private var nativeSessionToken: String? = null
 
+    // Kategori Lengkap Sesuai Kode Java Asli
     override val mainPage = mainPageOf(
         "popular" to "Populer",
         "new" to "Terbaru",
+        "coming_soon" to "Segera Hadir",
+        "dubbing" to "Dubbing",
+        "female" to "Perempuan",
+        "male" to "Laki-Laki",
         "anime" to "Anime"
     )
 
     // ==========================================
-    // MESIN KRIPTOGRAFI (AES/CBC)
+    // MESIN KRIPTOGRAFI
     // ==========================================
+    private fun md5(input: String): String {
+        val md = MessageDigest.getInstance("MD5")
+        return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
     private fun encrypt(text: String): String {
         val iv = ByteArray(16).apply { secureRandom.nextBytes(this) }
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
         val encrypted = cipher.doFinal(text.toByteArray())
-        val combined = iv + encrypted
-        return Base64.encodeToString(combined, Base64.NO_WRAP)
+        return Base64.encodeToString(iv + encrypted, Base64.NO_WRAP)
     }
 
     private fun decrypt(encryptedText: String): String {
-        // PERBAIKAN: Menambahkan Try-Catch dan Cek Ukuran Data
         return try {
             val decoded = Base64.decode(encryptedText, Base64.DEFAULT)
-            
-            // Cek apakah data cukup panjang untuk diambil IV-nya (minimal 16 byte)
-            if (decoded.size < 16) {
-                return encryptedText 
-            }
+            if (decoded.size < 16) return encryptedText 
             
             val iv = decoded.copyOfRange(0, 16)
             val payload = decoded.copyOfRange(16, decoded.size)
@@ -61,52 +68,56 @@ class FreeReels : MainAPI() {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
             String(cipher.doFinal(payload))
         } catch (e: Exception) {
-            // Jika gagal dekripsi (misal karena server mengirim teks biasa), kembalikan teks aslinya
             encryptedText
         }
     }
 
     // ==========================================
-    // SISTEM LOGIN SILUMAN (SESSION)
+    // SISTEM LOGIN & REQUEST API
     // ==========================================
     private suspend fun ensureNativeSession() {
         if (nativeSessionToken != null) return
 
         val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
-        val payload = encrypt(mapOf("device_id" to deviceId, "brand" to "Redmi", "model" to "23090RA98G").toJson())
+        val sign = md5(deviceId + nativeLoginSalt) // Sign digital dari Java
+        
+        val payload = mapOf(
+            "device_id" to deviceId, 
+            "device_name" to "Redmi", 
+            "sign" to sign
+        ).toJson()
         
         val response = app.post(
             "$nativeApiUrl/auth/anonymous-login",
-            data = mapOf("payload" to payload)
+            data = mapOf("payload" to encrypt(payload))
         ).text
         
         val authData = tryParseJson<NativeAuthResponse>(response)
-        nativeSessionToken = authData?.data?.token
+        nativeSessionToken = authData?.data?.authKey ?: authData?.data?.token
     }
 
     private suspend fun executeNativeRequest(endpoint: String, params: Map<String, Any>): String {
         ensureNativeSession()
-        
         val jsonPayload = encrypt(params.toJson()) 
-        
         val headers = mapOf(
             "Authorization" to "Bearer $nativeSessionToken",
             "X-Auth-Salt" to authSalt
         )
 
         val res = app.post("$nativeApiUrl/$endpoint", headers = headers, data = mapOf("payload" to jsonPayload)).text
-        return if (res.startsWith("{")) res else decrypt(res)
+        return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
     }
 
     // ==========================================
-    // IMPLEMENTASI FITUR UTAMA
+    // FITUR UTAMA CLOUDSTREAM
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val res = executeNativeRequest("drama/list", mapOf("type" to request.data, "page" to page))
         val data = tryParseJson<NativeCategoryResponse>(res)
         
-        val items = data?.data?.items?.map { item -> 
-            newTvSeriesSearchResponse(item.title ?: "", item.id.toString()) { 
+        val items = data?.data?.items?.mapNotNull { item -> 
+            if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
+            newTvSeriesSearchResponse(item.title, item.key) { 
                 this.posterUrl = item.cover 
             }
         } ?: emptyList()
@@ -118,28 +129,33 @@ class FreeReels : MainAPI() {
         val res = executeNativeRequest("drama/search", mapOf("keyword" to query))
         val data = tryParseJson<NativeCategoryResponse>(res)
         
-        return data?.data?.items?.map { item ->
-            newTvSeriesSearchResponse(item.title ?: "", item.id.toString()) { 
+        return data?.data?.items?.mapNotNull { item ->
+            if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
+            newTvSeriesSearchResponse(item.title, item.key) { 
                 this.posterUrl = item.cover 
             }
         } ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val res = executeNativeRequest("drama/detail", mapOf("id" to url))
+        // Menggunakan info_v2 sesuai kode Java
+        val res = executeNativeRequest("drama/info_v2", mapOf("series_id" to url))
         val parsedData = tryParseJson<NativeDetailResponse>(res) ?: throw ErrorLoadingException("Gagal memuat data")
-        val data = parsedData.data ?: throw ErrorLoadingException("Data detail kosong")
+        val info = parsedData.data?.info ?: throw ErrorLoadingException("Data detail kosong")
 
-        val episodeList = data.episodes?.map { ep -> 
-            newEpisode(ep.id.toString()) {
-                this.name = "Eps ${ep.episodeNumber}"
-                this.episode = ep.episodeNumber
+        val episodeList = info.episodeList?.map { ep -> 
+            // Trik Spesial: Kita simpan seluruh struktur episode ini sebagai String
+            // agar loadLinks tidak perlu konek ke server lagi!
+            newEpisode(ep.toJson()) {
+                this.name = ep.name ?: "Eps ${ep.index}"
+                this.episode = ep.index
+                this.posterUrl = ep.cover ?: info.cover
             } 
         } ?: emptyList()
 
-        return newTvSeriesLoadResponse(data.title ?: "", url, TvType.AsianDrama, episodeList) {
-            this.posterUrl = data.cover
-            this.plot = data.description
+        return newTvSeriesLoadResponse(info.name ?: "Unknown Title", url, TvType.AsianDrama, episodeList) {
+            this.posterUrl = info.cover
+            this.plot = info.desc
         }
     }
 
@@ -149,40 +165,91 @@ class FreeReels : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val res = executeNativeRequest("episode/links", mapOf("id" to data))
-        val videoData = tryParseJson<NativeVideoResponse>(res)?.data
+        // Ekstrak data langsung dari String tanpa perlu nembak API lagi
+        val ep = tryParseJson<DramaEpisode>(data) ?: return false
 
-        videoData?.links?.forEach { link ->
-            val videoUrl = link.url ?: return@forEach
-            
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = videoUrl,
-                    type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf("Authorization" to "Bearer $nativeSessionToken")
-                }
-            )
+        // Daftar semua kemungkinan link yang ada di Java
+        val videoLinks = listOfNotNull(
+            ep.m3u8Url to "M3U8",
+            ep.videoUrl to "MP4",
+            ep.h264M3u8 to "H264 M3U8",
+            ep.h265M3u8 to "H265 M3U8"
+        )
+
+        // Memancarkan (Emit) Video
+        videoLinks.forEach { (url, typeName) ->
+            if (url.isNotBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name - $typeName",
+                        url = url,
+                        referer = "$mainUrl/",
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = url.contains(".m3u8")
+                    ) {
+                        this.headers = mapOf("Authorization" to "Bearer $nativeSessionToken")
+                    }
+                )
+            }
         }
+
+        // Memancarkan (Emit) Subtitle
+        ep.subtitleList?.forEach { sub ->
+            val subUrl = sub.vtt ?: sub.subtitle
+            if (!subUrl.isNullOrBlank()) {
+                subtitleCallback.invoke(
+                    SubtitleFile(
+                        lang = sub.language ?: sub.displayName ?: "id",
+                        url = subUrl
+                    )
+                )
+            }
+        }
+
         return true
     }
 }
 
 // ==========================================
-// DATA MODELS (JSON MAPPING)
+// DATA MODELS (UPDATE DARI JAVA ASLI)
 // ==========================================
-data class NativeAuthResponse(val data: TokenData?)
-data class TokenData(val token: String?)
-data class NativeCategoryResponse(val data: CategoryPage?)
-data class CategoryPage(val items: List<HomeItem>?, val hasNext: Boolean)
-data class HomeItem(val id: Int?, val title: String?, val cover: String?)
-data class NativeDetailResponse(val data: DetailData?)
-data class DetailData(val title: String?, val cover: String?, val description: String?, val episodes: List<NativeEpisode>?)
-data class NativeEpisode(val id: Int, val episodeNumber: Int)
-data class NativeVideoResponse(val data: VideoData?)
-data class VideoData(val links: List<VideoLink>?)
-data class VideoLink(val url: String?)
+data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
+data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("token") val token: String?)
+
+data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
+data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
+data class HomeItem(
+    @JsonProperty("key") val key: String?, 
+    @JsonProperty("title") val title: String?, 
+    @JsonProperty("cover") val cover: String?,
+    @JsonProperty("desc") val desc: String?
+)
+
+data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
+data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
+data class DramaInfo(
+    @JsonProperty("name") val name: String?, 
+    @JsonProperty("cover") val cover: String?, 
+    @JsonProperty("desc") val desc: String?, 
+    @JsonProperty("episode_list") val episodeList: List<DramaEpisode>?
+)
+
+data class DramaEpisode(
+    @JsonProperty("id") val id: String?, 
+    @JsonProperty("index") val index: Int?,
+    @JsonProperty("name") val name: String?,
+    @JsonProperty("cover") val cover: String?,
+    @JsonProperty("m3u8_url") val m3u8Url: String?,
+    @JsonProperty("video_url") val videoUrl: String?,
+    @JsonProperty("external_audio_h264_m3u8") val h264M3u8: String?,
+    @JsonProperty("external_audio_h265_m3u8") val h265M3u8: String?,
+    @JsonProperty("subtitle_list") val subtitleList: List<DramaSubtitle>?
+)
+
+data class DramaSubtitle(
+    @JsonProperty("language") val language: String?,
+    @JsonProperty("subtitle") val subtitle: String?,
+    @JsonProperty("vtt") val vtt: String?,
+    @JsonProperty("display_name") val displayName: String?
+)
