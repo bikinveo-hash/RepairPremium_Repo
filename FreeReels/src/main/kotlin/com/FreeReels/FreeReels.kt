@@ -82,22 +82,54 @@ class FreeReels : MainAPI() {
         val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
         val sign = md5(deviceId + nativeLoginSalt)
         
-        val payload = mapOf(
+        val payloadObj = mapOf(
             "device_id" to deviceId, 
             "device_name" to "Redmi", 
             "sign" to sign
-        ).toJson()
+        )
+        val encryptedPayload = encrypt(payloadObj.toJson())
+        val headers = mapOf("X-Auth-Salt" to authSalt)
         
-        val response = app.post(
-            "$nativeApiUrl/auth/anonymous-login",
-            data = mapOf("payload" to encrypt(payload))
-        ).text
+        // Auto-Scanner: Mencoba berbagai kemungkinan rute login API
+        val endpoints = listOf(
+            "/auth/anonymous_login",
+            "/auth/anonymous-login",
+            "/user/anonymous_login",
+            "/user/anonymous-login",
+            "/v1/auth/anonymous_login",
+            "/v1/user/anonymous_login",
+            "/api/auth/anonymous_login",
+            "/api/user/anonymous_login"
+        )
         
-        val authData = tryParseJson<NativeAuthResponse>(response)
-        nativeSessionToken = authData?.data?.authKey ?: authData?.data?.token
+        var success = false
+        var lastError = ""
+
+        for (endpoint in endpoints) {
+            try {
+                // Perbaikan: Menggunakan 'json =' agar Content-Type dikenali sebagai Application/JSON
+                val response = app.post(
+                    "$nativeApiUrl$endpoint",
+                    headers = headers,
+                    json = mapOf("payload" to encryptedPayload)
+                ).text
+                
+                val decrypted = if (response.startsWith("{") || response.startsWith("[")) response else decrypt(response)
+                val authData = tryParseJson<NativeAuthResponse>(decrypted)
+                
+                val token = authData?.data?.authKey ?: authData?.data?.token
+                if (token != null) {
+                    nativeSessionToken = token
+                    success = true
+                    break
+                }
+            } catch (e: Exception) {
+                lastError = e.message ?: "404 Not Found"
+            }
+        }
         
-        if (nativeSessionToken == null) {
-            throw ErrorLoadingException("Gagal Login Anonim! Server menjawab:\n$response")
+        if (!success) {
+            throw ErrorLoadingException("Gagal Login Anonim! Semua rute ditolak. Error terakhir: $lastError")
         }
     }
 
@@ -125,7 +157,7 @@ class FreeReels : MainAPI() {
             "X-Auth-Salt" to authSalt
         )
 
-        val res = app.post("$nativeApiUrl$cleanPath", headers = headers, data = mapOf("payload" to jsonPayload)).text
+        val res = app.post("$nativeApiUrl$cleanPath", headers = headers, json = mapOf("payload" to jsonPayload)).text
         return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
     }
 
@@ -133,7 +165,6 @@ class FreeReels : MainAPI() {
     // FITUR UTAMA CLOUDSTREAM
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // API baru menggunakan FeedRequest
         val nextCursor = if (page == 1) "" else page.toString()
         val res = nativeApiPost("/homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
         
@@ -164,10 +195,9 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // WAJIB menggunakan metode GET seperti kode Java aslinya
         val res = nativeApiGet("/drama/info_v2", mapOf("series_id" to url))
         val parsedData = tryParseJson<NativeDetailResponse>(res) 
-            ?: throw ErrorLoadingException("Gagal memuat detail info_v2:\n$res")
+            ?: throw ErrorLoadingException("Gagal memuat detail info:\n$res")
         
         val info = parsedData.data?.info ?: throw ErrorLoadingException("Data detail kosong")
 
@@ -238,11 +268,9 @@ class FreeReels : MainAPI() {
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("token") val token: String?)
 
-// Model Pencarian
 data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
 data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
 
-// Model Homepage Baru
 data class FeedResponse(@JsonProperty("data") val data: FeedData?)
 data class FeedData(
     @JsonProperty("items") val items: List<HomeItem>?, 
@@ -260,7 +288,6 @@ data class HomeItem(
     @JsonProperty("desc") val desc: String?
 )
 
-// Model Detail Info & Video
 data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
 data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
 data class DramaInfo(
