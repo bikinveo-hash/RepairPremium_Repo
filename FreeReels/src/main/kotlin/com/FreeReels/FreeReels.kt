@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -30,15 +31,15 @@ class FreeReels : MainAPI() {
     private val secureRandom = SecureRandom()
     private var nativeSessionToken: String? = null
 
-    // Kategori Lengkap Sesuai Kode Java Asli
+    // Kategori Baru Sesuai API /homepage/v2/tab/feed
     override val mainPage = mainPageOf(
-        "popular" to "Populer",
-        "new" to "Terbaru",
-        "coming_soon" to "Segera Hadir",
-        "dubbing" to "Dubbing",
-        "female" to "Perempuan",
-        "male" to "Laki-Laki",
-        "anime" to "Anime"
+        "993" to "Populer",
+        "995" to "Terbaru",
+        "1004" to "Segera Hadir",
+        "1002" to "Dubbing",
+        "994" to "Perempuan",
+        "996" to "Laki-Laki",
+        "1005" to "Anime"
     )
 
     // ==========================================
@@ -73,7 +74,7 @@ class FreeReels : MainAPI() {
     }
 
     // ==========================================
-    // SISTEM LOGIN & REQUEST API
+    // SISTEM LOGIN & REQUEST API NATIVE
     // ==========================================
     private suspend fun ensureNativeSession() {
         if (nativeSessionToken != null) return
@@ -94,17 +95,37 @@ class FreeReels : MainAPI() {
         
         val authData = tryParseJson<NativeAuthResponse>(response)
         nativeSessionToken = authData?.data?.authKey ?: authData?.data?.token
+        
+        if (nativeSessionToken == null) {
+            throw ErrorLoadingException("Gagal Login Anonim! Server menjawab:\n$response")
+        }
     }
 
-    private suspend fun executeNativeRequest(endpoint: String, params: Map<String, Any>): String {
+    private suspend fun nativeApiGet(path: String, query: Map<String, String> = emptyMap()): String {
         ensureNativeSession()
-        val jsonPayload = encrypt(params.toJson()) 
+        val cleanPath = if (path.startsWith("/")) path else "/$path"
+        val queryStr = query.entries.joinToString("&") { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }
+        val url = if (queryStr.isEmpty()) "$nativeApiUrl$cleanPath" else "$nativeApiUrl$cleanPath?$queryStr"
+        
         val headers = mapOf(
             "Authorization" to "Bearer $nativeSessionToken",
             "X-Auth-Salt" to authSalt
         )
 
-        val res = app.post("$nativeApiUrl/$endpoint", headers = headers, data = mapOf("payload" to jsonPayload)).text
+        val res = app.get(url, headers = headers).text
+        return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
+    }
+
+    private suspend fun nativeApiPost(path: String, body: Any): String {
+        ensureNativeSession()
+        val cleanPath = if (path.startsWith("/")) path else "/$path"
+        val jsonPayload = encrypt(body.toJson()) 
+        val headers = mapOf(
+            "Authorization" to "Bearer $nativeSessionToken",
+            "X-Auth-Salt" to authSalt
+        )
+
+        val res = app.post("$nativeApiUrl$cleanPath", headers = headers, data = mapOf("payload" to jsonPayload)).text
         return if (res.startsWith("{") || res.startsWith("[")) res else decrypt(res)
     }
 
@@ -112,24 +133,29 @@ class FreeReels : MainAPI() {
     // FITUR UTAMA CLOUDSTREAM
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val res = executeNativeRequest("drama/list", mapOf("type" to request.data, "page" to page))
-        val data = tryParseJson<NativeCategoryResponse>(res)
+        // API baru menggunakan FeedRequest
+        val nextCursor = if (page == 1) "" else page.toString()
+        val res = nativeApiPost("/homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
         
-        val items = data?.data?.items?.mapNotNull { item -> 
+        val data = tryParseJson<FeedResponse>(res) 
+            ?: throw ErrorLoadingException("Gagal muat homepage, respons tidak terduga:\n$res")
+        
+        val items = data.data?.items?.mapNotNull { item -> 
             if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
             newTvSeriesSearchResponse(item.title, item.key) { 
                 this.posterUrl = item.cover 
             }
         } ?: emptyList()
 
-        return newHomePageResponse(request.name, items, hasNext = data?.data?.hasNext ?: false)
+        return newHomePageResponse(request.name, items, hasNext = data.data?.pageInfo?.hasMore ?: false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val res = executeNativeRequest("drama/search", mapOf("keyword" to query))
+        val res = nativeApiPost("/drama/search", mapOf("keyword" to query))
         val data = tryParseJson<NativeCategoryResponse>(res)
+            ?: throw ErrorLoadingException("Gagal mencari, respons tidak terduga:\n$res")
         
-        return data?.data?.items?.mapNotNull { item ->
+        return data.data?.items?.mapNotNull { item ->
             if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
             newTvSeriesSearchResponse(item.title, item.key) { 
                 this.posterUrl = item.cover 
@@ -138,8 +164,11 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val res = executeNativeRequest("drama/info_v2", mapOf("series_id" to url))
-        val parsedData = tryParseJson<NativeDetailResponse>(res) ?: throw ErrorLoadingException("Gagal memuat data")
+        // WAJIB menggunakan metode GET seperti kode Java aslinya
+        val res = nativeApiGet("/drama/info_v2", mapOf("series_id" to url))
+        val parsedData = tryParseJson<NativeDetailResponse>(res) 
+            ?: throw ErrorLoadingException("Gagal memuat detail info_v2:\n$res")
+        
         val info = parsedData.data?.info ?: throw ErrorLoadingException("Data detail kosong")
 
         val episodeList = info.episodeList?.map { ep -> 
@@ -162,9 +191,8 @@ class FreeReels : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val ep = tryParseJson<DramaEpisode>(data) ?: return false
+        val ep = tryParseJson<DramaEpisode>(data) ?: throw ErrorLoadingException("Format episode tidak valid")
 
-        // PERBAIKAN: Memastikan URL tidak null sebelum dimasukkan ke daftar
         val videoLinks = mutableListOf<Pair<String, String>>()
         ep.m3u8Url?.let { videoLinks.add(it to "M3U8") }
         ep.videoUrl?.let { videoLinks.add(it to "MP4") }
@@ -173,7 +201,6 @@ class FreeReels : MainAPI() {
 
         videoLinks.forEach { (url, typeName) ->
             if (url.isNotBlank()) {
-                // PERBAIKAN: Penulisan ExtractorLink yang sesuai dengan standar baru
                 callback.invoke(
                     newExtractorLink(
                         source = name,
@@ -206,13 +233,26 @@ class FreeReels : MainAPI() {
 }
 
 // ==========================================
-// DATA MODELS (UPDATE DARI JAVA ASLI)
+// DATA MODELS
 // ==========================================
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("token") val token: String?)
 
+// Model Pencarian
 data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
 data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
+
+// Model Homepage Baru
+data class FeedResponse(@JsonProperty("data") val data: FeedData?)
+data class FeedData(
+    @JsonProperty("items") val items: List<HomeItem>?, 
+    @JsonProperty("page_info") val pageInfo: PageInfo?
+)
+data class PageInfo(
+    @JsonProperty("next") val next: String?, 
+    @JsonProperty("has_more") val hasMore: Boolean?
+)
+
 data class HomeItem(
     @JsonProperty("key") val key: String?, 
     @JsonProperty("title") val title: String?, 
@@ -220,6 +260,7 @@ data class HomeItem(
     @JsonProperty("desc") val desc: String?
 )
 
+// Model Detail Info & Video
 data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
 data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
 data class DramaInfo(
