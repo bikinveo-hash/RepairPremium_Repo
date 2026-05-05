@@ -24,5 +24,5 @@ cloudstream {
         "AsianDrama",
     )
     isCrossPlatform = false
-    iconUrl = "https://sflix.film/favicon.ico"
+    iconUrl = "https://free-reels.com/free-reels.png"
 }
