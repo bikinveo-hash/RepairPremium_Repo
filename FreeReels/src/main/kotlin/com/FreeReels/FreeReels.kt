@@ -1,24 +1,12 @@
 package com.FreeReels
 
-import android.util.Base64
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import java.net.URLEncoder
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
+import org.jsoup.nodes.Element
 
 class FreeReels : MainAPI() {
-    override var mainUrl = "https://free-reels.com"
-    private val nativeApiUrl = "https://apiv2.free-reels.com/frv2-api"
-    private val h5ApiUrl = "https://api.mydramawave.com/h5-api"
-    
+    // Kita gunakan Frontend Web-nya langsung! Jauh lebih aman dari blokir.
+    override var mainUrl = "https://m.mydramawave.com"
     override var name = "FreeReels"
     override var lang = "id"
     override val hasMainPage = true
@@ -26,334 +14,164 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // Kunci Rahasia
-    private val cryptoKey = "2r36789f45q01ae5"
-    private val nativeLoginSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv"
-    private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
-    
-    // Identitas Device Persistent
-    private val secureRandom = SecureRandom()
-    private val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
-    private val sessionId = UUID.randomUUID().toString()
-    
-    private var sessionToken: String? = null
-    private var sessionSecret: String? = null
-    private var isNative = true // Deteksi otomatis pakai jalur mana
-
+    // Kategori Web (Disesuaikan dengan rute URL webnya nanti, sementara pakai ini)
     override val mainPage = mainPageOf(
-        "993" to "Populer",
-        "995" to "Terbaru",
-        "1004" to "Segera Hadir",
-        "1002" to "Dubbing",
-        "994" to "Perempuan",
-        "996" to "Laki-Laki",
-        "1005" to "Anime"
+        "/list?type=popular" to "Populer",
+        "/list?type=new" to "Terbaru",
+        "/list?type=coming_soon" to "Segera Hadir"
     )
 
     // ==========================================
-    // MESIN KRIPTOGRAFI
-    // ==========================================
-    private fun md5(input: String): String {
-        val md = MessageDigest.getInstance("MD5")
-        return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
-    }
-
-    private fun encrypt(text: String): String {
-        val iv = ByteArray(16).apply { secureRandom.nextBytes(this) }
-        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
-        val encrypted = cipher.doFinal(text.toByteArray())
-        return Base64.encodeToString(iv + encrypted, Base64.NO_WRAP)
-    }
-
-    private fun decryptIfNeeded(encryptedText: String): String {
-        val clean = encryptedText.trim()
-        if (clean.startsWith("{") || clean.startsWith("[")) return clean
-        return try {
-            val decoded = Base64.decode(clean, Base64.DEFAULT)
-            if (decoded.size < 16) return clean 
-            
-            val iv = decoded.copyOfRange(0, 16)
-            val payload = decoded.copyOfRange(16, decoded.size)
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(cryptoKey.toByteArray(), "AES"), IvParameterSpec(iv))
-            String(cipher.doFinal(payload))
-        } catch (e: Exception) {
-            clean
-        }
-    }
-
-    // ==========================================
-    // INJEKSI KTP (HEADER INTERCEPTOR)
-    // ==========================================
-    private fun getAppHeaders(): MutableMap<String, String> {
-        val headers = mutableMapOf(
-            "language" to "id",
-            "country" to "ID",
-            "Accept" to "application/json",
-            "timezone" to "+7",
-            "network-type" to "WIFI",
-            "screen-width" to "1080",
-            "screen-height" to "2400",
-            "is-mainland" to "false",
-            "device-country" to "ID",
-            "device-language" to "id-ID",
-            "x-device-model" to "23090RA98G",
-            "x-device-manufacturer" to "Xiaomi",
-            "x-device-brand" to "Redmi",
-            "x-device-product" to "sky",
-            "x-device-fingerprint" to "Redmi/sky_global/sky:14/UKQ1.231003.002/V816.0.11.0.UMWMIXM:user/release-keys",
-            "session-id" to sessionId,
-            "app-name" to "FreeReels",
-            "app-version" to "2.5.0",
-            "device-id" to deviceId,
-            "device-version" to "33",
-            "device" to "android",
-            "X-Auth-Salt" to authSalt
-        )
-        
-        // PENTING: Meracik Oauth Signature sesuai Kode Asli!
-        if (sessionToken != null && sessionSecret != null) {
-            val ts = System.currentTimeMillis()
-            val signString = authSalt + sessionSecret
-            val signature = md5(signString)
-            headers["Authorization"] = "oauth_signature=$signature,oauth_token=$sessionToken,ts=$ts"
-        }
-        return headers
-    }
-
-    // ==========================================
-    // SISTEM LOGIN & REQUEST API (DUAL CORE)
-    // ==========================================
-    private suspend fun ensureSession() {
-        if (sessionToken != null) return
-
-        val sign = md5(deviceId + nativeLoginSalt)
-        val loginHeaders = getAppHeaders()
-        
-        // 1. Coba Jalur API Native (Enkripsi Penuh)
-        try {
-            val nativeReq = mapOf("device_id" to deviceId, "device_name" to "Redmi", "sign" to sign)
-            val nativeBody = mapOf("payload" to encrypt(nativeReq.toJson()))
-            
-            val res = app.post("$nativeApiUrl/anonymous/login", headers = loginHeaders, json = nativeBody).text
-            val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
-            
-            val token = authData?.data?.authKey ?: authData?.data?.token
-            if (token != null) {
-                sessionToken = token
-                sessionSecret = authData?.data?.authSecret ?: ""
-                isNative = true
-                return
-            }
-        } catch (e: Exception) {
-            // Abaikan, lanjut ke Web API (H5)
-        }
-
-        // 2. Coba Jalur API H5 (Raw JSON) jika Native terblokir
-        try {
-            val h5Req = mapOf("device_id" to deviceId)
-            val res = app.post("$h5ApiUrl/anonymous/login", headers = loginHeaders, json = h5Req).text
-            val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
-            
-            val token = authData?.data?.authKey ?: authData?.data?.token
-            if (token != null) {
-                sessionToken = token
-                sessionSecret = authData?.data?.authSecret ?: ""
-                isNative = false
-                return
-            }
-        } catch (e: Exception) {
-            // Abaikan
-        }
-        
-        throw ErrorLoadingException("Gagal terhubung ke server FreeReels. (Mungkin diblokir ISP)")
-    }
-
-    private suspend fun executePost(path: String, body: Any): String {
-        ensureSession()
-        
-        if (isNative) {
-            val reqBody = mapOf("payload" to encrypt(body.toJson()))
-            val res = app.post("$nativeApiUrl/$path", headers = getAppHeaders(), json = reqBody).text
-            return decryptIfNeeded(res)
-        } else {
-            val res = app.post("$h5ApiUrl/$path", headers = getAppHeaders(), json = body).text
-            return decryptIfNeeded(res)
-        }
-    }
-
-    private suspend fun executeGet(path: String, query: Map<String, String>): String {
-        ensureSession()
-        val queryStr = query.entries.joinToString("&") { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }
-        
-        if (isNative) {
-            val url = if (queryStr.isEmpty()) "$nativeApiUrl/$path" else "$nativeApiUrl/$path?$queryStr"
-            val res = app.get(url, headers = getAppHeaders()).text
-            return decryptIfNeeded(res)
-        } else {
-            val h5Path = path.replace("info_v2", "info") // Rute H5 sedikit beda
-            val urlBase = "$h5ApiUrl/$h5Path"
-            val url = if (queryStr.isEmpty()) urlBase else "$urlBase?$queryStr"
-            val res = app.get(url, headers = getAppHeaders()).text
-            return decryptIfNeeded(res)
-        }
-    }
-
-    // ==========================================
-    // FITUR UTAMA CLOUDSTREAM
+    // 1. MENGAMBIL HALAMAN UTAMA (HTML SCRAPING)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val nextCursor = if (page == 1) "" else page.toString()
-        val res = executePost("homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
+        // Karena kita scrape web, page 1 biasanya tidak ada tambahan, page 2 dst pakai &page=2
+        val url = if (page == 1) {
+            "$mainUrl${request.data}"
+        } else {
+            "$mainUrl${request.data}&page=$page"
+        }
         
-        val data = tryParseJson<FeedResponse>(res) 
-            ?: throw ErrorLoadingException("Format respons homepage tidak dikenali.")
+        val doc = app.get(url).document
         
-        val items = data.data?.items?.mapNotNull { item -> 
-            if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
-            newTvSeriesSearchResponse(item.title, item.key) { 
-                this.posterUrl = item.cover 
+        // CATATAN: Class HTML di sini (seperti .item-card) adalah tebakan standar.
+        // Nanti kamu sesuaikan class-nya dengan yang ada di Inspect Element m.mydramawave.com ya bro!
+        val items = doc.select(".list-item, .card, .drama-item").mapNotNull { element ->
+            val title = element.select(".title, h3").text()
+            val href = element.select("a").attr("href")
+            val image = element.select("img").attr("src").let {
+                if (it.startsWith("//")) "https:$it" else it
             }
-        } ?: emptyList()
-
-        return newHomePageResponse(request.name, items, hasNext = data.data?.pageInfo?.hasMore ?: false)
+            
+            if (title.isBlank() || href.isBlank()) return@mapNotNull null
+            
+            val fixUrl = if (href.startsWith("http")) href else "$mainUrl$href"
+            
+            newTvSeriesSearchResponse(title, fixUrl) {
+                this.posterUrl = image
+            }
+        }
+        
+        return newHomePageResponse(request.name, items)
     }
 
+    // ==========================================
+    // 2. MENCARI FILM (HTML SCRAPING)
+    // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
-        val res = executePost("drama/search", mapOf("keyword" to query))
-        val data = tryParseJson<NativeCategoryResponse>(res)
+        val url = "$mainUrl/search?keyword=$query"
+        val doc = app.get(url).document
         
-        return data?.data?.items?.mapNotNull { item ->
-            if (item.title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
-            newTvSeriesSearchResponse(item.title, item.key) { 
-                this.posterUrl = item.cover 
+        return doc.select(".list-item, .card, .drama-item").mapNotNull { element ->
+            val title = element.select(".title, h3").text()
+            val href = element.select("a").attr("href")
+            val image = element.select("img").attr("src")
+            
+            if (title.isBlank() || href.isBlank()) return@mapNotNull null
+            
+            val fixUrl = if (href.startsWith("http")) href else "$mainUrl$href"
+            
+            newTvSeriesSearchResponse(title, fixUrl) {
+                this.posterUrl = image
             }
-        } ?: emptyList()
-    }
-
-    override suspend fun load(url: String): LoadResponse {
-        val res = executeGet("drama/info_v2", mapOf("series_id" to url))
-        val parsedData = tryParseJson<NativeDetailResponse>(res) 
-            ?: throw ErrorLoadingException("Gagal membaca struktur detail JSON.")
-        
-        val info = parsedData.data?.info ?: throw ErrorLoadingException("Data film ini kosong di server.")
-
-        val episodeList = info.episodeList?.map { ep -> 
-            newEpisode(ep.toJson()) {
-                this.name = ep.name ?: "Eps ${ep.index}"
-                this.episode = ep.index
-                this.posterUrl = ep.cover ?: info.cover
-            } 
-        } ?: emptyList()
-
-        return newTvSeriesLoadResponse(info.name ?: "Tanpa Judul", url, TvType.AsianDrama, episodeList) {
-            this.posterUrl = info.cover
-            this.plot = info.desc
         }
     }
 
+    // ==========================================
+    // 3. MEMUAT DETAIL & DAFTAR EPISODE
+    // ==========================================
+    override suspend fun load(url: String): LoadResponse {
+        val doc = app.get(url).document
+        
+        val title = doc.select("h1, .drama-title").text().trim()
+        val poster = doc.select(".poster img, .cover img").attr("src")
+        val plot = doc.select(".description, .synopsis").text().trim()
+        
+        // Mengambil daftar episode dari web
+        val episodes = doc.select(".episode-list a, .ep-item a").mapNotNull { ep ->
+            val epName = ep.text().trim()
+            val epHref = ep.attr("href")
+            if (epHref.isBlank()) return@mapNotNull null
+            
+            val fixEpUrl = if (epHref.startsWith("http")) epHref else "$mainUrl$epHref"
+            
+            // Kita coba ekstrak nomor episodenya
+            val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
+            
+            Episode(
+                data = fixEpUrl,
+                name = epName,
+                episode = epNum
+            )
+        }
+
+        return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
+            this.posterUrl = poster
+            this.plot = plot
+        }
+    }
+
+    // ==========================================
+    // 4. MEMUAT LINK VIDEO (SCRAPING DARI PLAYER)
+    // ==========================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val ep = tryParseJson<DramaEpisode>(data) ?: throw ErrorLoadingException("Data video cacat.")
-
-        val videoLinks = mutableListOf<Pair<String, String>>()
-        ep.m3u8Url?.let { videoLinks.add(it to "M3U8") }
-        ep.videoUrl?.let { videoLinks.add(it to "MP4") }
-        ep.h264M3u8?.let { videoLinks.add(it to "H264 M3U8") }
-        ep.h265M3u8?.let { videoLinks.add(it to "H265 M3U8") }
-
-        videoLinks.forEach { (url, typeName) ->
-            if (url.isNotBlank()) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name - $typeName",
-                        url = url,
-                        type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = getAppHeaders()
-                    }
+        // 'data' di sini adalah URL halaman player episode
+        val doc = app.get(data).document
+        val html = doc.html()
+        
+        // Biasanya web streaming menyimpan link m3u8 atau mp4 di dalam script (JSON/eval)
+        // Kita cari link m3u8 menggunakan Regex (Sapu Jagat)
+        val m3u8Regex = Regex("""(https?://[^"']+\.m3u8[^"']*)""")
+        val mp4Regex = Regex("""(https?://[^"']+\.mp4[^"']*)""")
+        
+        val m3u8Links = m3u8Regex.findAll(html).map { it.value }.toSet()
+        val mp4Links = mp4Regex.findAll(html).map { it.value }.toSet()
+        
+        m3u8Links.forEach { link ->
+            val fixLink = link.replace("\\/", "/")
+            callback.invoke(
+                ExtractorLink(
+                    source = name,
+                    name = "$name - M3U8",
+                    url = fixLink,
+                    referer = "$mainUrl/",
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
                 )
-            }
+            )
         }
-
-        ep.subtitleList?.forEach { sub ->
-            val subUrl = sub.vtt ?: sub.subtitle
-            if (!subUrl.isNullOrBlank()) {
-                subtitleCallback.invoke(
-                    SubtitleFile(
-                        lang = sub.language ?: sub.displayName ?: "id",
-                        url = subUrl
-                    )
+        
+        mp4Links.forEach { link ->
+            val fixLink = link.replace("\\/", "/")
+            callback.invoke(
+                ExtractorLink(
+                    source = name,
+                    name = "$name - MP4",
+                    url = fixLink,
+                    referer = "$mainUrl/",
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = false
                 )
-            }
+            )
         }
-
+        
+        // Cari Subtitle (.vtt atau .srt)
+        val subRegex = Regex("""(https?://[^"']+\.(vtt|srt)[^"']*)""")
+        subRegex.findAll(html).forEach { match ->
+            val subUrl = match.value.replace("\\/", "/")
+            subtitleCallback.invoke(
+                SubtitleFile(
+                    lang = "id",
+                    url = subUrl
+                )
+            )
+        }
+        
         return true
     }
 }
-
-// ==========================================
-// DATA MODELS
-// ==========================================
-data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
-data class AuthData(
-    @JsonProperty("auth_key") val authKey: String?, 
-    @JsonProperty("auth_secret") val authSecret: String?,
-    @JsonProperty("token") val token: String?
-)
-
-data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
-data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
-
-data class FeedResponse(@JsonProperty("data") val data: FeedData?)
-data class FeedData(
-    @JsonProperty("items") val items: List<HomeItem>?, 
-    @JsonProperty("page_info") val pageInfo: PageInfo?
-)
-data class PageInfo(
-    @JsonProperty("next") val next: String?, 
-    @JsonProperty("has_more") val hasMore: Boolean?
-)
-
-data class HomeItem(
-    @JsonProperty("key") val key: String?, 
-    @JsonProperty("title") val title: String?, 
-    @JsonProperty("cover") val cover: String?,
-    @JsonProperty("desc") val desc: String?
-)
-
-data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
-data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
-data class DramaInfo(
-    @JsonProperty("name") val name: String?, 
-    @JsonProperty("cover") val cover: String?, 
-    @JsonProperty("desc") val desc: String?, 
-    @JsonProperty("episode_list") val episodeList: List<DramaEpisode>?
-)
-
-data class DramaEpisode(
-    @JsonProperty("id") val id: String?, 
-    @JsonProperty("index") val index: Int?,
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("cover") val cover: String?,
-    @JsonProperty("m3u8_url") val m3u8Url: String?,
-    @JsonProperty("video_url") val videoUrl: String?,
-    @JsonProperty("external_audio_h264_m3u8") val h264M3u8: String?,
-    @JsonProperty("external_audio_h265_m3u8") val h265M3u8: String?,
-    @JsonProperty("subtitle_list") val subtitleList: List<DramaSubtitle>?
-)
-
-data class DramaSubtitle(
-    @JsonProperty("language") val language: String?,
-    @JsonProperty("subtitle") val subtitle: String?,
-    @JsonProperty("vtt") val vtt: String?,
-    @JsonProperty("display_name") val displayName: String?
-)
