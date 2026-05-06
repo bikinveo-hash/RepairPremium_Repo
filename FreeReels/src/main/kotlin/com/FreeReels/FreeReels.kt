@@ -36,7 +36,7 @@ class FreeReels : MainAPI() {
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
 
-    // Kategori dari API Tab Web
+    // Kategori dari API Tab Web (Nanti ID-nya bisa kamu ubah sesuai hasil Termux)
     override val mainPage = mainPageOf(
         "28" to "Populer",
         "29" to "Terbaru",
@@ -44,7 +44,7 @@ class FreeReels : MainAPI() {
     )
 
     // ==========================================
-    // MESIN KRIPTOGRAFI (DYNAMIC IV H5)
+    // MESIN KRIPTOGRAFI
     // ==========================================
     private fun md5(input: String): String {
         val md = MessageDigest.getInstance("MD5")
@@ -83,7 +83,7 @@ class FreeReels : MainAPI() {
     }
 
     // ==========================================
-    // INJEKSI KTP WEB
+    // INJEKSI KTP WEB (VERSI INDONESIA)
     // ==========================================
     private fun getWebHeaders(): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
@@ -98,15 +98,15 @@ class FreeReels : MainAPI() {
             "authorization" to "oauth_signature=$signature,oauth_token=$token,ts=$ts",
             "content-type" to "application/json",
             "cookie" to "k_device_hash=$deviceId",
-            "country" to "US",
+            "country" to "ID",        // KITA PAKAI REGIONAL INDONESIA
             "device" to "h5",
             "device-hash" to deviceId,
             "device-id" to deviceId,
-            "language" to "en-US",
+            "language" to "id-ID",    // KITA PAKAI BAHASA INDONESIA
             "origin" to "https://m.mydramawave.com",
             "referer" to "https://m.mydramawave.com/",
-            "shortcode" to "en",
-            "timezone" to "America/New_York",
+            "shortcode" to "id",
+            "timezone" to "Asia/Jakarta",
             "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
     }
@@ -182,7 +182,6 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // PERBAIKAN: Potong URL untuk mengambil ID saja (misal: ewRSyO3Ouc)
         val seriesId = url.split("/").last()
         
         val res = executeGet("drama/info?series_id=$seriesId")
@@ -214,34 +213,49 @@ class FreeReels : MainAPI() {
         val ep = tryParseJson<DramaEpisode>(data) ?: throw ErrorLoadingException("Data video rusak.")
 
         val videoLinks = mutableListOf<Pair<String, String>>()
-        ep.m3u8Url?.let { videoLinks.add(it to "M3U8") }
-        ep.videoUrl?.let { videoLinks.add(it to "MP4") }
-        ep.h264M3u8?.let { videoLinks.add(it to "H264 M3U8") }
-        ep.h265M3u8?.let { videoLinks.add(it to "H265 M3U8") }
+        
+        fun fixVideoUrl(url: String?): String? {
+            if (url.isNullOrBlank()) return null
+            if (url.startsWith("http")) return url
+            if (url.startsWith("//")) return "https:$url"
+            if (url.startsWith("/")) return "https://video-v1.mydramawave.com$url"
+            return "https://video-v1.mydramawave.com/$url"
+        }
+
+        fixVideoUrl(ep.m3u8Url)?.let { videoLinks.add(it to "M3U8") }
+        fixVideoUrl(ep.videoUrl)?.let { videoLinks.add(it to "MP4") }
+        fixVideoUrl(ep.h264M3u8)?.let { videoLinks.add(it to "H264 M3U8") }
+        fixVideoUrl(ep.h265M3u8)?.let { videoLinks.add(it to "H265 M3U8") }
+
+        if (videoLinks.isEmpty()) {
+            throw ErrorLoadingException("Video belum tersedia untuk episode ini.")
+        }
 
         videoLinks.forEach { (url, typeName) ->
-            if (url.isNotBlank()) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name - $typeName",
-                        url = url,
-                        type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "$name - $typeName",
+                    url = url,
+                    type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.headers = mapOf(
+                        "Origin" to "https://m.mydramawave.com",
+                        "Referer" to "https://m.mydramawave.com/"
+                    )
+                    this.quality = Qualities.Unknown.value
+                }
+            )
         }
 
         ep.subtitleList?.forEach { sub ->
             val subUrl = sub.vtt ?: sub.subtitle
             if (!subUrl.isNullOrBlank()) {
+                val fixSubUrl = if (subUrl.startsWith("http")) subUrl else "https://static-v1.mydramawave.com$subUrl"
                 subtitleCallback.invoke(
                     newSubtitleFile(
                         lang = sub.language ?: sub.displayName ?: "id",
-                        url = subUrl
+                        url = fixSubUrl
                     )
                 )
             }
