@@ -34,8 +34,11 @@ class FreeReels : MainAPI() {
     // Identitas Device Persistent
     private val secureRandom = SecureRandom()
     private val deviceId = (1..16).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
-    private val sessionId = UUID.randomUUID().toString().replace("-", "")
+    private val sessionId = UUID.randomUUID().toString()
+    
     private var sessionToken: String? = null
+    private var sessionSecret: String? = null
+    private var isNative = true // Deteksi otomatis pakai jalur mana
 
     override val mainPage = mainPageOf(
         "993" to "Populer",
@@ -83,7 +86,6 @@ class FreeReels : MainAPI() {
     // ==========================================
     // INJEKSI KTP (HEADER INTERCEPTOR)
     // ==========================================
-    // Sesuai dengan file HeaderInterceptor.kt dari Smali!
     private fun getAppHeaders(): MutableMap<String, String> {
         val headers = mutableMapOf(
             "language" to "id",
@@ -109,7 +111,14 @@ class FreeReels : MainAPI() {
             "device" to "android",
             "X-Auth-Salt" to authSalt
         )
-        sessionToken?.let { headers["Authorization"] = "Bearer $it" }
+        
+        // PENTING: Meracik Oauth Signature sesuai Kode Asli!
+        if (sessionToken != null && sessionSecret != null) {
+            val ts = System.currentTimeMillis()
+            val signString = authSalt + sessionSecret
+            val signature = md5(signString)
+            headers["Authorization"] = "oauth_signature=$signature,oauth_token=$sessionToken,ts=$ts"
+        }
         return headers
     }
 
@@ -122,71 +131,73 @@ class FreeReels : MainAPI() {
         val sign = md5(deviceId + nativeLoginSalt)
         val loginHeaders = getAppHeaders()
         
-        // Auto-Scanner berdasarkan rute Smali
-        val endpoints = listOf(
-            "$nativeApiUrl/anonymous/login" to mapOf("device_id" to deviceId, "device_name" to "Redmi", "sign" to sign),
-            "$nativeApiUrl/auth/anonymous-login" to mapOf("device_id" to deviceId, "device_name" to "Redmi", "sign" to sign),
-            "$h5ApiUrl/auth/anonymous-login" to mapOf("device_id" to deviceId)
-        )
-        
-        var lastError = ""
-        for ((url, body) in endpoints) {
-            try {
-                val reqBody = mapOf("payload" to encrypt(body.toJson()))
-                val res = app.post(url, headers = loginHeaders, json = reqBody).text
-                
-                val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
-                val token = authData?.data?.authKey ?: authData?.data?.token
-                if (token != null) {
-                    sessionToken = token
-                    return // BINGO!
-                }
-            } catch (e: Exception) {
-                lastError = e.message ?: "404 Not Found"
+        // 1. Coba Jalur API Native (Enkripsi Penuh)
+        try {
+            val nativeReq = mapOf("device_id" to deviceId, "device_name" to "Redmi", "sign" to sign)
+            val nativeBody = mapOf("payload" to encrypt(nativeReq.toJson()))
+            
+            val res = app.post("$nativeApiUrl/anonymous/login", headers = loginHeaders, json = nativeBody).text
+            val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
+            
+            val token = authData?.data?.authKey ?: authData?.data?.token
+            if (token != null) {
+                sessionToken = token
+                sessionSecret = authData?.data?.authSecret ?: ""
+                isNative = true
+                return
             }
+        } catch (e: Exception) {
+            // Abaikan, lanjut ke Web API (H5)
         }
-        throw ErrorLoadingException("Server menolak KTP kita bro! Error terakhir: $lastError")
+
+        // 2. Coba Jalur API H5 (Raw JSON) jika Native terblokir
+        try {
+            val h5Req = mapOf("device_id" to deviceId)
+            val res = app.post("$h5ApiUrl/anonymous/login", headers = loginHeaders, json = h5Req).text
+            val authData = tryParseJson<NativeAuthResponse>(decryptIfNeeded(res))
+            
+            val token = authData?.data?.authKey ?: authData?.data?.token
+            if (token != null) {
+                sessionToken = token
+                sessionSecret = authData?.data?.authSecret ?: ""
+                isNative = false
+                return
+            }
+        } catch (e: Exception) {
+            // Abaikan
+        }
+        
+        throw ErrorLoadingException("Gagal terhubung ke server FreeReels. (Mungkin diblokir ISP)")
     }
 
     private suspend fun executePost(path: String, body: Any): String {
         ensureSession()
-        val reqBody = mapOf("payload" to encrypt(body.toJson()))
         
-        val urlsToTry = listOf("$nativeApiUrl/$path", "$h5ApiUrl/$path")
-        var lastError = ""
-        
-        for (url in urlsToTry) {
-            try {
-                val res = app.post(url, headers = getAppHeaders(), json = reqBody).text
-                return decryptIfNeeded(res)
-            } catch (e: Exception) {
-                lastError = e.message ?: "404 Not Found"
-            }
+        if (isNative) {
+            val reqBody = mapOf("payload" to encrypt(body.toJson()))
+            val res = app.post("$nativeApiUrl/$path", headers = getAppHeaders(), json = reqBody).text
+            return decryptIfNeeded(res)
+        } else {
+            val res = app.post("$h5ApiUrl/$path", headers = getAppHeaders(), json = body).text
+            return decryptIfNeeded(res)
         }
-        throw ErrorLoadingException("Gagal mengambil data (POST $path). Error: $lastError")
     }
 
     private suspend fun executeGet(path: String, query: Map<String, String>): String {
         ensureSession()
         val queryStr = query.entries.joinToString("&") { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }
         
-        // Coba rute native dan rute H5
-        val urlsToTry = listOf(
-            "$nativeApiUrl/$path",
-            "$h5ApiUrl/${path.replace("info_v2", "info")}"
-        )
-        
-        var lastError = ""
-        for (urlBase in urlsToTry) {
-            try {
-                val url = if (queryStr.isEmpty()) urlBase else "$urlBase?$queryStr"
-                val res = app.get(url, headers = getAppHeaders()).text
-                return decryptIfNeeded(res)
-            } catch (e: Exception) {
-                lastError = e.message ?: "404 Not Found"
-            }
+        if (isNative) {
+            val url = if (queryStr.isEmpty()) "$nativeApiUrl/$path" else "$nativeApiUrl/$path?$queryStr"
+            val res = app.get(url, headers = getAppHeaders()).text
+            return decryptIfNeeded(res)
+        } else {
+            val h5Path = path.replace("info_v2", "info") // Rute H5 sedikit beda
+            val urlBase = "$h5ApiUrl/$h5Path"
+            val url = if (queryStr.isEmpty()) urlBase else "$urlBase?$queryStr"
+            val res = app.get(url, headers = getAppHeaders()).text
+            return decryptIfNeeded(res)
         }
-        throw ErrorLoadingException("Gagal mengambil data (GET $path). Error: $lastError")
     }
 
     // ==========================================
@@ -293,7 +304,11 @@ class FreeReels : MainAPI() {
 // DATA MODELS
 // ==========================================
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
-data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("token") val token: String?)
+data class AuthData(
+    @JsonProperty("auth_key") val authKey: String?, 
+    @JsonProperty("auth_secret") val authSecret: String?,
+    @JsonProperty("token") val token: String?
+)
 
 data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
 data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
