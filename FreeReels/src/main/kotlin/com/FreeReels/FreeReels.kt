@@ -25,7 +25,7 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // KUNCI RAHASIA DARI WEB JS!
+    // KUNCI RAHASIA DARI WEB JS
     private val aesKeyWeb = "2r36789f45q01ae5".toByteArray()
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
 
@@ -52,13 +52,11 @@ class FreeReels : MainAPI() {
     }
 
     private fun encryptData(data: String): String {
-        // IV diacak setiap request!
         val iv = ByteArray(16).apply { secureRandom.nextBytes(this) }
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKeyWeb, "AES"), IvParameterSpec(iv))
         val encrypted = cipher.doFinal(data.toByteArray())
         
-        // Gabungkan IV + Data Enkripsi seperti di JS
         val combined = ByteArray(iv.size + encrypted.size)
         System.arraycopy(iv, 0, combined, 0, iv.size)
         System.arraycopy(encrypted, 0, combined, iv.size, encrypted.size)
@@ -73,7 +71,6 @@ class FreeReels : MainAPI() {
             val decoded = Base64.decode(clean, Base64.DEFAULT)
             if (decoded.size < 16) return clean
             
-            // Ekstrak 16 byte pertama sebagai IV
             val iv = decoded.copyOfRange(0, 16)
             val payload = decoded.copyOfRange(16, decoded.size)
             
@@ -185,7 +182,10 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val res = executeGet("drama/info?series_id=$url")
+        // PERBAIKAN: Potong URL untuk mengambil ID saja (misal: ewRSyO3Ouc)
+        val seriesId = url.split("/").last()
+        
+        val res = executeGet("drama/info?series_id=$seriesId")
         val parsedData = tryParseJson<NativeDetailResponse>(res) 
             ?: throw ErrorLoadingException("Gagal membaca struktur detail JSON.")
         
