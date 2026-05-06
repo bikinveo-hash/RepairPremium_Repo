@@ -30,7 +30,7 @@ class FreeReels : MainAPI() {
     
     // ==========================================
     // SANDI RAHASIA PENJEBOL VIP
-    // (Kalau 666666 gagal, nanti kita ganti jadi 888888)
+    // (Ubah jadi 888888 kalau 666666 masih terkunci)
     // ==========================================
     private val internalCode = "666666" 
 
@@ -40,7 +40,6 @@ class FreeReels : MainAPI() {
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
 
-    // Kategori disesuaikan dengan aplikasi aslinya
     override val mainPage = mainPageOf(
         "28" to "Populer",
         "29" to "New",
@@ -95,8 +94,6 @@ class FreeReels : MainAPI() {
             "origin" to "https://m.mydramawave.com",
             "referer" to "https://m.mydramawave.com/",
             "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-            
-            // SUNTIKAN VIP RAHASIA
             "internal-user-code" to internalCode 
         )
     }
@@ -118,10 +115,10 @@ class FreeReels : MainAPI() {
         val data = tryParseJson<FeedResponse>(decryptData(res))
         val items = data?.data?.items?.mapNotNull { item -> 
             val title = item.title ?: item.name ?: return@mapNotNull null
-            // Deteksi label Dubbing
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            newTvSeriesSearchResponse(title, item.key ?: return@mapNotNull null) { 
+            // Kita gunakan newAnimeSearchResponse agar bisa mengaktifkan label Dubbing
+            newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
@@ -141,7 +138,7 @@ class FreeReels : MainAPI() {
             val title = item.title ?: item.name ?: return@mapNotNull null
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            newTvSeriesSearchResponse(title, item.key ?: return@mapNotNull null) { 
+            newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
@@ -156,10 +153,10 @@ class FreeReels : MainAPI() {
         val info = tryParseJson<NativeDetailResponse>(decryptData(res))?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan")
 
         val episodeList = info.episodeList?.map { ep -> 
-            newEpisode(ep) {
+            val epData = ep.toJson()
+            newEpisode(epData) {
                 this.name = ep.name ?: "Episode ${ep.index}"
                 this.episode = ep.index
-                this.data = ep.toJson() 
             } 
         } ?: emptyList()
 
@@ -172,40 +169,77 @@ class FreeReels : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val ep = tryParseJson<DramaEpisode>(data) ?: return false
         
-        // Ambil link rahasia H5
         val videoUrl = ep.externalAudioH264 ?: ep.externalAudioH265 ?: ep.m3u8Url ?: ep.videoUrl
         
         if (!videoUrl.isNullOrBlank()) {
-            callback.invoke(newExtractorLink(name, name, videoUrl, true) {
+            val isM3u8 = videoUrl.contains(".m3u8")
+            callback.invoke(newExtractorLink(
+                source = name,
+                name = name,
+                url = videoUrl,
+                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
                 this.headers = mapOf("Origin" to "https://m.mydramawave.com", "Referer" to "https://m.mydramawave.com/")
             })
         }
 
-        ep.subtitleList?.forEach { sub ->
+        val subs = ep.subtitleList ?: emptyList()
+        for (sub in subs) {
             val subUrl = sub.vtt ?: sub.subtitle
-            if (!subUrl.isNullOrBlank()) subtitleCallback.invoke(newSubtitleFile(sub.language ?: "id", subUrl))
+            if (!subUrl.isNullOrBlank()) {
+                val fixSubUrl = if (subUrl.startsWith("http")) subUrl else "https://static-v1.mydramawave.com$subUrl"
+                subtitleCallback.invoke(
+                    newSubtitleFile(sub.language ?: "id", fixSubUrl)
+                )
+            }
         }
+        
         return true
     }
 }
 
-// Model data H5
-data class NativeAuthResponse(val data: AuthData?)
-data class AuthData(val auth_key: String?, val auth_secret: String?, val token: String?)
-data class NativeCategoryResponse(val data: CategoryPage?)
-data class CategoryPage(val items: List<HomeItem>?)
-data class FeedResponse(val data: FeedData?)
-data class FeedData(val items: List<HomeItem>?, val page_info: PageInfo?)
-data class PageInfo(val has_more: Boolean?)
-data class HomeItem(val key: String?, val title: String?, val name: String?, val cover: String?)
-data class NativeDetailResponse(val data: DramaInfoData?)
-data class DramaInfoData(val info: DramaInfo?)
-data class DramaInfo(val name: String?, val cover: String?, val desc: String?, val episode_list: List<DramaEpisode>?)
+// ==========================================
+// DATA MODELS
+// ==========================================
+data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
+data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
+
+data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
+data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?)
+
+data class FeedResponse(@JsonProperty("data") val data: FeedData?)
+data class FeedData(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("page_info") val pageInfo: PageInfo?)
+data class PageInfo(@JsonProperty("has_more") val hasMore: Boolean?)
+
+data class HomeItem(
+    @JsonProperty("key") val key: String?, 
+    @JsonProperty("title") val title: String?, 
+    @JsonProperty("name") val name: String?, 
+    @JsonProperty("cover") val cover: String?
+)
+
+data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
+data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
+data class DramaInfo(
+    @JsonProperty("name") val name: String?, 
+    @JsonProperty("cover") val cover: String?, 
+    @JsonProperty("desc") val desc: String?, 
+    @JsonProperty("episode_list") val episodeList: List<DramaEpisode>?
+)
+
 data class DramaEpisode(
-    val index: Int?, val name: String?,
+    @JsonProperty("index") val index: Int?, 
+    @JsonProperty("name") val name: String?,
     @JsonProperty("external_audio_h264_m3u8") val externalAudioH264: String?,
     @JsonProperty("external_audio_h265_m3u8") val externalAudioH265: String?,
-    val m3u8_url: String?, val video_url: String?,
-    val subtitle_list: List<DramaSubtitle>?
+    @JsonProperty("m3u8_url") val m3u8Url: String?, 
+    @JsonProperty("video_url") val videoUrl: String?,
+    @JsonProperty("subtitle_list") val subtitleList: List<DramaSubtitle>?
 )
-data class DramaSubtitle(val language: String?, val subtitle: String?, val vtt: String?)
+
+data class DramaSubtitle(
+    @JsonProperty("language") val language: String?, 
+    @JsonProperty("subtitle") val subtitle: String?, 
+    @JsonProperty("vtt") val vtt: String?, 
+    @JsonProperty("display_name") val displayName: String?
+)
