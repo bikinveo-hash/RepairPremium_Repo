@@ -25,7 +25,6 @@ class FreeReels : MainAPI() {
     // 1. MENGAMBIL HALAMAN UTAMA (HTML SCRAPING)
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Karena kita scrape web, page 1 biasanya tidak ada tambahan, page 2 dst pakai &page=2
         val url = if (page == 1) {
             "$mainUrl${request.data}"
         } else {
@@ -34,8 +33,6 @@ class FreeReels : MainAPI() {
         
         val doc = app.get(url).document
         
-        // CATATAN: Class HTML di sini (seperti .item-card) adalah tebakan standar.
-        // Nanti kamu sesuaikan class-nya dengan yang ada di Inspect Element m.mydramawave.com ya bro!
         val items = doc.select(".list-item, .card, .drama-item").mapNotNull { element ->
             val title = element.select(".title, h3").text()
             val href = element.select("a").attr("href")
@@ -95,14 +92,14 @@ class FreeReels : MainAPI() {
             
             val fixEpUrl = if (epHref.startsWith("http")) epHref else "$mainUrl$epHref"
             
-            // Kita coba ekstrak nomor episodenya
+            // Ekstrak nomor episodenya
             val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
             
-            Episode(
-                data = fixEpUrl,
-                name = epName,
-                episode = epNum
-            )
+            // PERBAIKAN 1: Menggunakan fungsi newEpisode yang diperbolehkan
+            newEpisode(fixEpUrl) {
+                this.name = epName
+                this.episode = epNum
+            }
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
@@ -120,12 +117,9 @@ class FreeReels : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 'data' di sini adalah URL halaman player episode
         val doc = app.get(data).document
         val html = doc.html()
         
-        // Biasanya web streaming menyimpan link m3u8 atau mp4 di dalam script (JSON/eval)
-        // Kita cari link m3u8 menggunakan Regex (Sapu Jagat)
         val m3u8Regex = Regex("""(https?://[^"']+\.m3u8[^"']*)""")
         val mp4Regex = Regex("""(https?://[^"']+\.mp4[^"']*)""")
         
@@ -134,38 +128,42 @@ class FreeReels : MainAPI() {
         
         m3u8Links.forEach { link ->
             val fixLink = link.replace("\\/", "/")
+            // PERBAIKAN 2: Menggunakan fungsi newExtractorLink
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = "$name - M3U8",
                     url = fixLink,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true
-                )
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
         
         mp4Links.forEach { link ->
             val fixLink = link.replace("\\/", "/")
+            // PERBAIKAN 3: Menggunakan fungsi newExtractorLink
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = "$name - MP4",
                     url = fixLink,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = false
-                )
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
         
-        // Cari Subtitle (.vtt atau .srt)
         val subRegex = Regex("""(https?://[^"']+\.(vtt|srt)[^"']*)""")
         subRegex.findAll(html).forEach { match ->
             val subUrl = match.value.replace("\\/", "/")
+            // PERBAIKAN 4: Menggunakan newSubtitleFile agar aman
             subtitleCallback.invoke(
-                SubtitleFile(
+                newSubtitleFile(
                     lang = "id",
                     url = subUrl
                 )
