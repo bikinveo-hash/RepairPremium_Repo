@@ -25,9 +25,9 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // Kunci Rahasia hasil bongkaran Smali
-    private val aesKey = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv".toByteArray()
-    private val aesIv = "https://apiv2.fr".toByteArray()
+    // KUNCI RAHASIA DARI WEB JS!
+    private val aesKeyWeb = "2r36789f45q01ae5".toByteArray()
+    private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
 
     // Identitas Device Statis
     private val secureRandom = SecureRandom()
@@ -44,7 +44,7 @@ class FreeReels : MainAPI() {
     )
 
     // ==========================================
-    // MESIN KRIPTOGRAFI AES & MD5
+    // MESIN KRIPTOGRAFI (DYNAMIC IV H5)
     // ==========================================
     private fun md5(input: String): String {
         val md = MessageDigest.getInstance("MD5")
@@ -52,29 +52,45 @@ class FreeReels : MainAPI() {
     }
 
     private fun encryptData(data: String): String {
+        // IV diacak setiap request!
+        val iv = ByteArray(16).apply { secureRandom.nextBytes(this) }
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(aesIv))
-        return Base64.encodeToString(cipher.doFinal(data.toByteArray()), Base64.NO_WRAP)
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKeyWeb, "AES"), IvParameterSpec(iv))
+        val encrypted = cipher.doFinal(data.toByteArray())
+        
+        // Gabungkan IV + Data Enkripsi seperti di JS
+        val combined = ByteArray(iv.size + encrypted.size)
+        System.arraycopy(iv, 0, combined, 0, iv.size)
+        System.arraycopy(encrypted, 0, combined, iv.size, encrypted.size)
+        
+        return Base64.encodeToString(combined, Base64.NO_WRAP)
     }
 
     private fun decryptData(data: String): String {
         val clean = data.trim().replace("\"", "")
         if (clean.startsWith("{") || clean.startsWith("[")) return clean
         return try {
+            val decoded = Base64.decode(clean, Base64.DEFAULT)
+            if (decoded.size < 16) return clean
+            
+            // Ekstrak 16 byte pertama sebagai IV
+            val iv = decoded.copyOfRange(0, 16)
+            val payload = decoded.copyOfRange(16, decoded.size)
+            
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(aesIv))
-            String(cipher.doFinal(Base64.decode(clean, Base64.DEFAULT)))
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKeyWeb, "AES"), IvParameterSpec(iv))
+            String(cipher.doFinal(payload))
         } catch (e: Exception) {
             clean
         }
     }
 
     // ==========================================
-    // INJEKSI KTP WEB (Sama Persis dgn Kiwi Browser)
+    // INJEKSI KTP WEB
     // ==========================================
     private fun getWebHeaders(): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
-        val secretToHash = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&" + (sessionSecret ?: "")
+        val secretToHash = authSalt + (sessionSecret ?: "")
         val signature = md5(secretToHash)
         val token = sessionToken ?: "undefined"
         
