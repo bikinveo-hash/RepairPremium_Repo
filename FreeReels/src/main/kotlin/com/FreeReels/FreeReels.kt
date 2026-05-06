@@ -3,10 +3,10 @@ package com.FreeReels
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.UUID
 
 class FreeReels : MainAPI() {
     override var mainUrl = "https://m.mydramawave.com"
@@ -27,7 +27,7 @@ class FreeReels : MainAPI() {
     // Cookie Statis
     private val fakeCookie = "k_device_hash=$deviceId"
 
-    // Kategori dari API Tab Web (Sesuai hasil cURL)
+    // Kategori dari API Tab Web
     override val mainPage = mainPageOf(
         "28" to "Populer",       // id dari tab Populer
         "29" to "Terbaru",       // id dari tab Terbaru
@@ -47,8 +47,7 @@ class FreeReels : MainAPI() {
     // ==========================================
     private fun getWebHeaders(): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
-        // Rumus sakti dari Kiwi Browser: MD5 dari ID perangkat digabung waktu!
-        // Tapi kita biarkan kosong di auth_secret karena statusnya Guest
+        // Rumus sakti dari Kiwi Browser: MD5 dari ID perangkat!
         val signature = md5(deviceId) 
         
         return mutableMapOf(
@@ -74,7 +73,7 @@ class FreeReels : MainAPI() {
     }
 
     // ==========================================
-    // FUNGSI REQUEST (ANTI-TIMEOUT)
+    // FUNGSI REQUEST
     // ==========================================
     private suspend fun executeGet(path: String): String {
         return app.get("$h5ApiUrl/$path", headers = getWebHeaders()).text
@@ -89,8 +88,6 @@ class FreeReels : MainAPI() {
     // FITUR UTAMA CLOUDSTREAM
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val nextCursor = if (page == 1) "" else page.toString()
-        // Path /homepage/v2/tab/index sesuai cURL tab list
         val res = executeGet("homepage/v2/tab/index?tab_key=${request.data}&position_index=10000&first=")
         
         val data = tryParseJson<FeedResponse>(res) 
@@ -121,7 +118,6 @@ class FreeReels : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Rute Web adalah /drama/info
         val res = executeGet("drama/info?series_id=$url")
         val parsedData = tryParseJson<NativeDetailResponse>(res) 
             ?: throw ErrorLoadingException("Gagal membaca struktur detail JSON.")
@@ -129,8 +125,8 @@ class FreeReels : MainAPI() {
         val info = parsedData.data?.info ?: throw ErrorLoadingException("Data film tidak ada di server.")
 
         val episodeList = info.episodeList?.map { ep -> 
-            // Kita simpan Data JSON-nya ke string agar loadLinks tinggal baca (Lebih Cepat!)
-            newEpisode(ep.toJson()) {
+            // PERBAIKAN: Cukup gunakan `ep` saja, tanpa `.toJson()`! CloudStream akan otomatis memprosesnya.
+            newEpisode(ep) {
                 this.name = ep.name ?: "Episode ${ep.index}"
                 this.episode = ep.index
                 this.posterUrl = ep.cover ?: info.cover
