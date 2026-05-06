@@ -1,12 +1,18 @@
 package com.FreeReels
 
+import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.MessageDigest
 import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class FreeReels : MainAPI() {
     override var mainUrl = "https://m.mydramawave.com"
@@ -19,46 +25,66 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // Identitas Device Statis & Acak untuk "Mengelabuhi" Server Web
+    // Kunci Rahasia hasil bongkaran Smali
+    private val aesKey = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv".toByteArray()
+    private val aesIv = "https://apiv2.fr".toByteArray()
+
+    // Identitas Device Statis
     private val secureRandom = SecureRandom()
-    // KTP Palsu yang tidak akan pernah di-blacklist: 32 Karakter Hex
     private val deviceId = (1..32).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
     
-    // Cookie Statis
-    private val fakeCookie = "k_device_hash=$deviceId"
+    private var sessionToken: String? = null
+    private var sessionSecret: String? = null
 
     // Kategori dari API Tab Web
     override val mainPage = mainPageOf(
-        "28" to "Populer",       // id dari tab Populer
-        "29" to "Terbaru",       // id dari tab Terbaru
-        "30" to "Segera Hadir"   // id dari tab Segera Hadir
+        "28" to "Populer",
+        "29" to "Terbaru",
+        "30" to "Segera Hadir"
     )
 
     // ==========================================
-    // MESIN KRIPTOGRAFI H5 (TANPA AES)
+    // MESIN KRIPTOGRAFI AES & MD5
     // ==========================================
     private fun md5(input: String): String {
         val md = MessageDigest.getInstance("MD5")
         return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
+    private fun encryptData(data: String): String {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(aesIv))
+        return Base64.encodeToString(cipher.doFinal(data.toByteArray()), Base64.NO_WRAP)
+    }
+
+    private fun decryptData(data: String): String {
+        val clean = data.trim().replace("\"", "")
+        if (clean.startsWith("{") || clean.startsWith("[")) return clean
+        return try {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(aesIv))
+            String(cipher.doFinal(Base64.decode(clean, Base64.DEFAULT)))
+        } catch (e: Exception) {
+            clean
+        }
+    }
+
     // ==========================================
-    // INJEKSI KTP WEB (HEADER INTERCEPTOR)
+    // INJEKSI KTP WEB (Sama Persis dgn Kiwi Browser)
     // ==========================================
     private fun getWebHeaders(): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
-        // Rumus sakti dari Kiwi Browser: MD5 dari ID perangkat!
-        val signature = md5(deviceId) 
+        val secretToHash = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&" + (sessionSecret ?: "")
+        val signature = md5(secretToHash)
+        val token = sessionToken ?: "undefined"
         
         return mutableMapOf(
-            "authority" to "api.mydramawave.com",
             "accept" to "application/json, text/plain, */*",
-            "accept-language" to "id-ID,id;q=0.9",
             "app-name" to "com.dramawave.h5",
             "app-version" to "1.2.20",
-            "authorization" to "oauth_signature=$signature,oauth_token=undefined,ts=$ts",
+            "authorization" to "oauth_signature=$signature,oauth_token=$token,ts=$ts",
             "content-type" to "application/json",
-            "cookie" to fakeCookie,
+            "cookie" to "k_device_hash=$deviceId",
             "country" to "US",
             "device" to "h5",
             "device-hash" to deviceId,
@@ -75,20 +101,45 @@ class FreeReels : MainAPI() {
     // ==========================================
     // FUNGSI REQUEST
     // ==========================================
+    private suspend fun ensureSession() {
+        if (sessionToken != null) return
+        try {
+            val reqBody = encryptData(mapOf("device_id" to deviceId).toJson())
+                .toRequestBody("application/json".toMediaTypeOrNull())
+            
+            val res = app.post("$h5ApiUrl/anonymous/login", headers = getWebHeaders(), requestBody = reqBody).text
+            val authData = tryParseJson<NativeAuthResponse>(decryptData(res))
+            
+            val token = authData?.data?.authKey ?: authData?.data?.token
+            if (token != null) {
+                sessionToken = token
+                sessionSecret = authData?.data?.authSecret ?: ""
+                return
+            }
+        } catch (e: Exception) {
+            throw ErrorLoadingException("Gagal login: ${e.message}")
+        }
+    }
+
     private suspend fun executeGet(path: String): String {
-        return app.get("$h5ApiUrl/$path", headers = getWebHeaders()).text
+        ensureSession()
+        val res = app.get("$h5ApiUrl/$path", headers = getWebHeaders()).text
+        return decryptData(res)
     }
 
     private suspend fun executePost(path: String, body: Any): String {
-        // Karena H5 menggunakan JSON murni, kita tembak secara raw
-        return app.post("$h5ApiUrl/$path", headers = getWebHeaders(), json = body).text
+        ensureSession()
+        val reqBody = encryptData(body.toJson()).toRequestBody("application/json".toMediaTypeOrNull())
+        val res = app.post("$h5ApiUrl/$path", headers = getWebHeaders(), requestBody = reqBody).text
+        return decryptData(res)
     }
 
     // ==========================================
     // FITUR UTAMA CLOUDSTREAM
     // ==========================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val res = executeGet("homepage/v2/tab/index?tab_key=${request.data}&position_index=10000&first=")
+        val nextCursor = if (page == 1) "" else page.toString()
+        val res = executePost("homepage/v2/tab/feed", mapOf("module_key" to request.data, "next" to nextCursor))
         
         val data = tryParseJson<FeedResponse>(res) 
             ?: throw ErrorLoadingException("Gagal membaca struktur halaman utama.")
@@ -125,7 +176,6 @@ class FreeReels : MainAPI() {
         val info = parsedData.data?.info ?: throw ErrorLoadingException("Data film tidak ada di server.")
 
         val episodeList = info.episodeList?.map { ep -> 
-            // PERBAIKAN: Cukup gunakan `ep` saja, tanpa `.toJson()`! CloudStream akan otomatis memprosesnya.
             newEpisode(ep) {
                 this.name = ep.name ?: "Episode ${ep.index}"
                 this.episode = ep.index
@@ -188,6 +238,13 @@ class FreeReels : MainAPI() {
 // ==========================================
 // DATA MODELS
 // ==========================================
+data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
+data class AuthData(
+    @JsonProperty("auth_key") val authKey: String?, 
+    @JsonProperty("auth_secret") val authSecret: String?,
+    @JsonProperty("token") val token: String?
+)
+
 data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
 data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("has_next") val hasNext: Boolean)
 
