@@ -33,11 +33,11 @@ class FreeReels : MainAPI() {
     
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
-    private var internalCode: String? = null
 
-    // Kategori disesuaikan dengan permintaan
+    // Kategori disesuaikan, "New" dihapus karena kosong dari server
     override val mainPage = mainPageOf(
         "28" to "Populer",
+        "30" to "Segera Hadir",
         "31" to "Dubbing",
         "32" to "Perempuan",
         "33" to "Laki-Laki"
@@ -76,7 +76,7 @@ class FreeReels : MainAPI() {
         val ts = System.currentTimeMillis()
         val signature = md5(authSalt + (sessionSecret ?: ""))
         
-        val headers = mutableMapOf(
+        return mutableMapOf(
             "app-name" to "com.dramawave.h5",
             "app-version" to "1.2.20",
             "authorization" to "oauth_signature=$signature,oauth_token=${sessionToken ?: "undefined"},ts=$ts",
@@ -91,13 +91,6 @@ class FreeReels : MainAPI() {
             "shortcode" to "id",
             "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/137.0.0.0 Mobile Safari/537.36"
         )
-        
-        // SUNTIKAN VIP RAHASIA
-        if (internalCode != null) {
-            headers["internal-user-code"] = internalCode!!
-        }
-        
-        return headers
     }
 
     private suspend fun ensureSession() {
@@ -107,8 +100,6 @@ class FreeReels : MainAPI() {
         val authData = tryParseJson<NativeAuthResponse>(decryptData(res))
         sessionToken = authData?.data?.authKey ?: authData?.data?.token
         sessionSecret = authData?.data?.authSecret ?: ""
-        // Di sini kita mencuri auth_key untuk dijadikan internal_user_code
-        internalCode = authData?.data?.authKey 
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -119,13 +110,17 @@ class FreeReels : MainAPI() {
         val data = tryParseJson<FeedResponse>(decryptData(res))
         val items = data?.data?.items?.mapNotNull { item -> 
             val title = item.title ?: item.name ?: return@mapNotNull null
+            
+            // FILTER: Hilangkan poster "Peringkat" yang merusak pemandangan
+            if (title.equals("Peringkat", ignoreCase = true)) return@mapNotNull null
+            
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            val response = newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
+            newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
+            }.apply { 
+                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
-            if (isDubbed) response.addDubStatus(DubStatus.Dubbed)
-            response
         } ?: emptyList()
 
         return newHomePageResponse(request.name, items, hasNext = data?.data?.pageInfo?.hasMore ?: false)
@@ -133,21 +128,24 @@ class FreeReels : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         ensureSession()
-        // Menggunakan rute pencarian yang benar sesuai hasil cURL
-        val res = app.post("$h5ApiUrl/search/keywords", headers = getWebHeaders(), 
-            requestBody = encryptData(mapOf("keyword" to query, "page" to 1, "size" to 20).toJson()).toRequestBody("application/json".toMediaTypeOrNull())).text
+        // Menggunakan rute pencarian yang lebih stabil (tanpa parameter page/size agar tidak error)
+        val res = app.post("$h5ApiUrl/search/drama", headers = getWebHeaders(), 
+            requestBody = encryptData(mapOf("keyword" to query).toJson()).toRequestBody("application/json".toMediaTypeOrNull())).text
         val data = tryParseJson<SearchDataResponse>(decryptData(res))
         
-        return data?.data?.list?.mapNotNull { item ->
+        // Coba ambil list dari 'items' atau 'list'
+        val searchItems = data?.data?.items ?: data?.data?.list ?: emptyList()
+        
+        return searchItems.mapNotNull { item ->
             val title = item.title ?: item.name ?: return@mapNotNull null
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            val response = newAnimeSearchResponse(title, item.seriesId ?: item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
+            newAnimeSearchResponse(title, item.seriesId ?: item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
+            }.apply { 
+                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
-            if (isDubbed) response.addDubStatus(DubStatus.Dubbed)
-            response
-        } ?: emptyList()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -211,7 +209,10 @@ data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
 
 data class SearchDataResponse(@JsonProperty("data") val data: SearchResultList?)
-data class SearchResultList(@JsonProperty("list") val list: List<HomeItem>?)
+data class SearchResultList(
+    @JsonProperty("list") val list: List<HomeItem>?,
+    @JsonProperty("items") val items: List<HomeItem>?
+)
 
 data class FeedResponse(@JsonProperty("data") val data: FeedData?)
 data class FeedData(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("page_info") val pageInfo: PageInfo?)
