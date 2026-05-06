@@ -2,6 +2,7 @@ package com.FreeReels
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.* // INI BARIS YANG HILANG KEMARIN!
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -123,7 +124,7 @@ class FreeReels : MainAPI() {
         var res = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders()).text
         var info = tryParseJson<NativeDetailResponse>(res)?.data?.info
         
-        // Fallback cerdas: Jika info_v2 kosong, pakai rute info biasa (seperti kasus ID 72hx92GGzS)
+        // Fallback cerdas: Jika info_v2 kosong, pakai rute info biasa
         if (info == null || info.episodeList.isNullOrEmpty()) {
             res = app.get("$nativeApiUrl/drama/info?series_id=$seriesId", headers = getNativeHeaders()).text
             info = tryParseJson<NativeDetailResponse>(res)?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan / Geo-blocked")
