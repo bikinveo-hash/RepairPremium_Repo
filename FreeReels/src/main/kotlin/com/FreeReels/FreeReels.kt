@@ -23,27 +23,21 @@ class FreeReels : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
+    override val supportedTypes = setOf(TvType.AsianDrama)
 
     private val aesKeyWeb = "2r36789f45q01ae5".toByteArray()
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
-    
-    // ==========================================
-    // SANDI RAHASIA PENJEBOL VIP
-    // (Ubah jadi 888888 kalau 666666 masih terkunci)
-    // ==========================================
-    private val internalCode = "666666" 
 
     private val secureRandom = SecureRandom()
     private val deviceId = (1..32).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
     
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
+    private var internalCode: String? = null
 
+    // Kategori disesuaikan dengan permintaan
     override val mainPage = mainPageOf(
         "28" to "Populer",
-        "29" to "New",
-        "30" to "Segera Hadir",
         "31" to "Dubbing",
         "32" to "Perempuan",
         "33" to "Laki-Laki"
@@ -82,20 +76,28 @@ class FreeReels : MainAPI() {
         val ts = System.currentTimeMillis()
         val signature = md5(authSalt + (sessionSecret ?: ""))
         
-        return mutableMapOf(
+        val headers = mutableMapOf(
             "app-name" to "com.dramawave.h5",
             "app-version" to "1.2.20",
             "authorization" to "oauth_signature=$signature,oauth_token=${sessionToken ?: "undefined"},ts=$ts",
             "content-type" to "application/json",
             "country" to "ID",
             "device" to "h5",
+            "device-hash" to deviceId,
             "device-id" to deviceId,
             "language" to "id-ID",
             "origin" to "https://m.mydramawave.com",
             "referer" to "https://m.mydramawave.com/",
-            "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-            "internal-user-code" to internalCode 
+            "shortcode" to "id",
+            "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/137.0.0.0 Mobile Safari/537.36"
         )
+        
+        // SUNTIKAN VIP RAHASIA
+        if (internalCode != null) {
+            headers["internal-user-code"] = internalCode!!
+        }
+        
+        return headers
     }
 
     private suspend fun ensureSession() {
@@ -105,6 +107,8 @@ class FreeReels : MainAPI() {
         val authData = tryParseJson<NativeAuthResponse>(decryptData(res))
         sessionToken = authData?.data?.authKey ?: authData?.data?.token
         sessionSecret = authData?.data?.authSecret ?: ""
+        // Di sini kita mencuri auth_key untuk dijadikan internal_user_code
+        internalCode = authData?.data?.authKey 
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -117,12 +121,11 @@ class FreeReels : MainAPI() {
             val title = item.title ?: item.name ?: return@mapNotNull null
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            // Kita gunakan newAnimeSearchResponse agar bisa mengaktifkan label Dubbing
-            newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
+            val response = newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
-            }.apply { 
-                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
+            if (isDubbed) response.addDubStatus(DubStatus.Dubbed)
+            response
         } ?: emptyList()
 
         return newHomePageResponse(request.name, items, hasNext = data?.data?.pageInfo?.hasMore ?: false)
@@ -130,19 +133,20 @@ class FreeReels : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         ensureSession()
-        val res = app.post("$h5ApiUrl/drama/search", headers = getWebHeaders(), 
-            requestBody = encryptData(mapOf("keyword" to query).toJson()).toRequestBody("application/json".toMediaTypeOrNull())).text
-        val data = tryParseJson<NativeCategoryResponse>(decryptData(res))
+        // Menggunakan rute pencarian yang benar sesuai hasil cURL
+        val res = app.post("$h5ApiUrl/search/keywords", headers = getWebHeaders(), 
+            requestBody = encryptData(mapOf("keyword" to query, "page" to 1, "size" to 20).toJson()).toRequestBody("application/json".toMediaTypeOrNull())).text
+        val data = tryParseJson<SearchDataResponse>(decryptData(res))
         
-        return data?.data?.items?.mapNotNull { item ->
+        return data?.data?.list?.mapNotNull { item ->
             val title = item.title ?: item.name ?: return@mapNotNull null
             val isDubbed = title.contains("Dubbed", true) || title.contains("Dubbing", true) || title.contains("Sulih Suara", true)
             
-            newAnimeSearchResponse(title, item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
+            val response = newAnimeSearchResponse(title, item.seriesId ?: item.key ?: return@mapNotNull null, TvType.AsianDrama) { 
                 this.posterUrl = item.cover 
-            }.apply { 
-                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
+            if (isDubbed) response.addDubStatus(DubStatus.Dubbed)
+            response
         } ?: emptyList()
     }
 
@@ -173,11 +177,13 @@ class FreeReels : MainAPI() {
         
         if (!videoUrl.isNullOrBlank()) {
             val isM3u8 = videoUrl.contains(".m3u8")
+            val linkType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            
             callback.invoke(newExtractorLink(
                 source = name,
                 name = name,
                 url = videoUrl,
-                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                type = linkType
             ) {
                 this.headers = mapOf("Origin" to "https://m.mydramawave.com", "Referer" to "https://m.mydramawave.com/")
             })
@@ -204,8 +210,8 @@ class FreeReels : MainAPI() {
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
 
-data class NativeCategoryResponse(@JsonProperty("data") val data: CategoryPage?)
-data class CategoryPage(@JsonProperty("items") val items: List<HomeItem>?)
+data class SearchDataResponse(@JsonProperty("data") val data: SearchResultList?)
+data class SearchResultList(@JsonProperty("list") val list: List<HomeItem>?)
 
 data class FeedResponse(@JsonProperty("data") val data: FeedData?)
 data class FeedData(@JsonProperty("items") val items: List<HomeItem>?, @JsonProperty("page_info") val pageInfo: PageInfo?)
@@ -213,6 +219,7 @@ data class PageInfo(@JsonProperty("has_more") val hasMore: Boolean?)
 
 data class HomeItem(
     @JsonProperty("key") val key: String?, 
+    @JsonProperty("series_id") val seriesId: String?, 
     @JsonProperty("title") val title: String?, 
     @JsonProperty("name") val name: String?, 
     @JsonProperty("cover") val cover: String?
