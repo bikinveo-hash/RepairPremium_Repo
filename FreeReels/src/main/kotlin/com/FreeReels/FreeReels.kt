@@ -25,22 +25,23 @@ class FreeReels : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
-    // KUNCI RAHASIA DARI WEB JS
     private val aesKeyWeb = "2r36789f45q01ae5".toByteArray()
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
 
-    // Identitas Device Statis
     private val secureRandom = SecureRandom()
     private val deviceId = (1..32).map { "0123456789abcdef"[secureRandom.nextInt(16)] }.joinToString("")
     
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
 
-    // Kategori dari API Tab Web (Nanti ID-nya bisa kamu ubah sesuai hasil Termux)
+    // PERBAIKAN: Daftar Kategori sesuai permintaanmu (Populer, New, Segera Hadir, dll)
     override val mainPage = mainPageOf(
         "28" to "Populer",
-        "29" to "Terbaru",
-        "30" to "Segera Hadir"
+        "29" to "New",
+        "30" to "Segera Hadir",
+        "31" to "Dubbing",
+        "32" to "Perempuan",
+        "33" to "Laki-Laki"
     )
 
     // ==========================================
@@ -83,7 +84,7 @@ class FreeReels : MainAPI() {
     }
 
     // ==========================================
-    // INJEKSI KTP WEB (VERSI INDONESIA)
+    // INJEKSI KTP WEB
     // ==========================================
     private fun getWebHeaders(): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
@@ -98,11 +99,11 @@ class FreeReels : MainAPI() {
             "authorization" to "oauth_signature=$signature,oauth_token=$token,ts=$ts",
             "content-type" to "application/json",
             "cookie" to "k_device_hash=$deviceId",
-            "country" to "ID",        // KITA PAKAI REGIONAL INDONESIA
+            "country" to "ID",
             "device" to "h5",
             "device-hash" to deviceId,
             "device-id" to deviceId,
-            "language" to "id-ID",    // KITA PAKAI BAHASA INDONESIA
+            "language" to "id-ID",
             "origin" to "https://m.mydramawave.com",
             "referer" to "https://m.mydramawave.com/",
             "shortcode" to "id",
@@ -160,8 +161,16 @@ class FreeReels : MainAPI() {
         val items = data.data?.items?.mapNotNull { item -> 
             val title = item.title ?: item.name
             if (title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
+            
+            // Mengubah ke TvSeriesSearchResponse dengan label Dubbing jika teks (Dubbed) atau (Sulih Suara) ada
+            val isDubbed = title.contains("(Dubbed)", true) || title.contains("(Sulih Suara)", true) || title.contains("Dubbing", true)
+            
             newTvSeriesSearchResponse(title, item.key) { 
                 this.posterUrl = item.cover 
+            }.apply {
+                if (isDubbed) {
+                    addDubStatus(DubStatus.Dubbed) // Mengaktifkan Label Dub di UI CloudStream
+                }
             }
         } ?: emptyList()
 
@@ -175,8 +184,15 @@ class FreeReels : MainAPI() {
         return data?.data?.items?.mapNotNull { item ->
             val title = item.title ?: item.name
             if (title.isNullOrBlank() || item.key.isNullOrBlank()) return@mapNotNull null
+            
+            val isDubbed = title.contains("(Dubbed)", true) || title.contains("(Sulih Suara)", true) || title.contains("Dubbing", true)
+            
             newTvSeriesSearchResponse(title, item.key) { 
                 this.posterUrl = item.cover 
+            }.apply {
+                if (isDubbed) {
+                    addDubStatus(DubStatus.Dubbed)
+                }
             }
         } ?: emptyList()
     }
