@@ -31,7 +31,7 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
-    // ID Kategori 100% Akurat sesuai Aplikasi Asli
+    // 100% AKURAT DARI SERVER NATIVE
     override val mainPage = mainPageOf(
         "503" to "Populer",
         "505" to "New",
@@ -59,7 +59,7 @@ class FreeReels : MainAPI() {
             "device-id" to deviceId,
             "language" to "id-ID",
             "user-agent" to "okhttp/4.9.2",
-            "internal-user-code" to "666666" // Jimat VIP
+            "internal-user-code" to "666666" // Jimat Penembus VIP
         )
     }
 
@@ -81,10 +81,9 @@ class FreeReels : MainAPI() {
         val isComingSoon = request.data == "622"
         val nextToken = if (page == 1) "" else "offset=${(page - 1) * 20}&page_size=20"
         
+        // HANYA MENGGUNAKAN TAB_KEY AGAR SERVER TIDAK BINGUNG
         val reqBody = mapOf(
-            "module_key" to request.data,
             "tab_key" to request.data,
-            "tab_id" to request.data,
             "next" to nextToken
         ).toJson().toRequestBody("application/json".toMediaTypeOrNull())
         
@@ -102,10 +101,9 @@ class FreeReels : MainAPI() {
             
             val targetUrl = if (isComingSoon) "coming_soon|$id" else id
             
-            // LOGIKA DUBBING SUPER AKURAT (Berdasarkan Audio Array JSON Asli)
-            val hasIndoAudio = item.audio?.contains("id-ID") == true
-            val hasMultipleAudio = (item.audio?.size ?: 0) > 1
-            val isDubbed = hasIndoAudio || hasMultipleAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            // LOGIKA DUBBING: Membaca murni dari episode_info JSON server!
+            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
+            val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
             newAnimeSearchResponse(title, targetUrl, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
@@ -131,10 +129,8 @@ class FreeReels : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val id = item.id ?: item.key ?: item.seriesId ?: return@mapNotNull null
             
-            // LOGIKA DUBBING SUPER AKURAT
-            val hasIndoAudio = item.audio?.contains("id-ID") == true
-            val hasMultipleAudio = (item.audio?.size ?: 0) > 1
-            val isDubbed = hasIndoAudio || hasMultipleAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
+            val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
             newAnimeSearchResponse(title, id, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
@@ -164,7 +160,7 @@ class FreeReels : MainAPI() {
         }
 
         val episodeList = if (isComingSoon) {
-            emptyList()
+            emptyList() // Memburamkan tombol Play
         } else {
             info.episodeList?.map { ep -> 
                 newEpisode(ep.toJson()) {
@@ -231,7 +227,10 @@ data class NativeItem(
     @JsonProperty("name") val name: String?, 
     @JsonProperty("cover") val cover: String?,
     @JsonProperty("vertical_cover") val verticalCover: String?,
-    // INI DIA KUNCI RAHASIA UNTUK LABEL DUBBING YANG KITA TEMUKAN!
+    @JsonProperty("episode_info") val episodeInfo: NativeEpisodeInfo?
+)
+
+data class NativeEpisodeInfo(
     @JsonProperty("audio") val audio: List<String>?,
     @JsonProperty("original_audio_language") val originalAudioLanguage: String?
 )
