@@ -34,7 +34,7 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
-    // 🪄 Struktur 100% Sesuai Aplikasi Asli
+    // 🪄 Struktur persis seperti kitab suci MainAPI.kt aslinya
     private data class NativeCategory(val key: String, val name: String, val tabKey: String, val posIndex: Int, val isComingSoon: Boolean = false)
     
     private val nativeCategories = listOf(
@@ -93,7 +93,7 @@ class FreeReels : MainAPI() {
             "x-device-fingerprint" to "Redmi/sky_global/sky:14/UKQ1.231003.002/V816.0.11.0.UMWMIXM:user/release-keys",
             "session-id" to sessionId,
             "app-name" to "com.freereels.app",
-            "app-version" to "2.2.40",
+            "app-version" to "2.2.40", // Versi asli anti-blokir
             "device-id" to deviceId,
             "device-version" to "34",
             "device" to "android",
@@ -130,11 +130,13 @@ class FreeReels : MainAPI() {
     // 🪄 Logika persis fungsi getCategoryPage() dan fetchFeedPage() dari Kode Asli!
     private suspend fun getCategoryPage(category: NativeCategory, page: Int): Pair<List<UniversalItem>, Boolean> {
         if (category.isComingSoon) {
-            if (page == 1) {
+            if (page <= 1) {
                 val url = "$nativeApiUrl/coming-soon/list"
                 val res = app.get(url, headers = getNativeHeaders(isVip = false)).text
                 val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
+                
                 val items = mutableListOf<UniversalItem>()
+                // Rute coming soon punya format json flat (langsung items)
                 dataObj?.items?.let { items.addAll(it) }
                 dataObj?.list?.let { items.addAll(it) }
                 return items to false
@@ -148,7 +150,7 @@ class FreeReels : MainAPI() {
 
         if (page <= 1) {
             val items = mutableListOf<UniversalItem>()
-            // Original flatMap { it.items }
+            // 🪄 FIX BUG: Kita abaikan 'components' (Banner) persis seperti aslinya agar film belum rilis tidak bocor ke Populer
             moduleIndex.items?.forEach { mod ->
                 mod.items?.let { items.addAll(it) }
                 mod.list?.let { items.addAll(it) }
@@ -157,6 +159,7 @@ class FreeReels : MainAPI() {
                 mod.items?.let { items.addAll(it) }
                 mod.list?.let { items.addAll(it) }
             }
+            // Khusus Anime, kalau items/list di dalam modul kosong, kita sedot items utamanya
             if (items.isEmpty()) {
                 moduleIndex.items?.let { items.addAll(it) }
                 moduleIndex.list?.let { items.addAll(it) }
@@ -165,15 +168,13 @@ class FreeReels : MainAPI() {
             return items to hasMore
         }
 
-        // Cari Recommend Key (Persis seperti getPopularItemsForPage)
-        val recommendModule = moduleIndex.items?.firstOrNull { it.type == "recommend" }
-            ?: moduleIndex.list?.firstOrNull { it.type == "recommend" }
-        val recommendKey = recommendModule?.moduleKey ?: category.tabKey
+        // PAGE > 1: Cari Recommend Key & Looping Berantai (Sistem asli tanpa Cache)
+        val feedPages = moduleIndex.items?.filter { !it.moduleKey.isNullOrBlank() && !it.items.isNullOrEmpty() }
+        val recommendKey = feedPages?.firstOrNull()?.moduleKey ?: category.tabKey
         
         var currentNext = moduleIndex.pageInfo?.next
         var currentData: UniversalFeedData? = null
         
-        // Loop Berantai (Persis seperti fetchFeedPage/fetchNativeFeedPage di kode asli)
         for (i in 1 until page) {
             if (currentNext.isNullOrBlank()) break
             val reqBody = mapOf("module_key" to recommendKey, "next" to currentNext).toJson().toRequestBody("application/json".toMediaTypeOrNull())
@@ -232,18 +233,8 @@ class FreeReels : MainAPI() {
             val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
             if (dataObj != null) {
                 hasMore = dataObj.pageInfo?.hasMore ?: false
-                
-                fun extract(itemsList: List<UniversalItem>?) {
-                    itemsList?.forEach { item ->
-                        if (!item.title.isNullOrBlank() || !item.name.isNullOrBlank()) {
-                            searchItems.add(item)
-                        }
-                        extract(item.items)
-                        extract(item.list)
-                    }
-                }
-                extract(dataObj.items)
-                extract(dataObj.list)
+                dataObj.items?.let { searchItems.addAll(it) }
+                dataObj.list?.let { searchItems.addAll(it) }
             }
         } catch (e: Exception) {}
         
@@ -251,6 +242,7 @@ class FreeReels : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
+            // 🪄 FIX BUG: Sama dengan Homepage
             val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
             
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
@@ -275,6 +267,7 @@ class FreeReels : MainAPI() {
         var res = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
         var info = tryParseJson<NativeDetailResponse>(res)?.data?.info
         
+        // Membaca fallback info dari endpoint lama
         if (info == null || info.episodeList.isNullOrEmpty()) {
             val fallbackRes = app.get("$nativeApiUrl/drama/info?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
             val fallbackInfo = tryParseJson<NativeDetailResponse>(fallbackRes)?.data?.info
@@ -301,7 +294,7 @@ class FreeReels : MainAPI() {
         return newTvSeriesLoadResponse(info.name ?: "Drama", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = mainCover
             this.plot = info.desc
-            // UI Segera Hadir untuk film yang belum rilis (Mencegah Layar Hitam Error)
+            // 🪄 Menampilkan UI "Segera Hadir" (Menghindari crash layar hitam jika film belum rilis)
             this.comingSoon = episodeList.isEmpty() 
         }
     }
