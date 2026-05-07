@@ -31,7 +31,7 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
-    // 100% AKURAT DARI SERVER NATIVE
+    // ID Kategori 100% Akurat (Data Server)
     override val mainPage = mainPageOf(
         "503" to "Populer",
         "505" to "New",
@@ -59,7 +59,7 @@ class FreeReels : MainAPI() {
             "device-id" to deviceId,
             "language" to "id-ID",
             "user-agent" to "okhttp/4.9.2",
-            "internal-user-code" to "666666" // Jimat Penembus VIP
+            "internal-user-code" to "666666" // Jimat VIP Android
         )
     }
 
@@ -81,13 +81,19 @@ class FreeReels : MainAPI() {
         val isComingSoon = request.data == "622"
         val nextToken = if (page == 1) "" else "offset=${(page - 1) * 20}&page_size=20"
         
-        // HANYA MENGGUNAKAN TAB_KEY AGAR SERVER TIDAK BINGUNG
-        val reqBody = mapOf(
-            "tab_key" to request.data,
-            "next" to nextToken
-        ).toJson().toRequestBody("application/json".toMediaTypeOrNull())
+        // MENGHINDARI BUG SERVER: Kita kirim Integer untuk id, dan String untuk key!
+        val idInt = request.data.toIntOrNull()
+        val reqMap = mutableMapOf<String, Any>("next" to nextToken)
+        if (idInt != null) {
+            reqMap["module_id"] = idInt
+            reqMap["tab_id"] = idInt
+        }
+        reqMap["module_key"] = request.data
+        reqMap["tab_key"] = request.data
         
+        val reqBody = reqMap.toJson().toRequestBody("application/json".toMediaTypeOrNull())
         val res = app.post("$nativeApiUrl/homepage/v2/tab/feed", headers = getNativeHeaders(), requestBody = reqBody).text
+        
         val data = tryParseJson<NativeFeedResponse>(res)
         val searchItems = data?.data?.items ?: data?.data?.list ?: emptyList()
         
@@ -101,7 +107,7 @@ class FreeReels : MainAPI() {
             
             val targetUrl = if (isComingSoon) "coming_soon|$id" else id
             
-            // LOGIKA DUBBING: Membaca murni dari episode_info JSON server!
+            // LOGIKA DUBBING: Membaca secara akurat dari properti audio!
             val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
             val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
@@ -159,8 +165,9 @@ class FreeReels : MainAPI() {
             info = tryParseJson<NativeDetailResponse>(res)?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan / Belum rilis")
         }
 
+        // Jika Segera Hadir, kita paksa episodeList kosong agar tombol tidak bisa diputar
         val episodeList = if (isComingSoon) {
-            emptyList() // Memburamkan tombol Play
+            emptyList()
         } else {
             info.episodeList?.map { ep -> 
                 newEpisode(ep.toJson()) {
@@ -232,7 +239,8 @@ data class NativeItem(
 
 data class NativeEpisodeInfo(
     @JsonProperty("audio") val audio: List<String>?,
-    @JsonProperty("original_audio_language") val originalAudioLanguage: String?
+    @JsonProperty("original_audio_language") val originalAudioLanguage: String?,
+    @JsonProperty("new") val isNew: Boolean?
 )
 
 data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
