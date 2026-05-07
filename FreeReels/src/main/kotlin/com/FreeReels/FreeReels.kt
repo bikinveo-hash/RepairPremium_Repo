@@ -197,14 +197,8 @@ class FreeReels : MainAPI() {
                 return@mapNotNull null
             }
             
-            // 🪄 FIX BUG 2: Hapus film yang belum rilis (update_count = 0)
-            if (item.updateCount == 0) {
-                return@mapNotNull null
-            }
-            
-            // 🪄 FIX BUG 1: Label Dub hanya jika ada > 1 audio DAN ada bahasa Indonesia (atau dari judul)
-            val audioList = item.episodeInfo?.audio ?: emptyList()
-            val isDubbed = (audioList.size > 1 && audioList.contains("id-ID")) || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            // 🪄 FIX BUG: Label Dub hanya mengandalkan judul agar 100% akurat dan tidak bocor ke Anime
+            val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
             val cover = item.cover ?: item.verticalCover
 
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
@@ -238,14 +232,8 @@ class FreeReels : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
-            // 🪄 FIX BUG 2: Hapus film yang belum rilis (update_count = 0) di pencarian
-            if (item.updateCount == 0) {
-                return@mapNotNull null
-            }
-            
-            // 🪄 FIX BUG 1: Logika yang sama untuk pencarian
-            val audioList = item.episodeInfo?.audio ?: emptyList()
-            val isDubbed = (audioList.size > 1 && audioList.contains("id-ID")) || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            // 🪄 FIX BUG: Selaraskan logika dubbing dengan Homepage
+            val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
             
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
@@ -269,10 +257,20 @@ class FreeReels : MainAPI() {
         var res = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
         var info = tryParseJson<NativeDetailResponse>(res)?.data?.info
         
+        // 🪄 FIX BUG: Jangan paksa lempar error jika film belum rilis (episodeList kosong)
         if (info == null || info.episodeList.isNullOrEmpty()) {
-            res = app.get("$nativeApiUrl/drama/info?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
-            info = tryParseJson<NativeDetailResponse>(res)?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan / Belum rilis")
+            val fallbackRes = app.get("$nativeApiUrl/drama/info?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
+            val fallbackInfo = tryParseJson<NativeDetailResponse>(fallbackRes)?.data?.info
+            
+            // Hanya gunakan fallback jika memberikan hasil yang lebih baik
+            if (fallbackInfo != null && !fallbackInfo.episodeList.isNullOrEmpty()) {
+                info = fallbackInfo
+            } else if (fallbackInfo != null && info == null) {
+                info = fallbackInfo
+            }
         }
+
+        if (info == null) throw ErrorLoadingException("Detail Film tidak ditemukan di server.")
 
         val mainCover = fixUrlNull(info.cover ?: info.verticalCover)
 
@@ -287,6 +285,8 @@ class FreeReels : MainAPI() {
         return newTvSeriesLoadResponse(info.name ?: "Drama", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = mainCover
             this.plot = info.desc
+            // 🪄 FIX BUG: CloudStream akan menampilkan UI "Segera Hadir" (tanpa crash) jika ini true
+            this.comingSoon = episodeList.isEmpty() 
         }
     }
 
@@ -342,7 +342,6 @@ data class UniversalItem(
     @JsonProperty("name") val name: String?, 
     @JsonProperty("cover") val cover: String?,
     @JsonProperty("vertical_cover") val verticalCover: String?,
-    @JsonProperty("update_count") val updateCount: Int?, // 🪄 Ditambahkan untuk filter film belum rilis
     @JsonProperty("episode_info") val episodeInfo: NativeEpisodeInfo?,
     @JsonProperty("items") val items: List<UniversalItem>?,
     @JsonProperty("list") val list: List<UniversalItem>?
