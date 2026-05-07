@@ -31,7 +31,7 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
-    // Segera Hadir Resmi Dihapus! UI jadi jauh lebih bersih.
+    // Segera Hadir dihilangkan agar UI jauh lebih bersih
     override val mainPage = mainPageOf(
         "503_10000" to "Populer",
         "505_10001" to "New",
@@ -45,7 +45,7 @@ class FreeReels : MainAPI() {
         return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
-    // STRATEGI NINJA: Jimat VIP cuma aktif saat buka video!
+    // STRATEGI NINJA: Jimat VIP diumpetin, hanya aktif kalau memutar video!
     private fun getNativeHeaders(isVip: Boolean = false): MutableMap<String, String> {
         val ts = System.currentTimeMillis()
         val signature = md5(authSalt + (sessionSecret ?: ""))
@@ -62,7 +62,7 @@ class FreeReels : MainAPI() {
         )
         
         if (isVip) {
-            headers["internal-user-code"] = "666666" // Bypass Episode Berbayar
+            headers["internal-user-code"] = "666666" 
         }
         
         return headers
@@ -75,6 +75,8 @@ class FreeReels : MainAPI() {
             
             val reqBody = mapOf("device_id" to deviceId).toJson().toRequestBody("application/json".toMediaTypeOrNull())
             val res = app.post("$nativeApiUrl/anonymous/login", headers = getNativeHeaders(), requestBody = reqBody).text
+            
+            // Untuk Auth, Data Class masih aman
             val authData = tryParseJson<NativeAuthResponse>(res)
             sessionToken = authData?.data?.authKey ?: authData?.data?.token
             sessionSecret = authData?.data?.authSecret ?: ""
@@ -92,44 +94,50 @@ class FreeReels : MainAPI() {
         val posIndex = keys.getOrNull(1) ?: "10000"
         
         val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=$tabKey&position_index=$posIndex&rec_trigger=0"
-        val res = app.get(url, headers = getNativeHeaders()).text // TANPA JIMAT VIP!
+        val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
         
-        val searchItems = mutableListOf<NativeItem>()
+        val rawItems = mutableListOf<Map<*, *>>()
 
         try {
-            val dataObj = tryParseJson<NativeFeedResponse>(res)?.data
+            // METODE PYTHON-STYLE: Parsing sebagai Map kasar, lupakan Data Class untuk Halaman Depan!
+            val parsedData = tryParseJson<Map<String, Any>>(res)
+            val dataObj = parsedData?.get("data") as? Map<*, *>
             
-            // Mesin Penyedot Elegan (Buka semua kotak/modul)
-            dataObj?.items?.let { searchItems.addAll(it) }
-            dataObj?.list?.let { searchItems.addAll(it) }
-            
-            dataObj?.components?.forEach { comp ->
-                comp.items?.let { searchItems.addAll(it) }
-                comp.list?.let { searchItems.addAll(it) }
-            }
-            
-            dataObj?.modules?.forEach { comp ->
-                comp.items?.let { searchItems.addAll(it) }
-                comp.list?.let { searchItems.addAll(it) }
+            val components = (dataObj?.get("components") as? List<*>) ?: (dataObj?.get("modules") as? List<*>)
+            if (components != null) {
+                // Sedot dari dalam kotak komponen
+                components.filterIsInstance<Map<*, *>>().forEach { comp ->
+                    (comp["items"] as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
+                    (comp["list"] as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
+                }
+            } else {
+                // Sedot langsung kalau tidak ada kotak
+                (dataObj?.get("items") as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
+                (dataObj?.get("list") as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         
-        val items = searchItems.mapNotNull { item -> 
-            val title = item.title ?: item.name ?: return@mapNotNull null
-            val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
+        val items = rawItems.mapNotNull { item -> 
+            val title = (item["title"] as? String) ?: (item["name"] as? String) ?: return@mapNotNull null
+            // Ekstrak ID secara paksa jadi String, tidak peduli aslinya Angka atau Teks
+            val idStr = item["id"]?.toString() ?: item["key"]?.toString() ?: item["series_id"]?.toString() ?: return@mapNotNull null
             
             // Filter cerdas membuang banner
             if (title.equals("Ranking", ignoreCase = true) || title.equals("Peringkat", ignoreCase = true) || title.equals("Top", ignoreCase = true)) {
                 return@mapNotNull null
             }
             
-            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
+            val epInfo = item["episode_info"] as? Map<*, *>
+            val audioList = epInfo?.get("audio") as? List<*>
+            val hasIndoAudio = audioList?.any { it?.toString()?.contains("id-ID") == true } == true
             val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
+            val cover = (item["cover"] as? String) ?: (item["vertical_cover"] as? String)
+
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
-                this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
+                this.posterUrl = fixUrlNull(cover)
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
@@ -142,29 +150,35 @@ class FreeReels : MainAPI() {
         ensureSession()
         val nextToken = if (page == 1) "" else "offset=${(page - 1) * 20}&page_size=20"
         val reqBody = mapOf("keyword" to query, "next" to nextToken).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-        val res = app.post("$nativeApiUrl/search/drama", headers = getNativeHeaders(), requestBody = reqBody).text
+        val res = app.post("$nativeApiUrl/search/drama", headers = getNativeHeaders(isVip = false)).text
         
-        val searchItems = mutableListOf<NativeItem>()
+        val rawItems = mutableListOf<Map<*, *>>()
         var hasMore = false
         
         try {
-            val dataObj = tryParseJson<NativeFeedResponse>(res)?.data
-            if (dataObj != null) {
-                hasMore = dataObj.pageInfo?.hasMore ?: false
-                dataObj.items?.let { searchItems.addAll(it) }
-                dataObj.list?.let { searchItems.addAll(it) }
-            }
+            val parsedData = tryParseJson<Map<String, Any>>(res)
+            val dataObj = parsedData?.get("data") as? Map<*, *>
+            
+            val pageInfo = dataObj?.get("page_info") as? Map<*, *>
+            hasMore = pageInfo?.get("has_more") as? Boolean ?: false
+            
+            (dataObj?.get("items") as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
+            (dataObj?.get("list") as? List<*>)?.filterIsInstance<Map<*, *>>()?.let { rawItems.addAll(it) }
         } catch (e: Exception) {}
         
-        val list = searchItems.mapNotNull { item ->
-            val title = item.name ?: item.title ?: return@mapNotNull null
-            val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
+        val list = rawItems.mapNotNull { item ->
+            val title = (item["title"] as? String) ?: (item["name"] as? String) ?: return@mapNotNull null
+            val idStr = item["id"]?.toString() ?: item["key"]?.toString() ?: item["series_id"]?.toString() ?: return@mapNotNull null
             
-            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
+            val epInfo = item["episode_info"] as? Map<*, *>
+            val audioList = epInfo?.get("audio") as? List<*>
+            val hasIndoAudio = audioList?.any { it?.toString()?.contains("id-ID") == true } == true
             val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
+            val cover = (item["cover"] as? String) ?: (item["vertical_cover"] as? String)
+
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
-                this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
+                this.posterUrl = fixUrlNull(cover)
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
@@ -181,7 +195,7 @@ class FreeReels : MainAPI() {
         
         val seriesId = url.split("/").last()
         
-        // MEMAKAI JIMAT VIP (isVip = true) UNTUK MENGAMBIL VIDEO BERBAYAR SECARA GRATIS!
+        // MENGELUARKAN JIMAT VIP SAAT LOAD EPISODE AGAR BISA NONTON GRATIS!
         var res = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
         var info = tryParseJson<NativeDetailResponse>(res)?.data?.info
         
@@ -233,42 +247,11 @@ class FreeReels : MainAPI() {
 }
 
 // ==========================================
-// DATA MODELS PURE NATIVE (TIPE DATA AMAN)
+// DATA MODELS PURE NATIVE 
+// (Tinggal sisa Auth & Detail yang JSON-nya stabil, Feed murni pakai Map)
 // ==========================================
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
-
-data class NativeFeedResponse(@JsonProperty("data") val data: NativeFeedData?)
-data class NativeFeedData(
-    @JsonProperty("components") val components: List<NativeComponent>?,
-    @JsonProperty("modules") val modules: List<NativeComponent>?,
-    @JsonProperty("items") val items: List<NativeItem>?,
-    @JsonProperty("list") val list: List<NativeItem>?,
-    @JsonProperty("page_info") val pageInfo: PageInfo?
-)
-data class NativeComponent(
-    @JsonProperty("items") val items: List<NativeItem>?,
-    @JsonProperty("list") val list: List<NativeItem>?
-)
-
-data class PageInfo(@JsonProperty("has_more") val hasMore: Boolean?)
-
-data class NativeItem(
-    @JsonProperty("id") val id: Any?, 
-    @JsonProperty("key") val key: String?, 
-    @JsonProperty("series_id") val seriesId: Any?, 
-    @JsonProperty("title") val title: String?, 
-    @JsonProperty("name") val name: String?, 
-    @JsonProperty("cover") val cover: String?,
-    @JsonProperty("vertical_cover") val verticalCover: String?,
-    @JsonProperty("episode_info") val episodeInfo: NativeEpisodeInfo?
-)
-
-data class NativeEpisodeInfo(
-    @JsonProperty("audio") val audio: List<String>?,
-    @JsonProperty("original_audio_language") val originalAudioLanguage: String?,
-    @JsonProperty("new") val isNew: Boolean?
-)
 
 data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
 data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
