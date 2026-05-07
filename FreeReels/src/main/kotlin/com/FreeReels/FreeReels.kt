@@ -197,8 +197,9 @@ class FreeReels : MainAPI() {
                 return@mapNotNull null
             }
             
-            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
-            val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            // 🪄 FIX BUG DUBBING: Cek jika audio track > 1 atau ada teks Sulih Suara
+            val audioList = item.episodeInfo?.audio ?: emptyList()
+            val isDubbed = audioList.size > 1 || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             val cover = item.cover ?: item.verticalCover
 
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
@@ -232,8 +233,9 @@ class FreeReels : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
-            val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
-            val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
+            // 🪄 FIX BUG DUBBING: Cek jika audio track > 1 atau ada teks Sulih Suara
+            val audioList = item.episodeInfo?.audio ?: emptyList()
+            val isDubbed = audioList.size > 1 || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
@@ -262,14 +264,12 @@ class FreeReels : MainAPI() {
             info = tryParseJson<NativeDetailResponse>(res)?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan / Belum rilis")
         }
 
-        // MENGAMBIL POSTER UTAMA FILM UNTUK DITAMPILKAN DI EPISODE
         val mainCover = fixUrlNull(info.cover ?: info.verticalCover)
 
         val episodeList = info.episodeList?.mapNotNull { ep -> 
             newEpisode(ep.toJson()) {
                 this.name = ep.name ?: "Episode ${ep.index}"
                 this.episode = ep.index
-                // 🪄 INI DIA SENTUHAN SAKTINYA: Jika episode dipasangi poster, UI akan berubah jadi Thumbnail!
                 this.posterUrl = fixUrlNull(ep.cover) ?: mainCover 
             } 
         } ?: emptyList()
@@ -361,7 +361,7 @@ data class DramaInfo(
 data class NativeEpisode(
     @JsonProperty("index") val index: Int?, 
     @JsonProperty("name") val name: String?,
-    @JsonProperty("cover") val cover: String?, // Sentuhan sakti ditambahkan di sini
+    @JsonProperty("cover") val cover: String?,
     @JsonProperty("external_audio_h264_m3u8") val externalAudioH264: String?,
     @JsonProperty("external_audio_h265_m3u8") val externalAudioH265: String?,
     @JsonProperty("m3u8_url") val m3u8Url: String?, 
