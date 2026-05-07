@@ -34,10 +34,8 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
     
-    // CACHE PINTAR: Menyimpan Token Next asli dari server untuk Scroll yang sempurna!
     private val nextTokenCache = mutableMapOf<String, String>()
 
-    // FORMAT: TabID_PositionIndex_RecommendModuleKey
     override val mainPage = mainPageOf(
         "993_10000_2381" to "Populer",
         "995_10000_2385" to "New",
@@ -83,14 +81,13 @@ class FreeReels : MainAPI() {
             "x-device-fingerprint" to "Redmi/sky_global/sky:14/UKQ1.231003.002/V816.0.11.0.UMWMIXM:user/release-keys",
             "session-id" to sessionId,
             "app-name" to "com.freereels.app",
-            "app-version" to "2.2.40", // Versi asli anti-blokir
+            "app-version" to "2.2.40",
             "device-id" to deviceId,
             "device-version" to "34",
             "device" to "android",
             "Authorization" to "oauth_signature=$signature,oauth_token=${sessionToken ?: "undefined"},ts=$ts"
         )
         
-        // Jimat VIP hanya dipasang saat mengambil video agar Homepage tidak dikosongkan
         if (isVip) {
             headers["internal-user-code"] = "666666" 
         }
@@ -118,7 +115,6 @@ class FreeReels : MainAPI() {
         }
     }
 
-    // Mesin penyedot JSON anti-crash
     private fun extractMovies(dataObj: UniversalFeedData?, dest: MutableList<UniversalItem>) {
         if (dataObj == null) return
         fun extract(itemsList: List<UniversalItem>?) {
@@ -148,24 +144,21 @@ class FreeReels : MainAPI() {
         val searchItems = mutableListOf<UniversalItem>()
         
         if (page == 1) {
-            // PAGE 1: Tembak Beranda dan Simpan Kunci untuk Page 2
             val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=$tabId&position_index=$posIndex&first="
             val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
             val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
             
             val nextToken = dataObj?.pageInfo?.next
             if (!nextToken.isNullOrBlank()) {
-                nextTokenCache["${tabId}_2"] = nextToken // Masukkan kunci asli server ke dompet
+                nextTokenCache["${tabId}_2"] = nextToken
             }
             
             hasMore = dataObj?.pageInfo?.hasMore ?: !nextToken.isNullOrBlank()
             extractMovies(dataObj, searchItems)
             
         } else {
-            // PAGE 2, 3, dst: Keluarkan kunci asli dari dompet
             var currentNext = nextTokenCache["${tabId}_${page}"]
             
-            // Loop Jaga-Jaga (Sama persis seperti fetchFeedPage di kitab suci DEX)
             if (currentNext.isNullOrBlank()) {
                 val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=$tabId&position_index=$posIndex&first="
                 val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
@@ -183,14 +176,13 @@ class FreeReels : MainAPI() {
                 return newHomePageResponse(request.name, emptyList(), hasNext = false)
             }
             
-            // Tembak Infinite Feed dengan kunci asli!
             val reqBody = mapOf("module_key" to recommendKey, "next" to currentNext).toJson().toRequestBody("application/json".toMediaTypeOrNull())
             val res = app.post("$nativeApiUrl/homepage/v2/tab/feed", headers = getNativeHeaders(isVip = false), requestBody = reqBody).text
             val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
             
             val nextNextToken = dataObj?.pageInfo?.next
             if (!nextNextToken.isNullOrBlank()) {
-                nextTokenCache["${tabId}_${page + 1}"] = nextNextToken // Simpan kunci untuk halaman berikutnya
+                nextTokenCache["${tabId}_${page + 1}"] = nextNextToken 
             }
             
             hasMore = dataObj?.pageInfo?.hasMore ?: !nextNextToken.isNullOrBlank()
@@ -214,14 +206,13 @@ class FreeReels : MainAPI() {
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
             }
-        }.distinctBy { it.url } // Mencegah film duplikat masuk layar
+        }.distinctBy { it.url }
 
         return newHomePageResponse(request.name, items, hasNext = hasMore)
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         ensureSession()
-        // Fitur Pencarian dikembalikan persis seperti yang kamu instruksikan karena sudah terbukti lancar
         val nextToken = if (page == 1) "" else "offset=${(page - 1) * 20}&page_size=20"
         val reqBody = mapOf("keyword" to query, "next" to nextToken).toJson().toRequestBody("application/json".toMediaTypeOrNull())
         val res = app.post("$nativeApiUrl/search/drama", headers = getNativeHeaders(isVip = false), requestBody = reqBody).text
@@ -271,15 +262,20 @@ class FreeReels : MainAPI() {
             info = tryParseJson<NativeDetailResponse>(res)?.data?.info ?: throw ErrorLoadingException("Film tidak ditemukan / Belum rilis")
         }
 
+        // MENGAMBIL POSTER UTAMA FILM UNTUK DITAMPILKAN DI EPISODE
+        val mainCover = fixUrlNull(info.cover ?: info.verticalCover)
+
         val episodeList = info.episodeList?.mapNotNull { ep -> 
             newEpisode(ep.toJson()) {
                 this.name = ep.name ?: "Episode ${ep.index}"
                 this.episode = ep.index
+                // 🪄 INI DIA SENTUHAN SAKTINYA: Jika episode dipasangi poster, UI akan berubah jadi Thumbnail!
+                this.posterUrl = fixUrlNull(ep.cover) ?: mainCover 
             } 
         } ?: emptyList()
 
         return newTvSeriesLoadResponse(info.name ?: "Drama", url, TvType.AsianDrama, episodeList) {
-            this.posterUrl = fixUrlNull(info.cover ?: info.verticalCover)
+            this.posterUrl = mainCover
             this.plot = info.desc
         }
     }
@@ -314,7 +310,7 @@ class FreeReels : MainAPI() {
 }
 
 // ==========================================
-// DATA MODELS PURE NATIVE 
+// DATA MODELS PURE NATIVE
 // ==========================================
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
@@ -343,7 +339,7 @@ data class UniversalItem(
 
 data class PageInfo(
     @JsonProperty("has_more") val hasMore: Boolean?,
-    @JsonProperty("next") val next: String? // Menyimpan parameter asli server!
+    @JsonProperty("next") val next: String?
 )
 
 data class NativeEpisodeInfo(
@@ -365,6 +361,7 @@ data class DramaInfo(
 data class NativeEpisode(
     @JsonProperty("index") val index: Int?, 
     @JsonProperty("name") val name: String?,
+    @JsonProperty("cover") val cover: String?, // Sentuhan sakti ditambahkan di sini
     @JsonProperty("external_audio_h264_m3u8") val externalAudioH264: String?,
     @JsonProperty("external_audio_h265_m3u8") val externalAudioH265: String?,
     @JsonProperty("m3u8_url") val m3u8Url: String?, 
