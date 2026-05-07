@@ -31,6 +31,7 @@ class FreeReels : MainAPI() {
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
+    // ID Kategori 100% Akurat dengan Server
     override val mainPage = mainPageOf(
         "503_10000" to "Populer",
         "505_10001" to "New",
@@ -97,24 +98,22 @@ class FreeReels : MainAPI() {
         }
 
         try {
-            // PARSING ELEGAN 100% AMAN!
-            val dataObj = tryParseJson<NativeFeedResponse>(res)?.data
+            val parsedData = tryParseJson<NativeFeedResponse>(res)
+            val dataObj = parsedData?.data
             
             if (isComingSoon) {
                 hasMore = dataObj?.pageInfo?.hasMore ?: false
             }
 
-            // Menyedot dari root array (Biasanya untuk Coming Soon)
+            // Mencegah Crash dan Menyedot dari semua tempat yang mungkin
             dataObj?.items?.let { searchItems.addAll(it) }
             dataObj?.list?.let { searchItems.addAll(it) }
-
-            // Menyedot dari dalam components (Biasanya untuk Populer, New, dll)
+            
             dataObj?.components?.forEach { comp ->
                 comp.items?.let { searchItems.addAll(it) }
                 comp.list?.let { searchItems.addAll(it) }
             }
-
-            // Menyedot dari dalam modules (Untuk jaga-jaga)
+            
             dataObj?.modules?.forEach { comp ->
                 comp.items?.let { searchItems.addAll(it) }
                 comp.list?.let { searchItems.addAll(it) }
@@ -125,13 +124,14 @@ class FreeReels : MainAPI() {
         
         val items = searchItems.mapNotNull { item -> 
             val title = item.title ?: item.name ?: return@mapNotNull null
-            val id = item.id ?: item.key ?: item.seriesId ?: return@mapNotNull null
+            // Mengubah tipe ID menjadi String dengan aman
+            val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
             if (title.equals("Ranking", ignoreCase = true) || title.equals("Peringkat", ignoreCase = true) || title.equals("Top", ignoreCase = true)) {
                 return@mapNotNull null
             }
             
-            val targetUrl = if (isComingSoon) "coming_soon|$id" else id
+            val targetUrl = if (isComingSoon) "coming_soon|$idStr" else idStr
             
             val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
             val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
@@ -159,7 +159,6 @@ class FreeReels : MainAPI() {
             val dataObj = tryParseJson<NativeFeedResponse>(res)?.data
             if (dataObj != null) {
                 hasMore = dataObj.pageInfo?.hasMore ?: false
-                
                 dataObj.items?.let { searchItems.addAll(it) }
                 dataObj.list?.let { searchItems.addAll(it) }
             }
@@ -167,12 +166,12 @@ class FreeReels : MainAPI() {
         
         val list = searchItems.mapNotNull { item ->
             val title = item.name ?: item.title ?: return@mapNotNull null
-            val id = item.id ?: item.key ?: item.seriesId ?: return@mapNotNull null
+            val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
             val hasIndoAudio = item.episodeInfo?.audio?.contains("id-ID") == true
             val isDubbed = hasIndoAudio || title.contains("Dubbed", true) || title.contains("Sulih Suara", true)
             
-            newAnimeSearchResponse(title, id, TvType.AsianDrama) { 
+            newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
             }.apply { 
                 if (isDubbed) addDubStatus(DubStatus.Dubbed) 
@@ -212,7 +211,8 @@ class FreeReels : MainAPI() {
         return newTvSeriesLoadResponse(info.name ?: "Drama", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = fixUrlNull(info.cover ?: info.verticalCover)
             this.plot = info.desc
-            this.comingSoon = isComingSoon || episodeList.isEmpty() 
+            // Ini akan membuat status tombol menjadi "Segera Hadir" (Upcoming)
+            this.comingSoon = isComingSoon || episodeList.isEmpty()
         }
     }
 
@@ -246,12 +246,11 @@ class FreeReels : MainAPI() {
 }
 
 // ==========================================
-// DATA MODELS PURE NATIVE
+// DATA MODELS PURE NATIVE (TIPE DATA AMAN)
 // ==========================================
 data class NativeAuthResponse(@JsonProperty("data") val data: AuthData?)
 data class AuthData(@JsonProperty("auth_key") val authKey: String?, @JsonProperty("auth_secret") val authSecret: String?, @JsonProperty("token") val token: String?)
 
-// STRUKTUR JSON YANG ELEGAN & AMAN
 data class NativeFeedResponse(@JsonProperty("data") val data: NativeFeedData?)
 data class NativeFeedData(
     @JsonProperty("components") val components: List<NativeComponent>?,
@@ -268,9 +267,10 @@ data class NativeComponent(
 data class PageInfo(@JsonProperty("has_more") val hasMore: Boolean?)
 
 data class NativeItem(
-    @JsonProperty("id") val id: String?, 
+    // MENGGUNAKAN "Any?" AGAR TIDAK CRASH JIKA SERVER MENGIRIM ANGKA INTEGER!
+    @JsonProperty("id") val id: Any?, 
     @JsonProperty("key") val key: String?, 
-    @JsonProperty("series_id") val seriesId: String?, 
+    @JsonProperty("series_id") val seriesId: Any?, 
     @JsonProperty("title") val title: String?, 
     @JsonProperty("name") val name: String?, 
     @JsonProperty("cover") val cover: String?,
