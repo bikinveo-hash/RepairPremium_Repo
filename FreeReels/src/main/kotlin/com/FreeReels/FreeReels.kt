@@ -33,16 +33,28 @@ class FreeReels : MainAPI() {
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
+
+    // 🪄 Struktur 100% Sesuai Aplikasi Asli
+    private data class NativeCategory(val key: String, val name: String, val tabKey: String, val posIndex: Int, val isComingSoon: Boolean = false)
     
-    private val nextTokenCache = mutableMapOf<String, String>()
+    private val nativeCategories = listOf(
+        NativeCategory("popular", "Populer", "993", 10000),
+        NativeCategory("new", "New", "995", 10000),
+        NativeCategory("coming_soon", "Segera Hadir", "1004", 10000, true),
+        NativeCategory("dubbing", "Dubbing", "1002", 10000),
+        NativeCategory("female", "Perempuan", "994", 10000),
+        NativeCategory("male", "Laki-Laki", "996", 10000),
+        NativeCategory("anime", "Anime", "1005", 10001)
+    )
 
     override val mainPage = mainPageOf(
-        "993_10000_2381" to "Populer",
-        "995_10000_2385" to "New",
-        "1002_10000_2392" to "Dubbing",
-        "994_10000_2384" to "Perempuan",
-        "996_10000_2386" to "Laki-Laki",
-        "1005_10001_2395" to "Anime"
+        "popular" to "Populer",
+        "new" to "New",
+        "coming_soon" to "Segera Hadir",
+        "dubbing" to "Dubbing",
+        "female" to "Perempuan",
+        "male" to "Laki-Laki",
+        "anime" to "Anime"
     )
 
     private fun md5(input: String): String {
@@ -115,81 +127,77 @@ class FreeReels : MainAPI() {
         }
     }
 
-    private fun extractMovies(dataObj: UniversalFeedData?, dest: MutableList<UniversalItem>) {
-        if (dataObj == null) return
-        fun extract(itemsList: List<UniversalItem>?) {
-            itemsList?.forEach { item ->
-                if (!item.title.isNullOrBlank() || !item.name.isNullOrBlank()) {
-                    dest.add(item)
-                }
-                extract(item.items)
-                extract(item.list)
+    // 🪄 Logika persis fungsi getCategoryPage() dan fetchFeedPage() dari Kode Asli!
+    private suspend fun getCategoryPage(category: NativeCategory, page: Int): Pair<List<UniversalItem>, Boolean> {
+        if (category.isComingSoon) {
+            if (page == 1) {
+                val url = "$nativeApiUrl/coming-soon/list"
+                val res = app.get(url, headers = getNativeHeaders(isVip = false)).text
+                val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
+                val items = mutableListOf<UniversalItem>()
+                dataObj?.items?.let { items.addAll(it) }
+                dataObj?.list?.let { items.addAll(it) }
+                return items to false
             }
+            return emptyList<UniversalItem>() to false
         }
-        extract(dataObj.items)
-        extract(dataObj.list)
-        extract(dataObj.components)
-        extract(dataObj.modules)
+
+        val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=${category.tabKey}&position_index=${category.posIndex}&first="
+        val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
+        val moduleIndex = tryParseJson<UniversalFeedResponse>(res)?.data ?: return emptyList<UniversalItem>() to false
+
+        if (page <= 1) {
+            val items = mutableListOf<UniversalItem>()
+            // Original flatMap { it.items }
+            moduleIndex.items?.forEach { mod ->
+                mod.items?.let { items.addAll(it) }
+                mod.list?.let { items.addAll(it) }
+            }
+            moduleIndex.list?.forEach { mod ->
+                mod.items?.let { items.addAll(it) }
+                mod.list?.let { items.addAll(it) }
+            }
+            if (items.isEmpty()) {
+                moduleIndex.items?.let { items.addAll(it) }
+                moduleIndex.list?.let { items.addAll(it) }
+            }
+            val hasMore = moduleIndex.pageInfo?.hasMore == true || !moduleIndex.pageInfo?.next.isNullOrBlank()
+            return items to hasMore
+        }
+
+        // Cari Recommend Key (Persis seperti getPopularItemsForPage)
+        val recommendModule = moduleIndex.items?.firstOrNull { it.type == "recommend" }
+            ?: moduleIndex.list?.firstOrNull { it.type == "recommend" }
+        val recommendKey = recommendModule?.moduleKey ?: category.tabKey
+        
+        var currentNext = moduleIndex.pageInfo?.next
+        var currentData: UniversalFeedData? = null
+        
+        // Loop Berantai (Persis seperti fetchFeedPage/fetchNativeFeedPage di kode asli)
+        for (i in 1 until page) {
+            if (currentNext.isNullOrBlank()) break
+            val reqBody = mapOf("module_key" to recommendKey, "next" to currentNext).toJson().toRequestBody("application/json".toMediaTypeOrNull())
+            val feedRes = app.post("$nativeApiUrl/homepage/v2/tab/feed", headers = getNativeHeaders(isVip = false), requestBody = reqBody).text
+            currentData = tryParseJson<UniversalFeedResponse>(feedRes)?.data
+            currentNext = currentData?.pageInfo?.next
+        }
+
+        val items = mutableListOf<UniversalItem>()
+        currentData?.items?.let { items.addAll(it) }
+        currentData?.list?.let { items.addAll(it) }
+        
+        val hasMore = currentData?.pageInfo?.hasMore == true || !currentNext.isNullOrBlank()
+        
+        return items to hasMore
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         ensureSession()
         
-        val keys = request.data.split("_")
-        val tabId = keys[0]
-        val posIndex = keys.getOrNull(1) ?: "10000"
-        val recommendKey = keys.getOrNull(2) ?: tabId
-        
-        var hasMore = false
-        val searchItems = mutableListOf<UniversalItem>()
-        
-        if (page == 1) {
-            val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=$tabId&position_index=$posIndex&first="
-            val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
-            val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
-            
-            val nextToken = dataObj?.pageInfo?.next
-            if (!nextToken.isNullOrBlank()) {
-                nextTokenCache["${tabId}_2"] = nextToken
-            }
-            
-            hasMore = dataObj?.pageInfo?.hasMore ?: !nextToken.isNullOrBlank()
-            extractMovies(dataObj, searchItems)
-            
-        } else {
-            var currentNext = nextTokenCache["${tabId}_${page}"]
-            
-            if (currentNext.isNullOrBlank()) {
-                val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=$tabId&position_index=$posIndex&first="
-                val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
-                currentNext = tryParseJson<UniversalFeedResponse>(res)?.data?.pageInfo?.next
-                
-                for (i in 2 until page) {
-                    if (currentNext.isNullOrBlank()) break
-                    val reqBody = mapOf("module_key" to recommendKey, "next" to currentNext).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-                    val loopRes = app.post("$nativeApiUrl/homepage/v2/tab/feed", headers = getNativeHeaders(isVip = false), requestBody = reqBody).text
-                    currentNext = tryParseJson<UniversalFeedResponse>(loopRes)?.data?.pageInfo?.next
-                }
-            }
-            
-            if (currentNext.isNullOrBlank()) {
-                return newHomePageResponse(request.name, emptyList(), hasNext = false)
-            }
-            
-            val reqBody = mapOf("module_key" to recommendKey, "next" to currentNext).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-            val res = app.post("$nativeApiUrl/homepage/v2/tab/feed", headers = getNativeHeaders(isVip = false), requestBody = reqBody).text
-            val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
-            
-            val nextNextToken = dataObj?.pageInfo?.next
-            if (!nextNextToken.isNullOrBlank()) {
-                nextTokenCache["${tabId}_${page + 1}"] = nextNextToken 
-            }
-            
-            hasMore = dataObj?.pageInfo?.hasMore ?: !nextNextToken.isNullOrBlank()
-            extractMovies(dataObj, searchItems)
-        }
+        val cat = nativeCategories.find { it.key == request.data } ?: throw ErrorLoadingException("Kategori tidak ditemukan")
+        val (rawItems, hasMore) = getCategoryPage(cat, page)
 
-        val items = searchItems.mapNotNull { item -> 
+        val items = rawItems.mapNotNull { item -> 
             val title = item.title ?: item.name ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
@@ -197,7 +205,7 @@ class FreeReels : MainAPI() {
                 return@mapNotNull null
             }
             
-            // 🪄 FIX BUG: Label Dub hanya mengandalkan judul agar 100% akurat dan tidak bocor ke Anime
+            // 🪄 FIX BUG: Label Dubbing eksklusif hanya jika di judul ada tulisan Dubbed/Sulih Suara
             val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
             val cover = item.cover ?: item.verticalCover
 
@@ -224,7 +232,18 @@ class FreeReels : MainAPI() {
             val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
             if (dataObj != null) {
                 hasMore = dataObj.pageInfo?.hasMore ?: false
-                extractMovies(dataObj, searchItems)
+                
+                fun extract(itemsList: List<UniversalItem>?) {
+                    itemsList?.forEach { item ->
+                        if (!item.title.isNullOrBlank() || !item.name.isNullOrBlank()) {
+                            searchItems.add(item)
+                        }
+                        extract(item.items)
+                        extract(item.list)
+                    }
+                }
+                extract(dataObj.items)
+                extract(dataObj.list)
             }
         } catch (e: Exception) {}
         
@@ -232,7 +251,6 @@ class FreeReels : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
             
-            // 🪄 FIX BUG: Selaraskan logika dubbing dengan Homepage
             val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
             
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
@@ -257,12 +275,10 @@ class FreeReels : MainAPI() {
         var res = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
         var info = tryParseJson<NativeDetailResponse>(res)?.data?.info
         
-        // 🪄 FIX BUG: Jangan paksa lempar error jika film belum rilis (episodeList kosong)
         if (info == null || info.episodeList.isNullOrEmpty()) {
             val fallbackRes = app.get("$nativeApiUrl/drama/info?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
             val fallbackInfo = tryParseJson<NativeDetailResponse>(fallbackRes)?.data?.info
             
-            // Hanya gunakan fallback jika memberikan hasil yang lebih baik
             if (fallbackInfo != null && !fallbackInfo.episodeList.isNullOrEmpty()) {
                 info = fallbackInfo
             } else if (fallbackInfo != null && info == null) {
@@ -285,7 +301,7 @@ class FreeReels : MainAPI() {
         return newTvSeriesLoadResponse(info.name ?: "Drama", url, TvType.AsianDrama, episodeList) {
             this.posterUrl = mainCover
             this.plot = info.desc
-            // 🪄 FIX BUG: CloudStream akan menampilkan UI "Segera Hadir" (tanpa crash) jika ini true
+            // UI Segera Hadir untuk film yang belum rilis (Mencegah Layar Hitam Error)
             this.comingSoon = episodeList.isEmpty() 
         }
     }
@@ -342,6 +358,8 @@ data class UniversalItem(
     @JsonProperty("name") val name: String?, 
     @JsonProperty("cover") val cover: String?,
     @JsonProperty("vertical_cover") val verticalCover: String?,
+    @JsonProperty("type") val type: String?, 
+    @JsonProperty("module_key") val moduleKey: String?, 
     @JsonProperty("episode_info") val episodeInfo: NativeEpisodeInfo?,
     @JsonProperty("items") val items: List<UniversalItem>?,
     @JsonProperty("list") val list: List<UniversalItem>?
