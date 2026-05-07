@@ -40,7 +40,6 @@ class FreeReels : MainAPI() {
     private val nativeCategories = listOf(
         NativeCategory("popular", "Populer", "993", 10000),
         NativeCategory("new", "New", "995", 10000),
-        NativeCategory("coming_soon", "Segera Hadir", "1004", 10000, true),
         NativeCategory("dubbing", "Dubbing", "1002", 10000),
         NativeCategory("female", "Perempuan", "994", 10000),
         NativeCategory("male", "Laki-Laki", "996", 10000),
