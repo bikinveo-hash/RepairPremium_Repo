@@ -33,19 +33,18 @@ class FreeReels : MainAPI() {
     
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
     private val nativeLoginSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv"
-    private val cryptoKey = "2r36789f45q01ae5" // 🪄 Kunci Enkripsi AES V1
+    private val cryptoKey = "2r36789f45q01ae5" 
     
     private var sessionToken: String? = null
     private var sessionSecret: String? = null
     private val sessionLock = Mutex()
 
-    // 🪄 Struktur 100% Sesuai Aplikasi Asli
-    private data class NativeCategory(val key: String, val name: String, val tabKey: String, val posIndex: Int, val isComingSoon: Boolean = false)
+    // 🪄 Kategori Segera Hadir dihapus sesuai permintaan
+    private data class NativeCategory(val key: String, val name: String, val tabKey: String, val posIndex: Int)
     
     private val nativeCategories = listOf(
         NativeCategory("popular", "Populer", "993", 10000),
         NativeCategory("new", "New", "995", 10000),
-        NativeCategory("coming_soon", "Segera Hadir", "1004", 10000, true),
         NativeCategory("dubbing", "Dubbing", "1002", 10000),
         NativeCategory("female", "Perempuan", "994", 10000),
         NativeCategory("male", "Laki-Laki", "996", 10000),
@@ -55,14 +54,12 @@ class FreeReels : MainAPI() {
     override val mainPage = mainPageOf(
         "popular" to "Populer",
         "new" to "New",
-        "coming_soon" to "Segera Hadir",
         "dubbing" to "Dubbing",
         "female" to "Perempuan",
         "male" to "Laki-Laki",
         "anime" to "Anime"
     )
 
-    // 🪄 MESIN DEKRIPSI AES (Untuk membuka gembok film lama di server V1)
     private fun decryptIfNeeded(raw: String): String {
         val text = raw.trim()
         if (text.startsWith("{") || text.startsWith("[")) return text
@@ -115,17 +112,14 @@ class FreeReels : MainAPI() {
             "x-device-fingerprint" to "Redmi/sky_global/sky:14/UKQ1.231003.002/V816.0.11.0.UMWMIXM:user/release-keys",
             "session-id" to sessionId,
             "app-name" to "com.freereels.app",
-            "app-version" to "2.2.91", // 🪄 SUDAH NAIK VERSI TERBARU
+            "app-version" to "2.2.91",
             "device-id" to deviceId,
             "device-version" to "34",
             "device" to "android",
             "Authorization" to "oauth_signature=$signature,oauth_token=${sessionToken ?: "undefined"},ts=$ts"
         )
         
-        if (isVip) {
-            headers["internal-user-code"] = "666666" 
-        }
-        
+        if (isVip) headers["internal-user-code"] = "666666" 
         return headers
     }
 
@@ -133,17 +127,10 @@ class FreeReels : MainAPI() {
         if (sessionToken != null) return
         sessionLock.withLock {
             if (sessionToken != null) return@withLock 
-            
             val loginSig = md5(nativeLoginSalt + deviceId)
-            val reqBody = mapOf(
-                "device_id" to deviceId,
-                "device_name" to "Redmi 23090RA98G",
-                "device_sign" to loginSig
-            ).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-            
+            val reqBody = mapOf("device_id" to deviceId, "device_name" to "Redmi 23090RA98G", "device_sign" to loginSig).toJson().toRequestBody("application/json".toMediaTypeOrNull())
             val res = app.post("$nativeApiUrl/anonymous/login", headers = getNativeHeaders(), requestBody = reqBody).text
             val authData = tryParseJson<NativeAuthResponse>(res)
-            
             sessionToken = authData?.data?.authKey ?: authData?.data?.token
             sessionSecret = authData?.data?.authSecret ?: ""
         }
@@ -153,12 +140,8 @@ class FreeReels : MainAPI() {
         if (dataObj == null) return
         fun extract(itemsList: List<UniversalItem>?) {
             itemsList?.forEach { item ->
-                // 🪄 FIX BUG: Buang kotak iklan (banner) agar film Segera Hadir tidak bocor ke Populer
                 if (item.type?.contains("banner", ignoreCase = true) == true) return@forEach
-                
-                if (!item.title.isNullOrBlank() || !item.name.isNullOrBlank()) {
-                    dest.add(item)
-                }
+                if (!item.title.isNullOrBlank() || !item.name.isNullOrBlank()) dest.add(item)
                 extract(item.items)
                 extract(item.list)
             }
@@ -170,35 +153,14 @@ class FreeReels : MainAPI() {
     }
 
     private suspend fun getCategoryPage(category: NativeCategory, page: Int): Pair<List<UniversalItem>, Boolean> {
-        if (category.isComingSoon) {
-            if (page <= 1) {
-                val url = "$nativeApiUrl/coming-soon/list"
-                val res = app.get(url, headers = getNativeHeaders(isVip = false)).text
-                val dataObj = tryParseJson<UniversalFeedResponse>(res)?.data
-                
-                val items = mutableListOf<UniversalItem>()
-                dataObj?.items?.let { items.addAll(it) }
-                dataObj?.list?.let { items.addAll(it) }
-                return items to false
-            }
-            return emptyList<UniversalItem>() to false
-        }
-
-        // 🪄 MENGGUNAKAN PARAMETER VERSI BARU (rec_trigger=0)
         val url = "$nativeApiUrl/homepage/v2/tab/index?tab_key=${category.tabKey}&position_index=${category.posIndex}&rec_trigger=0"
         val res = app.get(url, headers = getNativeHeaders(isVip = false)).text 
         val moduleIndex = tryParseJson<UniversalFeedResponse>(res)?.data ?: return emptyList<UniversalItem>() to false
 
         if (page <= 1) {
             val items = mutableListOf<UniversalItem>()
-            moduleIndex.items?.forEach { mod ->
-                mod.items?.let { items.addAll(it) }
-                mod.list?.let { items.addAll(it) }
-            }
-            moduleIndex.list?.forEach { mod ->
-                mod.items?.let { items.addAll(it) }
-                mod.list?.let { items.addAll(it) }
-            }
+            moduleIndex.items?.forEach { mod -> mod.items?.let { items.addAll(it) }; mod.list?.let { items.addAll(it) } }
+            moduleIndex.list?.forEach { mod -> mod.items?.let { items.addAll(it) }; mod.list?.let { items.addAll(it) } }
             if (items.isEmpty()) {
                 moduleIndex.items?.let { items.addAll(it) }
                 moduleIndex.list?.let { items.addAll(it) }
@@ -207,10 +169,7 @@ class FreeReels : MainAPI() {
             return items to hasMore
         }
 
-        // PAGE > 1: Cari Recommend Key & Looping Berantai (Sistem asli tanpa Cache)
-        val recommendModule = moduleIndex.items?.firstOrNull { it.type == "recommend" }
-            ?: moduleIndex.list?.firstOrNull { it.type == "recommend" }
-            ?: moduleIndex.modules?.firstOrNull { it.type == "recommend" }
+        val recommendModule = moduleIndex.items?.firstOrNull { it.type == "recommend" } ?: moduleIndex.list?.firstOrNull { it.type == "recommend" } ?: moduleIndex.modules?.firstOrNull { it.type == "recommend" }
         val recommendKey = recommendModule?.moduleKey ?: category.tabKey
         
         var currentNext = moduleIndex.pageInfo?.next
@@ -226,13 +185,9 @@ class FreeReels : MainAPI() {
 
         val items = mutableListOf<UniversalItem>()
         extractMovies(currentData, items)
-        
-        val hasMore = currentData?.pageInfo?.hasMore == true || !currentNext.isNullOrBlank()
-        
-        return items to hasMore
+        return items to (currentData?.pageInfo?.hasMore == true || !currentNext.isNullOrBlank())
     }
 
-    // 🪄 JALUR TIKUS ASLI DARI KITAB SUCI (Digunakan jika server filmnya error/kosong)
     private suspend fun findNativeItemBySeriesKey(seriesKey: String): UniversalItem? {
         for (cat in nativeCategories) {
             val (items, _) = getCategoryPage(cat, 1)
@@ -248,27 +203,18 @@ class FreeReels : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         ensureSession()
-        
         val cat = nativeCategories.find { it.key == request.data } ?: throw ErrorLoadingException("Kategori tidak ditemukan")
         val (rawItems, hasMore) = getCategoryPage(cat, page)
 
         val items = rawItems.mapNotNull { item -> 
             val title = item.title ?: item.name ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
+            if (title.equals("Ranking", ignoreCase = true) || title.equals("Peringkat", ignoreCase = true) || title.equals("Top", ignoreCase = true)) return@mapNotNull null
             
-            if (title.equals("Ranking", ignoreCase = true) || title.equals("Peringkat", ignoreCase = true) || title.equals("Top", ignoreCase = true)) {
-                return@mapNotNull null
-            }
-            
-            // 🪄 FIX BUG: Label Dubbing eksklusif hanya jika di judul ada tulisan Dubbed/Sulih Suara
             val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
-            val cover = item.cover ?: item.verticalCover
-
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
-                this.posterUrl = fixUrlNull(cover)
-            }.apply { 
-                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
-            }
+                this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
+            }.apply { if (isDubbed) addDubStatus(DubStatus.Dubbed) }
         }.distinctBy { it.url }
 
         return newHomePageResponse(request.name, items, hasNext = hasMore)
@@ -294,14 +240,10 @@ class FreeReels : MainAPI() {
         val list = searchItems.mapNotNull { item ->
             val title = item.name ?: item.title ?: return@mapNotNull null
             val idStr = item.id?.toString() ?: item.key ?: item.seriesId?.toString() ?: return@mapNotNull null
-            
             val isDubbed = title.contains("Dubbed", true) || title.contains("Sulih Suara", true) || title.contains("(Dub)", true)
-            
             newAnimeSearchResponse(title, idStr, TvType.AsianDrama) { 
                 this.posterUrl = fixUrlNull(item.cover ?: item.verticalCover)
-            }.apply { 
-                if (isDubbed) addDubStatus(DubStatus.Dubbed) 
-            }
+            }.apply { if (isDubbed) addDubStatus(DubStatus.Dubbed) }
         }.distinctBy { it.url }
         
         return newSearchResponseList(list, hasNext = hasMore)
@@ -313,17 +255,15 @@ class FreeReels : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         ensureSession()
+        val seriesId = url.split("/").last().substringBefore("?")
         
-        val seriesId = url.split("/").last()
         var info: DramaInfo? = null
         
-        // 1. Tembak V2 (Normal)
         try {
             val resRaw = app.get("$nativeApiUrl/drama/info_v2?series_id=$seriesId", headers = getNativeHeaders(isVip = true)).text
             info = tryParseJson<NativeDetailResponse>(resRaw)?.data?.info
         } catch(e: Exception){}
         
-        // 2. Tembak V1 AES (Jika V2 kosong)
         if (info == null || info.episodeList.isNullOrEmpty()) {
             try {
                 val fallbackUrl = "https://api.mydramawave.com/h5-api/drama/info?series_id=$seriesId"
@@ -334,7 +274,6 @@ class FreeReels : MainAPI() {
             } catch(e: Exception){}
         }
 
-        // 3. JALUR TIKUS HACK (Jika V1 dan V2 Dikosongkan Server seperti film BORX57E6u7)
         var nativeItem: UniversalItem? = null
         if (info == null || info.episodeList.isNullOrEmpty()) {
             nativeItem = findNativeItemBySeriesKey(seriesId)
@@ -347,7 +286,6 @@ class FreeReels : MainAPI() {
         val episodeList = mutableListOf<Episode>()
         
         if (info != null && !info.episodeList.isNullOrEmpty()) {
-            // Berhasil dapat info normal
             info.episodeList.forEach { ep ->
                 episodeList.add(newEpisode(ep.toJson()) {
                     this.name = ep.name ?: "Episode ${ep.index}"
@@ -356,7 +294,6 @@ class FreeReels : MainAPI() {
                 })
             }
         } else if (nativeItem?.episodeInfo != null && hasPlayableSource(nativeItem.episodeInfo)) {
-            // 🪄 Berhasil dapat info dari Jalur Tikus (Hack 1 Episode Paksaan)
             val ep = nativeItem.episodeInfo
             episodeList.add(newEpisode(ep.toJson()) {
                 this.name = ep.name ?: mainTitle
@@ -365,40 +302,34 @@ class FreeReels : MainAPI() {
             })
         }
 
-        if (episodeList.isEmpty()) throw ErrorLoadingException("Film gagal dimuat (Dihapus dari server).")
+        // 🪄 SOLUSI ELEGAN: Jangan throw ErrorLoadingException jika episode kosong.
+        // Biarkan CloudStream yang meng-handle UI-nya dengan poster dan judul yang utuh.
+        if (mainTitle == "Drama" && mainCover == null && episodeList.isEmpty()) {
+             throw ErrorLoadingException("Data film benar-benar hilang dari server.")
+        }
 
         return newTvSeriesLoadResponse(mainTitle, url, TvType.AsianDrama, episodeList) {
             this.posterUrl = mainCover
             this.plot = mainPlot
-            // 🪄 UI "Segera Hadir" (Menghindari crash layar hitam)
+            // Jika kosong/dihapus, otomatis ditandai sebagai Segera Hadir agar tidak error
             this.comingSoon = episodeList.isEmpty() 
         }
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val ep = tryParseJson<NativeEpisode>(data) ?: return false
-        
         val videoUrl = ep.externalAudioH264 ?: ep.externalAudioH265 ?: ep.m3u8Url ?: ep.videoUrl
         
         if (!videoUrl.isNullOrBlank()) {
             val isM3u8 = videoUrl.contains(".m3u8")
-            callback.invoke(newExtractorLink(
-                source = name,
-                name = name,
-                url = videoUrl,
-                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            ) {
+            callback.invoke(newExtractorLink(source = name, name = name, url = videoUrl, type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                 this.headers = mapOf("Origin" to "https://m.mydramawave.com", "Referer" to "https://m.mydramawave.com/")
             })
         }
 
         ep.subtitleList?.forEach { sub ->
             val subUrl = sub.vtt ?: sub.subtitle
-            if (!subUrl.isNullOrBlank()) {
-                subtitleCallback.invoke(
-                    newSubtitleFile(sub.language ?: "id", fixUrl(subUrl))
-                )
-            }
+            if (!subUrl.isNullOrBlank()) subtitleCallback.invoke(newSubtitleFile(sub.language ?: "id", fixUrl(subUrl)))
         }
         return true
     }
@@ -434,10 +365,7 @@ data class UniversalItem(
     @JsonProperty("list") val list: List<UniversalItem>?
 )
 
-data class PageInfo(
-    @JsonProperty("has_more") val hasMore: Boolean?,
-    @JsonProperty("next") val next: String?
-)
+data class PageInfo(@JsonProperty("has_more") val hasMore: Boolean?, @JsonProperty("next") val next: String?)
 
 data class NativeDetailResponse(@JsonProperty("data") val data: DramaInfoData?)
 data class DramaInfoData(@JsonProperty("info") val info: DramaInfo?)
