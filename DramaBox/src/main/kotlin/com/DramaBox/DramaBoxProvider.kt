@@ -4,7 +4,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class DramaBoxProvider : MainAPI() {
     override var mainUrl = "https://sapi.dramaboxvideo.com"
@@ -14,7 +16,6 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // 🔥 KUNCI MASTER: SPOOFING HEADERS 🔥
-    // Trik: pline=WEB & version=100 memaksa server ngirim MP4 polosan tanpa DRM!
     private val commonHeaders = mapOf(
         "pline" to "WEB",
         "version" to "100",
@@ -26,7 +27,6 @@ class DramaBoxProvider : MainAPI() {
         "user-agent" to "okhttp/4.10.0"
     )
 
-    // Helper class buat oper data antar fungsi
     data class EpisodeData(
         val bookId: String,
         val chapterId: String,
@@ -59,11 +59,13 @@ class DramaBoxProvider : MainAPI() {
 
         val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<HomeApiRes>()
         val homeItems = response?.data?.list?.map { item ->
-            TvSeriesSearchResponse(
+            // FIX: Menggunakan builder newTvSeriesSearchResponse sesuai aturan baru
+            newTvSeriesSearchResponse(
                 name = item.bookName ?: "",
-                url = item.bookId ?: "",
-                posterUrl = item.bookCover ?: ""
-            )
+                url = item.bookId ?: ""
+            ) {
+                this.posterUrl = item.bookCover ?: ""
+            }
         } ?: emptyList()
 
         return newHomePageResponse(request.name, homeItems)
@@ -83,11 +85,13 @@ class DramaBoxProvider : MainAPI() {
 
         val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<SearchApiRes>()
         return response?.data?.list?.map { item ->
-            TvSeriesSearchResponse(
+            // FIX: Menggunakan builder newTvSeriesSearchResponse
+            newTvSeriesSearchResponse(
                 name = item.bookName ?: "",
-                url = item.bookId ?: "",
-                posterUrl = item.bookCover ?: ""
-            )
+                url = item.bookId ?: ""
+            ) {
+                this.posterUrl = item.bookCover ?: ""
+            }
         } ?: emptyList()
     }
 
@@ -109,7 +113,6 @@ class DramaBoxProvider : MainAPI() {
         val data = response.data ?: throw Error("Data kosong")
 
         val episodes = data.chapterList?.map { chapter ->
-            // Ambil resolusi terbaik (biasanya 1080p atau 720p)
             val bestVideo = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }
             
             val epData = EpisodeData(
@@ -118,36 +121,39 @@ class DramaBoxProvider : MainAPI() {
                 videoUrl = bestVideo?.videoPath ?: ""
             )
 
-            Episode(
-                data = epData.toJson(),
-                name = chapter.chapterName,
-                episode = (chapter.chapterIndex ?: 0) + 1
-            )
+            // FIX: Menggunakan builder newEpisode
+            newEpisode(data = epData.toJson()) {
+                this.name = chapter.chapterName
+                this.episode = (chapter.chapterIndex ?: 0) + 1
+            }
         } ?: emptyList()
 
-        return TvSeriesLoadResponse(
+        // FIX: Menggunakan builder newTvSeriesLoadResponse
+        return newTvSeriesLoadResponse(
             name = data.bookName ?: "",
             url = bookId,
-            posterUrl = data.bookCover,
-            plot = data.introduction,
-            tags = data.tags,
+            type = TvType.TvSeries,
             episodes = episodes
-        )
+        ) {
+            this.posterUrl = data.bookCover
+            this.plot = data.introduction
+            this.tags = data.tags
+        }
     }
 
     // ==========================================
     // 4. SIHIR BYPASS VIP & PLAY VIDEO (LOAD LINKS)
     // ==========================================
+    // FIX: Memperbaiki urutan parameter subtitleCallback dan callback
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        callback: (ExtractorLink) -> Unit,
-        subtitleCallback: (SubtitleFile) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val parsedData = parseJson<EpisodeData>(data)
 
         // 🔥 UNLOCK VIP SILUMAN 🔥
-        // Tembak API unlock dengan "vip": true supaya link MP4 aktif di server
         val unlockUrl = "$mainUrl/drama-box/chapterv2/unlock"
         val unlockPayload = mapOf(
             "bookId" to parsedData.bookId,
@@ -159,16 +165,17 @@ class DramaBoxProvider : MainAPI() {
         )
         app.post(unlockUrl, headers = commonHeaders, json = unlockPayload)
 
-        // Masukkan link MP4 hasil spoofing WEB ke player Cloudstream
+        // FIX: Menggunakan builder newExtractorLink
         callback.invoke(
-            ExtractorLink(
-                name = "DramaBox VIP",
+            newExtractorLink(
                 source = "DramaBox",
+                name = "DramaBox VIP",
                 url = parsedData.videoUrl,
-                referer = mainUrl,
-                quality = Qualities.P1080.value,
-                isM3u8 = false // Karena formatnya .mp4 polosan
-            )
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.P1080.value
+            }
         )
         return true
     }
