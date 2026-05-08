@@ -16,14 +16,14 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // 🔑 KUNCI MASTER: SPOOFING HEADERS
-    // Digunakan untuk bypass proteksi dan identifikasi perangkat
+    // Sudah diupdate menggunakan data terbaru hasil sniffing
     private val commonHeaders = mapOf(
-        "pline" to "WEB",
-        "version" to "100",
+        "pline" to "ANDROID",
+        "version" to "572",
         "package-name" to "com.storymatrix.drama",
         "tn" to "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk=",
-        "sn" to "VI/9EnXOF8jh78XV45v71VL1hZIO5hhmafsCGpEPG18JMnWEN9JGPWxIrU0lCkMJ+oFI9OWNmdyB6aHltxKloLHKWUITa94yA24NpL/MaM2ZnVYG62LHP3/+F0kX0DoE0rNAjniJBGiFsYBWvNOxsJ0TLVZi34DgzNN9clUJEpWHHAVGLdJNcgUVunr0EQTEmijj3Gy8/MdhQCAyc6CeXiEAif3jFl/YeVGygqOLAH9TPELmbC9M7OlApxE/9bO9wtaubJqjIh/6qSyy866Fojz+e+qDD5fWiBq7AfQFRwL5/II8Tqf47vWZN5BGnn4AuaKC2Qi2qBdAmM5XyFceGw==",
-        "st" to "cK4n10B_0tTQBrxFxxkaXsVp",
+        "sn" to "X8qQyTiKDyPQ6ezq+a/WRw9lRJ2EGzwPF041JcOkLoDFp18qtAEajhY897+X48hV1Q/sbJkK63fgVna7bJ+9lNWSKwaO4OWMFxM+c6fWuguQBHO0gKLobzT9N5XY6871Z9GaQgbYZX3bGzHCvCoYL8HBjxg14jTPo9nPF9v1m4REutLSwbOXZSRXS8Gz91Js7PF4+KO02uE3g60/HxdGb6+XO8rTW0oeYcJF/JkSH6VH5QNuOgUxBvg3cLucvgCnUKnjquoGcDs8oVNLD+jis8rzEcnbicAK7ucyIHyu+Fd6U7wC0vqtNboR4SqbD4NQRfespte7yXskZ0CrFZos/g==",
+        "st" to "cK4n10B_0tTQBrxFee_7cs5Q",
         "device-id" to "821b6618-ce1a-4c79-9ecc-25efbd9883a8",
         "user-agent" to "okhttp/4.10.0"
     )
@@ -57,7 +57,11 @@ class DramaBoxProvider : MainAPI() {
                 "type" to 0
             )
 
-            val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<TheaterApiRes>()
+            val responseReq = app.post(url, headers = commonHeaders, json = payload)
+            // Uncomment baris di bawah kalau masih error buat nge-cek pesan dari servernya
+            // println("DRAMABOX DEBUG THEATER: ${responseReq.text}")
+            
+            val response = responseReq.parsedSafe<TheaterApiRes>()
             
             response?.data?.columnVoList?.forEach { column ->
                 val items = column.bookList?.mapNotNull { book ->
@@ -102,7 +106,7 @@ class DramaBoxProvider : MainAPI() {
             }
         }
 
-        // PERBAIKAN: Menggunakan newHomePageResponse sesuai petunjuk MainAPI.kt
+        // Fix: Menggunakan newHomePageResponse
         return newHomePageResponse(homePageLists)
     }
 
