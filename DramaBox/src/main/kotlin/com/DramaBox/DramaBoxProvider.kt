@@ -16,6 +16,7 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // 🔥 KUNCI MASTER: SPOOFING HEADERS 🔥
+    // Mematikan pelindung DRM Aliyun & Menyamar jadi sultan VIP
     private val commonHeaders = mapOf(
         "pline" to "WEB",
         "version" to "100",
@@ -36,39 +37,76 @@ class DramaBoxProvider : MainAPI() {
     // ==========================================
     // 1. DAFTAR KATEGORI (MAIN PAGE)
     // ==========================================
+    // Kita buat 2 Tab: Beranda (Campuran) & Sulih Suara (Khusus Dub Indo)
     override val mainPage = mainPageOf(
-        "1" to "Untukmu (For You)",
-        "2" to "Pembalasan Dendam",
-        "3" to "Romantis",
-        "4" to "CEO / Bos",
-        "5" to "Manusia Serigala",
-        "6" to "Populer"
+        "theater" to "Beranda",
+        "classify_dub" to "Sulih Suara"
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = "$mainUrl/drama-box/he001/channel"
-        val payload = mapOf(
-            "channelId" to request.data.toInt(),
-            "pageNo" to page,
-            "pageSize" to 20,
-            "isNeedRank" to 1
-        )
+        val homePageLists = mutableListOf<HomePageList>()
 
-        val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<HomeApiRes>()
-        val homeItems = response?.data?.list?.map { item ->
-            // FIX: Menggunakan builder newTvSeriesSearchResponse sesuai aturan baru
-            newTvSeriesSearchResponse(
-                name = item.bookName ?: "",
-                url = item.bookId ?: ""
-            ) {
-                this.posterUrl = item.bookCover ?: ""
+        if (request.data == "theater") {
+            // ---> TAB BERANDA (Menggunakan API Theater)
+            val url = "$mainUrl/drama-box/he001/theater"
+            val payload = mapOf(
+                "homePageStyle" to 0,
+                "isNeedRank" to 1,
+                "isNeedNewChannel" to 1,
+                "type" to 0
+            )
+
+            val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<TheaterApiRes>()
+            
+            // Loop setiap baris kategori (Misal: "Anda Mungkin Suka", "Terbaru", dll)
+            response?.data?.columnVoList?.forEach { column ->
+                val items = column.bookList?.mapNotNull { book ->
+                    newTvSeriesSearchResponse(
+                        name = book.bookName ?: "",
+                        url = book.bookId ?: ""
+                    ) {
+                        this.posterUrl = book.coverWap ?: ""
+                    }
+                }
+                if (!items.isNullOrEmpty()) {
+                    homePageLists.add(HomePageList(column.title ?: "Rekomendasi", items))
+                }
             }
-        } ?: emptyList()
 
-        return newHomePageResponse(request.name, homeItems)
+        } else if (request.data == "classify_dub") {
+            // ---> TAB SULIH SUARA (Menggunakan API Classify)
+            val url = "$mainUrl/drama-box/he001/classify"
+            val payload = mapOf(
+                "pageNo" to page,
+                "pageSize" to 20,
+                "showLabels" to false,
+                "typeList" to listOf(
+                    mapOf("type" to 1, "value" to ""),
+                    mapOf("type" to 2, "value" to "1"), // Asumsi Value 1 adalah Sulih Suara
+                    mapOf("type" to 3, "value" to ""),
+                    mapOf("type" to 4, "value" to ""),
+                    mapOf("type" to 5, "value" to "1")
+                )
+            )
+
+            val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<ClassifyApiRes>()
+            val items = response?.data?.classifyBookList?.records?.mapNotNull { book ->
+                newTvSeriesSearchResponse(
+                    name = book.bookName ?: "",
+                    url = book.bookId ?: ""
+                ) {
+                    this.posterUrl = book.coverWap ?: ""
+                }
+            }
+            if (!items.isNullOrEmpty()) {
+                homePageLists.add(HomePageList("Drama Sulih Suara", items))
+            }
+        }
+
+        return HomePageResponse(homePageLists)
     }
 
     // ==========================================
@@ -80,17 +118,19 @@ class DramaBoxProvider : MainAPI() {
             "keyword" to query,
             "pageNo" to 1,
             "pageSize" to 20,
+            "sortType" to 1,
             "synSwitch" to 1
         )
 
         val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<SearchApiRes>()
-        return response?.data?.list?.map { item ->
-            // FIX: Menggunakan builder newTvSeriesSearchResponse
+        
+        return response?.data?.searchList?.map { item ->
             newTvSeriesSearchResponse(
                 name = item.bookName ?: "",
                 url = item.bookId ?: ""
             ) {
-                this.posterUrl = item.bookCover ?: ""
+                // Gambar poster di pencarian namanya 'cover'
+                this.posterUrl = item.cover ?: "" 
             }
         } ?: emptyList()
     }
@@ -121,14 +161,12 @@ class DramaBoxProvider : MainAPI() {
                 videoUrl = bestVideo?.videoPath ?: ""
             )
 
-            // FIX: Menggunakan builder newEpisode
             newEpisode(data = epData.toJson()) {
                 this.name = chapter.chapterName
                 this.episode = (chapter.chapterIndex ?: 0) + 1
             }
         } ?: emptyList()
 
-        // FIX: Menggunakan builder newTvSeriesLoadResponse
         return newTvSeriesLoadResponse(
             name = data.bookName ?: "",
             url = bookId,
@@ -144,7 +182,6 @@ class DramaBoxProvider : MainAPI() {
     // ==========================================
     // 4. SIHIR BYPASS VIP & PLAY VIDEO (LOAD LINKS)
     // ==========================================
-    // FIX: Memperbaiki urutan parameter subtitleCallback dan callback
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -153,19 +190,19 @@ class DramaBoxProvider : MainAPI() {
     ): Boolean {
         val parsedData = parseJson<EpisodeData>(data)
 
-        // 🔥 UNLOCK VIP SILUMAN 🔥
+        // 🔥 MENEMBAK API UNLOCK VIP 🔥
         val unlockUrl = "$mainUrl/drama-box/chapterv2/unlock"
         val unlockPayload = mapOf(
             "bookId" to parsedData.bookId,
             "chapterId" to parsedData.chapterId,
-            "vip" to true,
+            "vip" to true, // INI SIHIRNYA
             "unLockType" to 1,
             "confirmPay" to true,
             "autoPay" to true
         )
         app.post(unlockUrl, headers = commonHeaders, json = unlockPayload)
 
-        // FIX: Menggunakan builder newExtractorLink
+        // MASUKKAN LINK MP4 POLOSAN KE PEMUTAR VIDEO
         callback.invoke(
             newExtractorLink(
                 source = "DramaBox",
@@ -181,15 +218,27 @@ class DramaBoxProvider : MainAPI() {
     }
 
     // ==========================================
-    // MAPPING JSON DATA (DATA CLASSES)
+    // DATA CLASSES UNTUK MAPPING JSON SERVER
     // ==========================================
-    data class HomeApiRes(val data: HomeData?)
-    data class HomeData(val list: List<HomeItem>?)
-    data class HomeItem(val bookId: String?, val bookName: String?, val bookCover: String?)
+    // 1. Untuk Home (Theater)
+    data class TheaterApiRes(val data: TheaterData?)
+    data class TheaterData(val columnVoList: List<ColumnVo>?)
+    data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
+    
+    // 2. Untuk Kategori (Classify)
+    data class ClassifyApiRes(val data: ClassifyData?)
+    data class ClassifyData(val classifyBookList: ClassifyBookList?)
+    data class ClassifyBookList(val records: List<BookItem>?)
+    
+    // Model umum untuk Film di Beranda/Kategori
+    data class BookItem(val bookId: String?, val bookName: String?, val coverWap: String?)
 
+    // 3. Untuk Pencarian (Search)
     data class SearchApiRes(val data: SearchData?)
-    data class SearchData(val list: List<HomeItem>?)
+    data class SearchData(val searchList: List<SearchItem>?)
+    data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
 
+    // 4. Untuk Load Episode (Batch Load)
     data class BatchLoadRes(val data: BatchLoadData?)
     data class BatchLoadData(
         val bookName: String?,
