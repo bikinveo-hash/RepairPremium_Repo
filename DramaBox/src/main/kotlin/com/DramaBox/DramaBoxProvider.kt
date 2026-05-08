@@ -16,7 +16,7 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // 🔥 KUNCI MASTER: SPOOFING HEADERS 🔥
-    // Mematikan pelindung DRM Aliyun & Menyamar jadi sultan VIP
+    // PENTING: Kalau error "No Links Found", update tn, sn, st, dan timestamp pakai tangkapan Reqable terbaru!
     private val commonHeaders = mapOf(
         "pline" to "WEB",
         "version" to "100",
@@ -37,7 +37,6 @@ class DramaBoxProvider : MainAPI() {
     // ==========================================
     // 1. DAFTAR KATEGORI (MAIN PAGE)
     // ==========================================
-    // Kita buat 2 Tab: Beranda (Campuran) & Sulih Suara (Khusus Dub Indo)
     override val mainPage = mainPageOf(
         "theater" to "Beranda",
         "classify_dub" to "Sulih Suara"
@@ -50,7 +49,7 @@ class DramaBoxProvider : MainAPI() {
         val homePageLists = mutableListOf<HomePageList>()
 
         if (request.data == "theater") {
-            // ---> TAB BERANDA (Menggunakan API Theater)
+            // TAB BERANDA
             val url = "$mainUrl/drama-box/he001/theater"
             val payload = mapOf(
                 "homePageStyle" to 0,
@@ -61,7 +60,6 @@ class DramaBoxProvider : MainAPI() {
 
             val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<TheaterApiRes>()
             
-            // Loop setiap baris kategori (Misal: "Anda Mungkin Suka", "Terbaru", dll)
             response?.data?.columnVoList?.forEach { column ->
                 val items = column.bookList?.mapNotNull { book ->
                     newTvSeriesSearchResponse(
@@ -77,7 +75,7 @@ class DramaBoxProvider : MainAPI() {
             }
 
         } else if (request.data == "classify_dub") {
-            // ---> TAB SULIH SUARA (Menggunakan API Classify)
+            // TAB SULIH SUARA
             val url = "$mainUrl/drama-box/he001/classify"
             val payload = mapOf(
                 "pageNo" to page,
@@ -85,7 +83,7 @@ class DramaBoxProvider : MainAPI() {
                 "showLabels" to false,
                 "typeList" to listOf(
                     mapOf("type" to 1, "value" to ""),
-                    mapOf("type" to 2, "value" to "1"), // Asumsi Value 1 adalah Sulih Suara
+                    mapOf("type" to 2, "value" to "1"), 
                     mapOf("type" to 3, "value" to ""),
                     mapOf("type" to 4, "value" to ""),
                     mapOf("type" to 5, "value" to "1")
@@ -106,7 +104,8 @@ class DramaBoxProvider : MainAPI() {
             }
         }
 
-        return HomePageResponse(homePageLists)
+        // 🔥 PERBAIKAN: Menggunakan fungsi newHomePageResponse 🔥
+        return newHomePageResponse(request.name, homePageLists)
     }
 
     // ==========================================
@@ -129,7 +128,6 @@ class DramaBoxProvider : MainAPI() {
                 name = item.bookName ?: "",
                 url = item.bookId ?: ""
             ) {
-                // Gambar poster di pencarian namanya 'cover'
                 this.posterUrl = item.cover ?: "" 
             }
         } ?: emptyList()
@@ -190,19 +188,18 @@ class DramaBoxProvider : MainAPI() {
     ): Boolean {
         val parsedData = parseJson<EpisodeData>(data)
 
-        // 🔥 MENEMBAK API UNLOCK VIP 🔥
+        // MENEMBAK API UNLOCK VIP (Agar server nge-aktifin link MP4 nya)
         val unlockUrl = "$mainUrl/drama-box/chapterv2/unlock"
         val unlockPayload = mapOf(
             "bookId" to parsedData.bookId,
             "chapterId" to parsedData.chapterId,
-            "vip" to true, // INI SIHIRNYA
+            "vip" to true, 
             "unLockType" to 1,
             "confirmPay" to true,
             "autoPay" to true
         )
         app.post(unlockUrl, headers = commonHeaders, json = unlockPayload)
 
-        // MASUKKAN LINK MP4 POLOSAN KE PEMUTAR VIDEO
         callback.invoke(
             newExtractorLink(
                 source = "DramaBox",
@@ -220,25 +217,20 @@ class DramaBoxProvider : MainAPI() {
     // ==========================================
     // DATA CLASSES UNTUK MAPPING JSON SERVER
     // ==========================================
-    // 1. Untuk Home (Theater)
     data class TheaterApiRes(val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
     
-    // 2. Untuk Kategori (Classify)
     data class ClassifyApiRes(val data: ClassifyData?)
     data class ClassifyData(val classifyBookList: ClassifyBookList?)
     data class ClassifyBookList(val records: List<BookItem>?)
     
-    // Model umum untuk Film di Beranda/Kategori
     data class BookItem(val bookId: String?, val bookName: String?, val coverWap: String?)
 
-    // 3. Untuk Pencarian (Search)
     data class SearchApiRes(val data: SearchData?)
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
 
-    // 4. Untuk Load Episode (Batch Load)
     data class BatchLoadRes(val data: BatchLoadData?)
     data class BatchLoadData(
         val bookName: String?,
