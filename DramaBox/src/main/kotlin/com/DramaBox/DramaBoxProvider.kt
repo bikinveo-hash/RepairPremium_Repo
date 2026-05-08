@@ -16,11 +16,14 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // 🔑 KUNCI MASTER: SPOOFING HEADERS
-    // Sudah diupdate menggunakan data terbaru hasil sniffing
+    // Lengkap dengan cid, userid, dan language dari hasil sniffing-mu
     private val commonHeaders = mapOf(
         "pline" to "ANDROID",
         "version" to "572",
         "package-name" to "com.storymatrix.drama",
+        "cid" to "DAPRAAG1050005",
+        "language" to "in",
+        "userid" to "463323660",
         "tn" to "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk=",
         "sn" to "X8qQyTiKDyPQ6ezq+a/WRw9lRJ2EGzwPF041JcOkLoDFp18qtAEajhY897+X48hV1Q/sbJkK63fgVna7bJ+9lNWSKwaO4OWMFxM+c6fWuguQBHO0gKLobzT9N5XY6871Z9GaQgbYZX3bGzHCvCoYL8HBjxg14jTPo9nPF9v1m4REutLSwbOXZSRXS8Gz91Js7PF4+KO02uE3g60/HxdGb6+XO8rTW0oeYcJF/JkSH6VH5QNuOgUxBvg3cLucvgCnUKnjquoGcDs8oVNLD+jis8rzEcnbicAK7ucyIHyu+Fd6U7wC0vqtNboR4SqbD4NQRfespte7yXskZ0CrFZos/g==",
         "st" to "cK4n10B_0tTQBrxFee_7cs5Q",
@@ -57,9 +60,12 @@ class DramaBoxProvider : MainAPI() {
                 "type" to 0
             )
 
+            // Mengirim request ke server
             val responseReq = app.post(url, headers = commonHeaders, json = payload)
-            // Uncomment baris di bawah kalau masih error buat nge-cek pesan dari servernya
-            // println("DRAMABOX DEBUG THEATER: ${responseReq.text}")
+            
+            // 🛑 TRIK DEBUGGING: Memaksa aplikasi menampilkan jawaban server ke layar!
+            // Setelah kamu tahu error-nya apa, tambahkan garis miring ganda (//) di awal baris bawah ini untuk mematikannya.
+            throw ErrorLoadingException("CEK SERVER: ${responseReq.text}")
             
             val response = responseReq.parsedSafe<TheaterApiRes>()
             
@@ -106,7 +112,6 @@ class DramaBoxProvider : MainAPI() {
             }
         }
 
-        // Fix: Menggunakan newHomePageResponse
         return newHomePageResponse(homePageLists)
     }
 
