@@ -15,7 +15,8 @@ class DramaBoxProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // 🔑 KUNCI MASTER BARU: Diambil dari tangkapan spesifik URL /theater
+    // 🔑 KUNCI MASTER: 
+    // Ganti 'sn' dan 'st' di bawah ini dengan hasil tangkapan terbarumu!
     private val commonHeaders = mapOf(
         "pline" to "ANDROID",
         "version" to "572",
@@ -51,10 +52,10 @@ class DramaBoxProvider : MainAPI() {
         val homePageLists = mutableListOf<HomePageList>()
 
         if (request.data == "theater") {
-            // PERHATIKAN: URL harus menyertakan timestamp yang persis dengan kunci SN
+            // 🛑 GANTI TIMESTAMP DI BAWAH INI SESUAI TANGKAPAN TERBARUMU
             val url = "$mainUrl/drama-box/he001/theater?timestamp=1778272520526"
             
-            // PERHATIKAN: Payload juga disamakan persis dengan hasil tangkapanmu
+            // 🛑 GANTI recSessionId DI BAWAH INI SESUAI TANGKAPAN TERBARUMU
             val payload = mapOf(
                 "homePageStyle" to 0,
                 "isNeedRank" to 1,
@@ -65,8 +66,13 @@ class DramaBoxProvider : MainAPI() {
             )
 
             val responseReq = app.post(url, headers = commonHeaders, json = payload)
+            val responseText = responseReq.text
             
-            // Trik throw ErrorLoadingException() SUDAH DIHAPUS, agar layar UI Cloudstream bisa muncul!
+            // 🕷️ JEBAKAN CERDAS: Cek apakah server benar-benar membalas "success"
+            if (!responseText.contains("\"status\":0") && !responseText.contains("\"success\":true")) {
+                throw ErrorLoadingException("SERVER MENOLAK (MUNGKIN EXPIRED): $responseText")
+            }
+            
             val response = responseReq.parsedSafe<TheaterApiRes>()
             
             response?.data?.columnVoList?.forEach { column ->
@@ -84,8 +90,6 @@ class DramaBoxProvider : MainAPI() {
             }
 
         } else if (request.data == "classify_dub") {
-            // Karena kita belum punya SN khusus untuk classify, menu ini mungkin akan blank.
-            // Biarkan saja dulu, kita fokus supaya tab 'Beranda' muncul filmnya!
             val url = "$mainUrl/drama-box/he001/classify"
             val payload = mapOf(
                 "pageNo" to page,
@@ -100,6 +104,7 @@ class DramaBoxProvider : MainAPI() {
                 )
             )
 
+            // Kita biarkan yang ini dulu, kalau server menolak, menu ini akan kosong
             val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<ClassifyApiRes>()
             val items = response?.data?.classifyBookList?.records?.mapNotNull { book ->
                 newTvSeriesSearchResponse(
@@ -120,7 +125,6 @@ class DramaBoxProvider : MainAPI() {
     // ==========================================
     // 2. FITUR PENCARIAN (SEARCH)
     // ==========================================
-    // ... (Kode bagian ini ke bawah biarkan sama persis seperti sebelumnya) ...
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/drama-box/search/search"
         val payload = mapOf(
@@ -130,57 +134,130 @@ class DramaBoxProvider : MainAPI() {
             "sortType" to 1,
             "synSwitch" to 1
         )
+
         val response = app.post(url, headers = commonHeaders, json = payload).parsedSafe<SearchApiRes>()
+        
         return response?.data?.searchList?.map { item ->
-            newTvSeriesSearchResponse(name = item.bookName ?: "", url = item.bookId ?: "") { this.posterUrl = item.cover ?: "" }
+            newTvSeriesSearchResponse(
+                name = item.bookName ?: "",
+                url = item.bookId ?: ""
+            ) {
+                this.posterUrl = item.cover ?: "" 
+            }
         } ?: emptyList()
     }
 
+    // ==========================================
+    // 3. HALAMAN DETAIL & DAFTAR EPISODE (LOAD)
+    // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val bookId = url
         val loadUrl = "$mainUrl/drama-box/chapterv2/batch/load"
-        val payload = mapOf("bookId" to bookId, "boundaryIndex" to 0, "loadDirection" to 2, "index" to 1)
-        val response = app.post(loadUrl, headers = commonHeaders, json = payload).parsedSafe<BatchLoadRes>() ?: throw ErrorLoadingException("Gagal memuat data drama")
+        val payload = mapOf(
+            "bookId" to bookId,
+            "boundaryIndex" to 0,
+            "loadDirection" to 2,
+            "index" to 1
+        )
+
+        val response = app.post(loadUrl, headers = commonHeaders, json = payload).parsedSafe<BatchLoadRes>()
+            ?: throw ErrorLoadingException("Gagal memuat data drama")
         val data = response.data ?: throw ErrorLoadingException("Data drama kosong")
+
         val episodes = data.chapterList?.map { chapter ->
             val bestVideo = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }
-            val epData = EpisodeData(bookId = bookId, chapterId = chapter.chapterId ?: "", videoUrl = bestVideo?.videoPath ?: "")
+            
+            val epData = EpisodeData(
+                bookId = bookId,
+                chapterId = chapter.chapterId ?: "",
+                videoUrl = bestVideo?.videoPath ?: ""
+            )
+
             newEpisode(data = epData.toJson()) {
                 this.name = chapter.chapterName
                 this.episode = (chapter.chapterIndex ?: 0) + 1
             }
         } ?: emptyList()
-        return newTvSeriesLoadResponse(name = data.bookName ?: "", url = bookId, type = TvType.TvSeries, episodes = episodes) {
+
+        return newTvSeriesLoadResponse(
+            name = data.bookName ?: "",
+            url = bookId,
+            type = TvType.TvSeries,
+            episodes = episodes
+        ) {
             this.posterUrl = data.bookCover
             this.plot = data.introduction
             this.tags = data.tags
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    // ==========================================
+    // 4. SIHIR BYPASS VIP & PLAY VIDEO (LOAD LINKS)
+    // ==========================================
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val parsedData = parseJson<EpisodeData>(data)
+
         val unlockUrl = "$mainUrl/drama-box/chapterv2/unlock"
-        val unlockPayload = mapOf("bookId" to parsedData.bookId, "chapterId" to parsedData.chapterId, "vip" to true, "unLockType" to 1, "confirmPay" to true, "autoPay" to true)
+        val unlockPayload = mapOf(
+            "bookId" to parsedData.bookId,
+            "chapterId" to parsedData.chapterId,
+            "vip" to true, 
+            "unLockType" to 1,
+            "confirmPay" to true,
+            "autoPay" to true
+        )
         app.post(unlockUrl, headers = commonHeaders, json = unlockPayload)
-        callback.invoke(newExtractorLink(source = "DramaBox", name = "DramaBox VIP", url = parsedData.videoUrl, type = ExtractorLinkType.VIDEO) {
-            this.referer = mainUrl; this.quality = Qualities.P1080.value
-        })
+
+        callback.invoke(
+            newExtractorLink(
+                source = "DramaBox",
+                name = "DramaBox VIP",
+                url = parsedData.videoUrl,
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.P1080.value
+            }
+        )
         return true
     }
 
+    // ==========================================
+    // DATA CLASSES UNTUK MAPPING JSON SERVER
+    // ==========================================
     data class TheaterApiRes(val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
+    
     data class ClassifyApiRes(val data: ClassifyData?)
     data class ClassifyData(val classifyBookList: ClassifyBookList?)
     data class ClassifyBookList(val records: List<BookItem>?)
+    
     data class BookItem(val bookId: String?, val bookName: String?, val coverWap: String?)
+
     data class SearchApiRes(val data: SearchData?)
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
+
     data class BatchLoadRes(val data: BatchLoadData?)
-    data class BatchLoadData(val bookName: String?, val bookCover: String?, val introduction: String?, val tags: List<String>?, val chapterList: List<Chapter>?)
-    data class Chapter(val chapterId: String?, val chapterIndex: Int?, val chapterName: String?, val cdnList: List<Cdn>?)
+    data class BatchLoadData(
+        val bookName: String?,
+        val bookCover: String?,
+        val introduction: String?,
+        val tags: List<String>?,
+        val chapterList: List<Chapter>?
+    )
+    data class Chapter(
+        val chapterId: String?,
+        val chapterIndex: Int?,
+        val chapterName: String?,
+        val cdnList: List<Cdn>?
+    )
     data class Cdn(val videoPathList: List<VideoPath>?)
     data class VideoPath(val quality: Int?, val videoPath: String?)
 }
