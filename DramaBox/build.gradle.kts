@@ -24,5 +24,5 @@ cloudstream {
         "AsianDrama",
     )
     isCrossPlatform = false
-    iconUrl = "https://free-reels.com/free-reels.png"
+    iconUrl = "https://www.dramabox.com/images/logo.png"
 }
