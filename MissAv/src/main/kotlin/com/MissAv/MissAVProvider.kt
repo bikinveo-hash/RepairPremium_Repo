@@ -82,7 +82,6 @@ class MissAvProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val formattedQuery = query.replace(" ", "+")
         
-        // Cek halaman keberapa yang sedang dimuat, tambahkan ?page= jika lebih dari 1
         val searchUrl = if (page == 1) {
             "$mainUrl/id/search/$formattedQuery"
         } else {
@@ -92,7 +91,6 @@ class MissAvProvider : MainAPI() {
         val document = app.get(searchUrl, headers = headers).document
         val videos = parseVideos(document)
         
-        // Mengembalikan list dengan parameter hasNext supaya CloudStream tau kapan harus berhenti scroll
         return newSearchResponseList(
             list = videos,
             hasNext = videos.isNotEmpty()
@@ -123,9 +121,7 @@ class MissAvProvider : MainAPI() {
                 val recDoc = app.get(recUrl, headers = headers).document
                 val videos = parseVideos(recDoc).filter { it.url != url }
                 recommendations.addAll(videos)
-            } catch (e: Exception) {
-                // Abaikan jika salah satu link gagal
-            }
+            } catch (e: Exception) { }
         }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -175,59 +171,52 @@ class MissAvProvider : MainAPI() {
             // EKSTRAKTOR SUBTITLE DARI SUBTITLECAT (MULTI-OPSI)
             // ==========================================
             try {
-                // 1. Ambil URL mentah dan bersihkan parameter
                 val rawCode = data.substringAfterLast("/").substringBefore("?")
-                
-                // 2. Ekstrak murni kode JAV (misal: rbd-541) memakai Regex
                 val codeRegex = Regex("""[a-zA-Z]{2,5}-\d{3,4}""")
                 val videoCode = codeRegex.find(rawCode)?.value ?: rawCode
                 
-                // 3. Tembak URL pencarian SubtitleCat
                 val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
                 val subSearchDoc = app.get(subSearchUrl, headers = headers).document
 
-                // 4. Cari SEMUA link hasil di dalam tabel, ambil MAKSIMAL 3 teratas
-                val resultLinks = subSearchDoc.select("table.sub-table tbody tr td a").take(3)
+                // Ambil maksimal 5 hasil teratas dari pencarian SubtitleCat
+                val resultLinks = subSearchDoc.select("table.sub-table tbody tr td a").take(5)
 
-                // 5. Lakukan perulangan untuk setiap hasil pencarian yang ditemukan
                 resultLinks.forEachIndexed { index, element ->
                     val resultPath = element.attr("href")
+                    
+                    // Ambil teks lengkap sebagai label (contoh: "RBD-541 ut8 (translated from Chinese)")
+                    val subLabel = element.parent()?.text()?.takeIf { it.isNotBlank() } ?: "Opsi ${index + 1}"
                     
                     if (resultPath.isNotBlank()) {
                         var detailUrl = if (resultPath.startsWith("http")) resultPath else "https://www.subtitlecat.com/${resultPath.removePrefix("/")}"
                         detailUrl = detailUrl.replace(" ", "%20")
 
                         try {
-                            // Masuk ke halaman detail subtitle opsi ini
                             val subDetailDoc = app.get(detailUrl, headers = headers).document
-                            
-                            // Cari link download khusus bahasa Indonesia
                             val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
                             
                             if (!indoSubPath.isNullOrBlank()) {
                                 var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
                                 finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
                                 
-                                // Kirim file .srt ke pemutar video CloudStream dengan nama Opsi yang berbeda-beda
+                                // Kirim setiap subtitle yang berhasil ditemukan ke CloudStream
                                 subtitleCallback.invoke(
                                     SubtitleFile(
-                                        lang = "Indonesian - Opsi ${index + 1}",
+                                        lang = "ID - $subLabel",
                                         url = finalDownloadUrl
                                     )
                                 )
                             }
                         } catch (e: Exception) {
-                            // Jika satu link opsi error, abaikan saja dan lanjut ke opsi berikutnya
+                            // Abaikan error pada satu file agar tidak mengganggu file lainnya
                         }
                     }
                 }
             } catch (e: Exception) {
-                // Abaikan jika error agar video utama tetap bisa berputar normal
                 e.printStackTrace()
             }
             // ==========================================
 
-            // FIX: Menggunakan pola Lambda Builder dari API CloudStream terbaru
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
