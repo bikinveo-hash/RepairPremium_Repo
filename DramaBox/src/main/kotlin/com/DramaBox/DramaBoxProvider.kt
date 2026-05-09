@@ -23,7 +23,6 @@ class DramaBoxProvider : MainAPI() {
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
-    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -172,6 +171,8 @@ class DramaBoxProvider : MainAPI() {
             headers = getAppHeaders(timestamp, snDetail), requestBody = requestDetail).text
             
         val detailResponse = parseJson<DetailApiRes>(detailResText)
+        if (detailResponse.status != 0) throw ErrorLoadingException("Detail Error: ${detailResponse.message}")
+        
         val listEps = detailResponse.data?.list ?: throw ErrorLoadingException("Daftar Episode Kosong")
 
         val episodes = listEps.mapNotNull { chapter ->
@@ -184,8 +185,6 @@ class DramaBoxProvider : MainAPI() {
             newEpisode(dataString) {
                 this.name = "Episode ${idx + 1}"
                 this.episode = idx + 1
-                
-                // INI KUNCINYA BRO: Isi posterUrl agar tampil gambar dan play button di UI
                 this.posterUrl = coverUrl 
             }
         }
@@ -198,14 +197,13 @@ class DramaBoxProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        // Ambil info dataString
         val parsedBook = data.substringAfter("\"bookId\":\"").substringBefore("\"")
         val parsedId = data.substringAfter("\"chapterId\":\"").substringBefore("\"")
         val parsedIndex = data.substringAfter("\"index\":").substringBefore("}").toIntOrNull() ?: 0
 
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Tembak Unlock VIP agar server buka gembok episodenya
+        // 1. Tembak Unlock VIP agar server membuka akses
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
         val requestUnlock = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -213,7 +211,7 @@ class DramaBoxProvider : MainAPI() {
             app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestUnlock)
         } catch (e: Exception) {}
 
-        // 2. Ambil Link Video resolusi tingginya
+        // 2. Ambil Link Video resolusi tinggi
         val loadPayloadStr = """{"boundaryIndex":$parsedIndex,"index":$parsedIndex,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$parsedBook"}"""
         val snLoad = generateSn(timestamp, loadPayloadStr)
         val requestLoad = loadPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -223,42 +221,39 @@ class DramaBoxProvider : MainAPI() {
 
         val targetChapter = loadRes.data?.chapterList?.find { it.chapterId == parsedId } ?: loadRes.data?.chapterList?.firstOrNull()
         
-        // 3. BYPASS ALIYUN PRIVATE ENCRYPTION (.encrypt.mp4 -> .mp4)
         targetChapter?.cdnList?.firstOrNull()?.videoPathList?.forEach { videoInfo ->
-            val encryptedUrl = videoInfo.videoPath
-            if (!encryptedUrl.isNullOrEmpty()) {
+            val originalUrl = videoInfo.videoPath
+            if (!originalUrl.isNullOrEmpty()) {
                 val qualityNum = videoInfo.quality ?: Qualities.Unknown.value
                 
-                // Buang param ?etavirp_nuyila=1 dan kata .encrypt. dari url
-                val baseMp4 = encryptedUrl.substringBefore("?")
-                    .replace(".nav2.encrypt", "")
-                    .replace(".encrypt", "")
+                // PERBAIKAN FATAL KITA: 
+                // Biarkan parameter CDN (seperti ?etavirp_nuyila=1) TETAP ADA
+                // Hanya hapus kata '.encrypt' di dalam jalur videonya
+                val cleanMp4 = originalUrl.replace(".nav2.encrypt", "").replace(".encrypt", "")
+                val cleanM3u8 = originalUrl.replace(".nav2.encrypt.mp4", ".m3u8").replace(".encrypt.mp4", ".m3u8")
                 
-                // Berikan 3 Opsi Link ke user CloudStream:
-                
-                // Opsi 1: MP4 Bersih (Biasanya berhasil jika CDN mengizinkan)
+                // Prioritas 1: M3U8 (Format streaming terbaik untuk CDN Aliyun)
                 callback.invoke(
-                    newExtractorLink("DramaBox", "MP4 Q${qualityNum}", baseMp4, ExtractorLinkType.VIDEO) {
-                        this.referer = mainUrl
-                        this.quality = qualityNum
-                    }
+                    ExtractorLink(
+                        source = "DramaBox",
+                        name = "HLS Q${qualityNum}",
+                        url = cleanM3u8,
+                        referer = mainUrl,
+                        quality = qualityNum,
+                        isM3u8 = true
+                    )
                 )
                 
-                // Opsi 2: HLS / M3U8 (Cara teraman nembus proteksi video Aliyun)
-                val m3u8Url = baseMp4.replace(".mp4", ".m3u8")
+                // Prioritas 2: MP4 Bersih (Bypass)
                 callback.invoke(
-                    newExtractorLink("DramaBox", "HLS Q${qualityNum}", m3u8Url, ExtractorLinkType.M3U8) {
-                        this.referer = mainUrl
-                        this.quality = qualityNum
-                    }
-                )
-
-                // Opsi 3: Original Link (Buat cadangan)
-                callback.invoke(
-                    newExtractorLink("DramaBox", "Original Q${qualityNum}", encryptedUrl, ExtractorLinkType.VIDEO) {
-                        this.referer = mainUrl
-                        this.quality = qualityNum
-                    }
+                    ExtractorLink(
+                        source = "DramaBox",
+                        name = "MP4 Q${qualityNum}",
+                        url = cleanMp4,
+                        referer = mainUrl,
+                        quality = qualityNum,
+                        isM3u8 = false
+                    )
                 )
             }
         }
