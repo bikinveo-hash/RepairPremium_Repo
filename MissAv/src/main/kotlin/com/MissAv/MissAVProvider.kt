@@ -182,6 +182,49 @@ class MissAvProvider : MainAPI() {
                     this.quality = Qualities.Unknown.value
                 }
             )
+
+            // ==========================================
+            // EKSTRAKTOR SUBTITLE DARI SUBTITLECAT
+            // ==========================================
+            try {
+                // 1. Ambil kode video dan bersihkan dari parameter URL tambahan (jika ada)
+                val videoCode = data.substringAfterLast("/").substringBefore("?")
+                
+                // 2. Tembak URL pencarian SubtitleCat
+                val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
+                val subSearchDoc = app.get(subSearchUrl, headers = headers).document
+
+                // 3. Cari link hasil pertama di dalam tabel
+                val firstResultPath = subSearchDoc.selectFirst("table.sub-table tbody tr td a")?.attr("href")
+
+                if (!firstResultPath.isNullOrBlank()) {
+                    val detailUrl = if (firstResultPath.startsWith("http")) firstResultPath else "https://www.subtitlecat.com/$firstResultPath"
+
+                    // 4. Masuk ke halaman detail subtitle
+                    val subDetailDoc = app.get(detailUrl, headers = headers).document
+                    
+                    // 5. Cari link download khusus bahasa Indonesia
+                    val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
+                    
+                    if (!indoSubPath.isNullOrBlank()) {
+                        val finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com$indoSubPath"
+                        
+                        // 6. Kirim file .srt ke pemutar video CloudStream
+                        subtitleCallback.invoke(
+                            SubtitleFile(
+                                lang = "Indonesian",
+                                url = finalDownloadUrl
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                // Abaikan error (silent fail) agar jika subtitle tidak ada/gagal dimuat,
+                // video utama tetap bisa diputar tanpa membuat aplikasi crash.
+                e.printStackTrace()
+            }
+            // ==========================================
+
             return true
         }
         return false
