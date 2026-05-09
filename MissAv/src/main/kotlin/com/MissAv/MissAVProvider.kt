@@ -172,14 +172,13 @@ class MissAvProvider : MainAPI() {
         if (m3u8Url != null) {
 
             // ==========================================
-            // EKSTRAKTOR SUBTITLE DARI SUBTITLECAT
-            // (Dipanggil sebelum memuat video utama)
+            // EKSTRAKTOR SUBTITLE DARI SUBTITLECAT (MULTI-OPSI)
             // ==========================================
             try {
                 // 1. Ambil URL mentah dan bersihkan parameter
                 val rawCode = data.substringAfterLast("/").substringBefore("?")
                 
-                // 2. Ekstrak murni kode JAV (misal: rbd-541) memakai Regex agar hasil pencarian presisi
+                // 2. Ekstrak murni kode JAV (misal: rbd-541) memakai Regex
                 val codeRegex = Regex("""[a-zA-Z]{2,5}-\d{3,4}""")
                 val videoCode = codeRegex.find(rawCode)?.value ?: rawCode
                 
@@ -187,33 +186,39 @@ class MissAvProvider : MainAPI() {
                 val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
                 val subSearchDoc = app.get(subSearchUrl, headers = headers).document
 
-                // 4. Cari link hasil pertama di dalam tabel
-                val firstResultPath = subSearchDoc.selectFirst("table.sub-table tbody tr td a")?.attr("href")
+                // 4. Cari SEMUA link hasil di dalam tabel, ambil MAKSIMAL 3 teratas
+                val resultLinks = subSearchDoc.select("table.sub-table tbody tr td a").take(3)
 
-                if (!firstResultPath.isNullOrBlank()) {
-                    var detailUrl = if (firstResultPath.startsWith("http")) firstResultPath else "https://www.subtitlecat.com/${firstResultPath.removePrefix("/")}"
-                    // Encode spasi pada URL detail
-                    detailUrl = detailUrl.replace(" ", "%20")
+                // 5. Lakukan perulangan untuk setiap hasil pencarian yang ditemukan
+                resultLinks.forEachIndexed { index, element ->
+                    val resultPath = element.attr("href")
+                    
+                    if (resultPath.isNotBlank()) {
+                        var detailUrl = if (resultPath.startsWith("http")) resultPath else "https://www.subtitlecat.com/${resultPath.removePrefix("/")}"
+                        detailUrl = detailUrl.replace(" ", "%20")
 
-                    // 5. Masuk ke halaman detail subtitle
-                    val subDetailDoc = app.get(detailUrl, headers = headers).document
-                    
-                    // 6. Cari link download khusus bahasa Indonesia
-                    val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
-                    
-                    if (!indoSubPath.isNullOrBlank()) {
-                        var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
-                        
-                        // Ubah spasi mentah pada nama file subtitle menjadi URL-Safe (%20)
-                        finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
-                        
-                        // 7. Kirim file .srt ke pemutar video CloudStream
-                        subtitleCallback.invoke(
-                            SubtitleFile(
-                                lang = "Indonesian",
-                                url = finalDownloadUrl
-                            )
-                        )
+                        try {
+                            // Masuk ke halaman detail subtitle opsi ini
+                            val subDetailDoc = app.get(detailUrl, headers = headers).document
+                            
+                            // Cari link download khusus bahasa Indonesia
+                            val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
+                            
+                            if (!indoSubPath.isNullOrBlank()) {
+                                var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
+                                finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
+                                
+                                // Kirim file .srt ke pemutar video CloudStream dengan nama Opsi yang berbeda-beda
+                                subtitleCallback.invoke(
+                                    SubtitleFile(
+                                        lang = "Indonesian - Opsi ${index + 1}",
+                                        url = finalDownloadUrl
+                                    )
+                                )
+                            }
+                        } catch (e: Exception) {
+                            // Jika satu link opsi error, abaikan saja dan lanjut ke opsi berikutnya
+                        }
                     }
                 }
             } catch (e: Exception) {
