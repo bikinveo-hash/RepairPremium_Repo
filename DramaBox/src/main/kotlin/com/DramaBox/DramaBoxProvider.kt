@@ -23,6 +23,7 @@ class DramaBoxProvider : MainAPI() {
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
+    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -179,7 +180,6 @@ class DramaBoxProvider : MainAPI() {
             val chId = chapter.chapterId ?: return@mapNotNull null
             val idx = chapter.chapterIndex ?: 0
             
-            // Simpan info ke dataString
             val dataString = """{"bookId":"$bookId","chapterId":"$chId","index":$idx}"""
             
             newEpisode(dataString) {
@@ -203,7 +203,7 @@ class DramaBoxProvider : MainAPI() {
 
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Tembak Unlock VIP agar server membuka akses
+        // 1. Tembak Unlock VIP
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
         val requestUnlock = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -226,34 +226,33 @@ class DramaBoxProvider : MainAPI() {
             if (!originalUrl.isNullOrEmpty()) {
                 val qualityNum = videoInfo.quality ?: Qualities.Unknown.value
                 
-                // PERBAIKAN FATAL KITA: 
-                // Biarkan parameter CDN (seperti ?etavirp_nuyila=1) TETAP ADA
-                // Hanya hapus kata '.encrypt' di dalam jalur videonya
                 val cleanMp4 = originalUrl.replace(".nav2.encrypt", "").replace(".encrypt", "")
                 val cleanM3u8 = originalUrl.replace(".nav2.encrypt.mp4", ".m3u8").replace(".encrypt.mp4", ".m3u8")
                 
-                // Prioritas 1: M3U8 (Format streaming terbaik untuk CDN Aliyun)
+                // M3U8 (Tipe wajib diletakkan di dalam KURUNG BULAT sesuai ExtractorApi.kt)
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "DramaBox",
                         name = "HLS Q${qualityNum}",
                         url = cleanM3u8,
-                        referer = mainUrl,
-                        quality = qualityNum,
-                        isM3u8 = true
-                    )
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityNum
+                    }
                 )
                 
-                // Prioritas 2: MP4 Bersih (Bypass)
+                // MP4 (Tipe wajib diletakkan di dalam KURUNG BULAT sesuai ExtractorApi.kt)
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "DramaBox",
                         name = "MP4 Q${qualityNum}",
                         url = cleanMp4,
-                        referer = mainUrl,
-                        quality = qualityNum,
-                        isM3u8 = false
-                    )
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityNum
+                    }
                 )
             }
         }
