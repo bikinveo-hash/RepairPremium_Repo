@@ -25,13 +25,13 @@ class MangoPorn : MainAPI() {
     // 1. MAIN PAGE CONFIGURATION (UPDATED)
     // ==============================
     override val mainPage = mainPageOf(
-        // Kategori Utama (Recent Movies dihapus)
+        // Kategori Utama
         "$mainUrl/trending/" to "Trending",
         "$mainUrl/ratings/" to "Top Rated",
         "$mainUrl/genres/porn-movies/" to "Porn Movies",
         "$mainUrl/xxxclips/" to "XXX Clips",
         
-        // 15 Kategori Tambahan (Filtered)
+        // Kategori Tambahan
         "$mainUrl/genre/18-teens/" to "18+ Teens",
         "$mainUrl/genre/all-girl/" to "All Girl",
         "$mainUrl/genre/all-sex/" to "All Sex",
@@ -66,7 +66,6 @@ class MangoPorn : MainAPI() {
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        // Logic pintar untuk handle Home & Search structure
         val titleElement = element.selectFirst("h3 > a") 
             ?: element.selectFirst("div.title > a")
             ?: element.selectFirst("div.image > a")
@@ -144,13 +143,11 @@ class MangoPorn : MainAPI() {
 
         val potentialLinks = mutableListOf<String>()
 
-        // Mencari link dari daftar server
         document.select("#playeroptionsul li a").forEach { link ->
             val href = fixUrl(link.attr("href"))
             if (href.startsWith("http")) potentialLinks.add(href)
         }
 
-        // Mencari iframe langsung
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src"))
             if (src.startsWith("http")) potentialLinks.add(src)
@@ -189,21 +186,21 @@ class MangoPorn : MainAPI() {
                                 finalUrl = finalUrl.replace("playmogo.com", "dood.to")
                             }
                             
-                            // Route link ke Custom Extractor yang sudah kita buat
+                            // Route link ke Custom Extractor yang sudah kita buat (memakai getSafeUrl agar tidak crash)
                             if (finalUrl.contains("luluvid.com")) {
-                                Luluvid().getUrl(finalUrl, data, subtitleCallback, callback)
+                                Luluvid().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("rpmplay.online")) {
-                                RpmPlay().getUrl(finalUrl, data, subtitleCallback, callback)
+                                RpmPlay().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("upns.online")) {
-                                UpnsOnline().getUrl(finalUrl, data, subtitleCallback, callback)
+                                UpnsOnline().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("easyvidplayer.com")) {
-                                EasyVidPlayer().getUrl(finalUrl, data, subtitleCallback, callback)
+                                EasyVidPlayer().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("embedseek.online")) {
-                                EmbedSeek().getUrl(finalUrl, data, subtitleCallback, callback)
+                                EmbedSeek().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("seekplayer.vip")) {
-                                SeekPlayer().getUrl(finalUrl, data, subtitleCallback, callback)
+                                SeekPlayer().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else if (finalUrl.contains("streamtape.com")) {
-                                StreamtapeCustom().getUrl(finalUrl, data, subtitleCallback, callback)
+                                StreamtapeCustom().getSafeUrl(finalUrl, data, subtitleCallback, callback)
                             } else {
                                 // Eksekutor bawaan Cloudstream untuk server-server lain
                                 loadExtractor(finalUrl, data, subtitleCallback, callback)
@@ -248,14 +245,15 @@ class Luluvid : ExtractorApi() {
         if (match != null) {
             val m3u8Url = match.groupValues[1]
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = m3u8Url,
-                    referer = url, 
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true
-                )
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = url
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
     }
@@ -285,41 +283,42 @@ class StreamtapeCustom : ExtractorApi() {
             }
 
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
                     url = videoUrl,
-                    referer = url,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = false 
-                )
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = url
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
     }
 }
 
-// Pasukan Kloningan Vidhide
-class RpmPlay : com.lagradost.cloudstream3.extractors.VidHide() {
+// Pasukan Kloningan Vidhide (Menggunakan VidhideExtractor)
+class RpmPlay : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
     override val name = "RpmPlay"
     override val mainUrl = "https://my.rpmplay.online"
 }
 
-class UpnsOnline : com.lagradost.cloudstream3.extractors.VidHide() {
+class UpnsOnline : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
     override val name = "UpnsOnline"
     override val mainUrl = "https://my.upns.online"
 }
 
-class EasyVidPlayer : com.lagradost.cloudstream3.extractors.VidHide() {
+class EasyVidPlayer : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
     override val name = "EasyVidPlayer"
     override val mainUrl = "https://p.easyvidplayer.com"
 }
 
-class EmbedSeek : com.lagradost.cloudstream3.extractors.VidHide() {
+class EmbedSeek : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
     override val name = "EmbedSeek"
     override val mainUrl = "https://my.embedseek.online"
 }
 
-class SeekPlayer : com.lagradost.cloudstream3.extractors.VidHide() {
+class SeekPlayer : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
     override val name = "SeekPlayer"
     override val mainUrl = "https://vip.seekplayer.vip"
 }
