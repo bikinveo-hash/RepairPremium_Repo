@@ -22,7 +22,7 @@ class DramaBoxProvider : MainAPI() {
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
     
-    // Ganti tn ini dengan token terbarumu jika suatu hari expired
+    // Ganti tn ini dengan token terbarumu dari Reqable jika suatu hari expired
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     // ==========================================
@@ -57,13 +57,13 @@ class DramaBoxProvider : MainAPI() {
     }
 
     // ==========================================
-    // HEADERS DENGAN TRIK TIME TRAVEL (Bypass st)
+    // HEADERS (TRIK TIME TRAVEL BYPASS C++)
     // ==========================================
     private fun getAppHeaders(timestamp: String, sn: String): Map<String, String> {
         return mapOf(
             "pline" to "ANDROID",
-            "version" to "100", // TRIK: Pura-pura versi jadul!
-            "vn" to "1.0.0",   // TRIK: Pura-pura versi jadul!
+            "version" to "100", // Pura-pura versi jadul!
+            "vn" to "1.0.0",   // Pura-pura versi jadul!
             "package-name" to "com.storymatrix.drama",
             "cid" to "DAPRAAG1050005",
             "language" to "in",
@@ -72,30 +72,34 @@ class DramaBoxProvider : MainAPI() {
             "device-id" to DEVICE_ID,
             "tn" to TN_TOKEN,
             "sn" to sn,
-            // st TIDAK DISERTAKAN LAGI! KITA BEBAS DARI FILE .SO!
             "user-agent" to "okhttp/4.12.0",
             "content-type" to "application/json; charset=UTF-8"
         )
     }
 
     // ==========================================
-    // BERANDA
+    // BERANDA (MENGGUNAKAN SEARCH API)
     // ==========================================
-    override val mainPage = mainPageOf("theater" to "Rekomendasi VIP")
+    override val mainPage = mainPageOf(
+        "Miliarder" to "Drama Miliarder",
+        "CEO" to "Romansa CEO",
+        "Balas Dendam" to "Balas Dendam",
+        "Cinta" to "Kisah Cinta"
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val timestamp = System.currentTimeMillis().toString()
-        val payload = mapOf("homePageStyle" to 0, "isNeedRank" to 1, "index" to 0, "type" to 0, "channelId" to 175)
+        val payload = mapOf("keyword" to request.data, "pageNo" to page, "pageSize" to 20, "sortType" to 1, "synSwitch" to 1)
         val sn = generateSn(timestamp, payload.toJson().replace(" ", ""))
 
-        val response = app.post("$mainUrl/drama-box/he001/theater?timestamp=$timestamp",
-            headers = getAppHeaders(timestamp, sn), json = payload).parsedSafe<TheaterApiRes>()
+        val response = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
+            headers = getAppHeaders(timestamp, sn), json = payload).parsedSafe<SearchApiRes>()
 
-        val items = response?.data?.columnVoList?.flatMap { it.bookList ?: emptyList() }?.map {
-            newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.coverWap }
-        } ?: throw ErrorLoadingException("Gagal memuat Beranda")
+        val items = response?.data?.searchList?.map {
+            newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.cover }
+        } ?: throw ErrorLoadingException("Gagal Memuat Beranda - Cek Koneksi / Update Token TN")
 
-        return newHomePageResponse(listOf(HomePageList("DramaBox Trending", items)))
+        return newHomePageResponse(request.name, items)
     }
 
     // ==========================================
@@ -166,7 +170,6 @@ class DramaBoxProvider : MainAPI() {
         val parsed = parseJson<EpisodeData>(data)
         val timestamp = System.currentTimeMillis().toString()
         
-        // Tembak API Unlock agar terhitung VIP
         val unlockPayload = mapOf(
             "bookId" to parsed.bookId, 
             "chapterId" to parsed.chapterId, 
@@ -178,7 +181,6 @@ class DramaBoxProvider : MainAPI() {
         val sn = generateSn(timestamp, unlockPayload.toJson().replace(" ", ""))
         app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), json = unlockPayload)
 
-        // Penulisan newExtractorLink yang benar sesuai API CloudStream terbaru
         callback.invoke(
             newExtractorLink(
                 source = "DramaBox", 
@@ -196,10 +198,6 @@ class DramaBoxProvider : MainAPI() {
     // KELAS BANTUAN JSON
     // ==========================================
     data class EpisodeData(val bookId: String, val chapterId: String, val videoUrl: String)
-    data class TheaterApiRes(val data: TheaterData?)
-    data class TheaterData(val columnVoList: List<ColumnVo>?)
-    data class ColumnVo(val bookList: List<BookItem>?)
-    data class BookItem(val bookId: String?, val bookName: String?, val coverWap: String?)
     data class SearchApiRes(val data: SearchData?)
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
