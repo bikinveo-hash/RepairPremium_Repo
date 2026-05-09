@@ -148,7 +148,7 @@ class DramaBoxProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Pemotong string sakti untuk mendapatkan ID murni
+        // Potong URL CloudStream untuk mengambil ID asli DramaBox
         val bookId = url.substringAfterLast("/")
         
         val timestamp = System.currentTimeMillis().toString()
@@ -192,31 +192,30 @@ class DramaBoxProvider : MainAPI() {
         val parsedUrl = data.substringAfter("\"videoUrl\":\"").substringBefore("\"")
 
         val timestamp = System.currentTimeMillis().toString()
-        
         val payloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
+        
         val sn = generateSn(timestamp, payloadStr)
         val requestBody = payloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-
+        
         try {
             app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), requestBody = requestBody)
         } catch (e: Exception) {}
 
-        // Format terbaru ExtractorLink
+        // Menggunakan format initializer blok {} sesuai dengan standar MainAPI
         callback.invoke(
             newExtractorLink(
                 source = "DramaBox", 
                 name = "DramaBox VIP", 
                 url = parsedUrl, 
-                referer = mainUrl,
                 type = ExtractorLinkType.VIDEO
             ) {
+                this.referer = mainUrl
                 this.quality = Qualities.P1080.value
             }
         )
         return true
     }
 
-    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
