@@ -15,13 +15,12 @@ class DramaBoxProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // Rem tangan agar tidak kena blokir Anti-DDOS CloudStream
+    // Rem tangan Anti-DDOS
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
-    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -52,36 +51,61 @@ class DramaBoxProvider : MainAPI() {
         } catch (e: Exception) { return "" }
     }
 
+    // MEMASUKKAN SEMUA HEADER DARI PYTHON AGAR SERVER TIDAK MENOLAK KITA
     private fun getAppHeaders(timestamp: String, sn: String): Map<String, String> {
         return mapOf(
-            "pline" to "ANDROID",
-            "version" to "100", // TRIK TIME TRAVEL: Bypass st file C++
-            "vn" to "1.0.0",   
+            "version" to "100", 
             "package-name" to "com.storymatrix.drama",
+            "p" to "63",
             "cid" to "DAPRAAG1050005",
+            "apn" to "2",
+            "country-code" to "ID",
+            "mchid" to "XDASEO1000000",
+            "mbid" to "42000005343",
+            "tz" to "-540",
             "language" to "in",
-            "userid" to "463323660",
-            "android-id" to ANDROID_ID,
+            "mcc" to "510",
+            "locale" to "in_ID",
+            "is_root" to "0",
             "device-id" to DEVICE_ID,
+            "nchid" to "DRA1000042",
+            "instanceid" to "8bb28856c28507963a1b3becf0907d31",
+            "md" to "CPH2235",
+            "store-source" to "store_google",
+            "mf" to "OPPO",
+            "device-score" to "70",
+            "local-time" to "2026-05-09 23:41:36.420 +0900",
+            "time-zone" to "+0900",
+            "brand" to "OPPO",
+            "lat" to "0",
+            "is_emulator" to "0",
+            "externalbillingavailable" to "0",
+            "current-language" to "in",
+            "ov" to "13",
+            "userid" to "463323660",
+            "afid" to "1778337696476-8633634605086751842",
+            "android-id" to ANDROID_ID,
+            "srn" to "1080x2400",
+            "is_vpn" to "1",
+            "build" to "Build/TP1A.220905.001",
+            "pline" to "ANDROID",
+            "vn" to "1.0.0",
+            "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
             "sn" to sn,
-            "user-agent" to "okhttp/4.12.0",
-            "content-type" to "application/json; charset=UTF-8"
+            "user-agent" to "okhttp/4.12.0"
         )
     }
 
-    override val mainPage = mainPageOf(
-        "Beranda" to "Beranda"
-    )
+    override val mainPage = mainPageOf("Beranda" to "Beranda")
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val timestamp = System.currentTimeMillis().toString()
-        
-        // Payload Asli Beranda DramaBox dari hasil sniffing Reqable-mu
         val payload = mapOf(
             "homePageStyle" to 0,
             "isNeedRank" to 1,
             "isNeedNewChannel" to 1,
+            "recSessionId" to "885925837429f1bfa0c2dea2e415f431de37f587b307d294a1c5389f9be6461e",
             "type" to 0
         )
         
@@ -94,108 +118,68 @@ class DramaBoxProvider : MainAPI() {
         ).text
         
         val response = parseJson<TheaterApiRes>(responseText)
-        
-        if (response.status != 0) {
-            throw ErrorLoadingException("Server Error: ${response.message} | Raw: $responseText")
-        }
+        if (response.status != 0) throw ErrorLoadingException("Server Error: ${response.message}")
 
         val homePageList = mutableListOf<HomePageList>()
-        
-        // Looping untuk merakit kategori secara dinamis sesuai balasan server
         response.data?.columnVoList?.forEach { column ->
             val title = column.title ?: return@forEach
             val items = column.bookList?.mapNotNull { book ->
                 val bId = book.bookId
                 val bName = book.bookName
                 if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
-                newTvSeriesSearchResponse(bName, bId) { 
-                    this.posterUrl = book.coverWap 
-                }
+                newTvSeriesSearchResponse(bName, bId) { this.posterUrl = book.coverWap }
             } ?: emptyList()
-            
-            if (items.isNotEmpty()) {
-                homePageList.add(HomePageList(title, items))
-            }
+            if (items.isNotEmpty()) homePageList.add(HomePageList(title, items))
         }
 
-        if (homePageList.isEmpty()) {
-            throw ErrorLoadingException("Daftar kategori kosong. Raw Server: $responseText")
-        }
-
-        // Karena kita sudah punya multiple HomePageList, kembalikan secara langsung
         return newHomePageResponse(homePageList)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val timestamp = System.currentTimeMillis().toString()
         val payload = mapOf(
-            "keyword" to query, 
-            "pageNo" to 1, 
-            "pageSize" to 20, 
-            "sortType" to 1, 
-            "synSwitch" to 1
+            "keyword" to query, "pageNo" to 1, "pageSize" to 20, "sortType" to 1, "synSwitch" to 1
         )
         val jsonString = mapper.writeValueAsString(payload)
         val sn = generateSn(timestamp, jsonString.replace(" ", ""))
 
         val responseText = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
-            headers = getAppHeaders(timestamp, sn), 
-            json = payload
-        ).text
+            headers = getAppHeaders(timestamp, sn), json = payload).text
             
         val response = parseJson<SearchApiRes>(responseText)
-        
-        if (response.status != 0) {
-            throw ErrorLoadingException("Search Error: ${response.message} | Raw: $responseText")
-        }
+        if (response.status != 0) throw ErrorLoadingException("Search Error: ${response.message}")
 
         return response.data?.searchList?.mapNotNull {
             val bId = it.bookId
             val bName = it.bookName
             if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
-            newTvSeriesSearchResponse(bName, bId) { 
-                this.posterUrl = it.cover 
-            }
+            newTvSeriesSearchResponse(bName, bId) { this.posterUrl = it.cover }
         } ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
         val bookId = url
         val timestamp = System.currentTimeMillis().toString()
-        
         val payload = mapOf(
-            "boundaryIndex" to 0,
-            "comingPlaySectionId" to null,
-            "index" to -1,
-            "currencyPlaySource" to "jmtj",
-            "needEndRecommend" to 0,
-            "currencyPlaySourceName" to "剧末推荐",
-            "preLoad" to false,
-            "rid" to "",
-            "pullCid" to "",
-            "loadDirection" to 0,
-            "startUpKey" to "76892858-3e57-40b1-80cd-bfe098991909",
-            "bookId" to bookId
+            "boundaryIndex" to 0, "comingPlaySectionId" to null, "index" to -1, "currencyPlaySource" to "jmtj",
+            "needEndRecommend" to 0, "currencyPlaySourceName" to "剧末推荐", "preLoad" to false, "rid" to "",
+            "pullCid" to "", "loadDirection" to 0, "startUpKey" to "76892858-3e57-40b1-80cd-bfe098991909", "bookId" to bookId
         )
         
         val jsonString = mapper.writeValueAsString(payload)
         val sn = generateSn(timestamp, jsonString.replace(" ", ""))
 
         val response = app.post("$mainUrl/drama-box/chapterv2/batch/load?timestamp=$timestamp", 
-            headers = getAppHeaders(timestamp, sn), 
-            json = payload
-        ).parsedSafe<BatchLoadRes>() ?: throw ErrorLoadingException("Gagal Memuat Episode")
+            headers = getAppHeaders(timestamp, sn), json = payload).parsedSafe<BatchLoadRes>() 
+            ?: throw ErrorLoadingException("Gagal Memuat Episode")
         
         val data = response.data ?: throw ErrorLoadingException("Data Episode Kosong")
 
         val episodes = data.chapterList?.mapNotNull { chapter ->
-            val bestVideo = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }
-            val videoUrl = bestVideo?.videoPath
+            val videoUrl = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }?.videoPath
             if (videoUrl.isNullOrEmpty()) return@mapNotNull null
 
-            // Bikin JSON string secara manual murni agar terhindar dari error epData.toJson() saat Build!
             val dataString = """{"bookId":"$bookId","chapterId":"${chapter.chapterId ?: ""}","videoUrl":"$videoUrl"}"""
-            
             newEpisode(dataString) {
                 this.name = chapter.chapterName ?: ""
                 this.episode = (chapter.chapterIndex ?: 0) + 1
@@ -210,40 +194,18 @@ class DramaBoxProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        // Ekstrak data string yang kita buat manual di atas
         val parsedId = data.substringAfter("\"chapterId\":\"").substringBefore("\"")
         val parsedBook = data.substringAfter("\"bookId\":\"").substringBefore("\"")
         val parsedUrl = data.substringAfter("\"videoUrl\":\"").substringBefore("\"")
 
         val timestamp = System.currentTimeMillis().toString()
-        
-        val payload = mapOf(
-            "bookId" to parsedBook, 
-            "chapterId" to parsedId, 
-            "vip" to true, 
-            "unLockType" to 1, 
-            "confirmPay" to true, 
-            "autoPay" to true
-        )
-        
+        val payload = mapOf("bookId" to parsedBook, "chapterId" to parsedId, "vip" to true, "unLockType" to 1, "confirmPay" to true, "autoPay" to true)
         val jsonString = mapper.writeValueAsString(payload)
         val sn = generateSn(timestamp, jsonString.replace(" ", ""))
         
-        app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", 
-            headers = getAppHeaders(timestamp, sn), 
-            json = payload
-        )
+        app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), json = payload)
 
-        callback.invoke(
-            newExtractorLink(
-                source = "DramaBox", 
-                name = "DramaBox VIP", 
-                url = parsedUrl, 
-                type = ExtractorLinkType.VIDEO
-            ) {
-                this.quality = Qualities.P1080.value
-            }
-        )
+        callback.invoke(newExtractorLink("DramaBox", "DramaBox VIP", parsedUrl, false, Qualities.P1080.value))
         return true
     }
 
