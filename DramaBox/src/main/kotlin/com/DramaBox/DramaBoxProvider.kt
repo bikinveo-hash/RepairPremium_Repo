@@ -23,6 +23,7 @@ class DramaBoxProvider : MainAPI() {
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
+    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -191,7 +192,16 @@ class DramaBoxProvider : MainAPI() {
         
         app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), requestBody = requestBody)
 
-        callback.invoke(newExtractorLink("DramaBox", "DramaBox VIP", parsedUrl, false, Qualities.P1080.value))
+        callback.invoke(
+            newExtractorLink(
+                source = "DramaBox", 
+                name = "DramaBox VIP", 
+                url = parsedUrl, 
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.quality = Qualities.P1080.value
+            }
+        )
         return true
     }
 
