@@ -14,22 +14,24 @@ class MangoPorn : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = false
 
-    // Menggunakan User-Agent Windows Desktop yang lebih aman dari deteksi bot
+    // HEADERS PENTING (JANGAN DIUBAH)
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
         "Referer" to "$mainUrl/",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
     )
 
     // ==============================
-    // 1. MAIN PAGE CONFIGURATION
+    // 1. MAIN PAGE CONFIGURATION (UPDATED)
     // ==============================
     override val mainPage = mainPageOf(
+        // Kategori Utama (Recent Movies dihapus)
         "$mainUrl/trending/" to "Trending",
         "$mainUrl/ratings/" to "Top Rated",
         "$mainUrl/genres/porn-movies/" to "Porn Movies",
         "$mainUrl/xxxclips/" to "XXX Clips",
         
+        // 15 Kategori Tambahan (Filtered)
         "$mainUrl/genre/18-teens/" to "18+ Teens",
         "$mainUrl/genre/all-girl/" to "All Girl",
         "$mainUrl/genre/all-sex/" to "All Sex",
@@ -48,21 +50,15 @@ class MangoPorn : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Logic pintar untuk menangani pagination agar URL tidak double-slash
         val url = if (page == 1) {
             request.data
         } else {
-            if (request.data.endsWith("/")) {
-                "${request.data}page/$page/"
-            } else {
-                "${request.data}/page/$page/"
-            }
+            "${request.data}page/$page/"
         }
 
         val document = app.get(url, headers = headers).document
         
-        // Mempertajam selector pencarian items
-        val items = document.select("div.items article.item").mapNotNull {
+        val items = document.select("article.item").mapNotNull {
             toSearchResult(it)
         }
 
@@ -70,16 +66,16 @@ class MangoPorn : MainAPI() {
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        // Fallback logic jika ada perubahan struktur judul
-        val titleElement = element.selectFirst("div.data h3 a")
-            ?: element.selectFirst("h3 > a") 
+        // Logic pintar untuk handle Home & Search structure
+        val titleElement = element.selectFirst("h3 > a") 
             ?: element.selectFirst("div.title > a")
+            ?: element.selectFirst("div.image > a")
             ?: return null
 
         val title = titleElement.text().trim()
         val url = fixUrl(titleElement.attr("href"))
-        
-        val imgElement = element.selectFirst("div.poster img") ?: element.selectFirst("img")
+    
+        val imgElement = element.selectFirst("img")
         val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
             imgElement.attr("src") 
         }
@@ -110,6 +106,7 @@ class MangoPorn : MainAPI() {
         val document = app.get(url, headers = headers).document
 
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown"
+
         val description = document.selectFirst("div.wp-content p")?.text()?.trim()
         
         val imgElement = document.selectFirst("div.poster img")
@@ -118,6 +115,7 @@ class MangoPorn : MainAPI() {
         }
 
         val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
+        
         val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
         
         val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
@@ -143,13 +141,16 @@ class MangoPorn : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data, headers = headers).document
+
         val potentialLinks = mutableListOf<String>()
 
+        // Mencari link dari daftar server
         document.select("#playeroptionsul li a").forEach { link ->
             val href = fixUrl(link.attr("href"))
             if (href.startsWith("http")) potentialLinks.add(href)
         }
 
+        // Mencari iframe langsung
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src"))
             if (src.startsWith("http")) potentialLinks.add(src)
@@ -157,13 +158,19 @@ class MangoPorn : MainAPI() {
 
         fun getServerPriority(url: String): Int {
             return when {
-                url.contains("dood") -> 0
-                url.contains("streamtape") -> 1
-                url.contains("voe.sx") -> 2
-                url.contains("vidhide") -> 5
-                url.contains("filemoon") -> 6
-                url.contains("mixdrop") -> 10
-                url.contains("streamsb") -> 11
+                url.contains("dood") || url.contains("playmogo") -> 0
+                url.contains("luluvid") -> 1
+                url.contains("rpmplay") -> 2 
+                url.contains("upns") -> 3
+                url.contains("easyvidplayer") -> 4
+                url.contains("embedseek") -> 5
+                url.contains("seekplayer") -> 6
+                url.contains("streamtape") -> 7
+                url.contains("voe.sx") -> 8
+                url.contains("vidhide") -> 9
+                url.contains("filemoon") -> 10
+                url.contains("mixdrop") -> 11
+                url.contains("streamsb") -> 12
                 else -> 20
             }
         }
@@ -175,9 +182,34 @@ class MangoPorn : MainAPI() {
                 sortedLinks.map { link ->
                     launch(Dispatchers.IO) {
                         try {
-                            loadExtractor(link, data, subtitleCallback, callback)
+                            var finalUrl = link
+                            
+                            // Bypass Doodstream Clone (Playmogo)
+                            if (finalUrl.contains("playmogo.com")) {
+                                finalUrl = finalUrl.replace("playmogo.com", "dood.to")
+                            }
+                            
+                            // Route link ke Custom Extractor yang sudah kita buat
+                            if (finalUrl.contains("luluvid.com")) {
+                                Luluvid().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("rpmplay.online")) {
+                                RpmPlay().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("upns.online")) {
+                                UpnsOnline().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("easyvidplayer.com")) {
+                                EasyVidPlayer().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("embedseek.online")) {
+                                EmbedSeek().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("seekplayer.vip")) {
+                                SeekPlayer().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else if (finalUrl.contains("streamtape.com")) {
+                                StreamtapeCustom().getUrl(finalUrl, data, subtitleCallback, callback)
+                            } else {
+                                // Eksekutor bawaan Cloudstream untuk server-server lain
+                                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                            }
                         } catch (e: Exception) {
-                            // Abaikan server yang gagal agar server lain tetap lanjut
+                            // Abaikan error di satu server agar server lain tetap dicoba
                         }
                     }
                 }
@@ -187,4 +219,107 @@ class MangoPorn : MainAPI() {
 
         return false
     }
+}
+
+// ==========================================
+// KUMPULAN CUSTOM EXTRACTOR
+// ==========================================
+
+class Luluvid : ExtractorApi() {
+    override val name = "Luluvid"
+    override val mainUrl = "https://luluvid.com"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val response = app.get(url, referer = referer).text
+        val m3u8Regex = Regex("file\"?\\s*:\\s*\"(https?://[^\"]+\\.m3u8[^\"]*)\"")
+        var match = m3u8Regex.find(response)
+        
+        if (match == null) {
+            val unpacked = getAndUnpack(response)
+            match = m3u8Regex.find(unpacked)
+        }
+
+        if (match != null) {
+            val m3u8Url = match.groupValues[1]
+            callback.invoke(
+                ExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = m3u8Url,
+                    referer = url, 
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = true
+                )
+            )
+        }
+    }
+}
+
+class StreamtapeCustom : ExtractorApi() {
+    override val name = "Streamtape"
+    override val mainUrl = "https://streamtape.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val response = app.get(url).text
+        val part1 = Regex("""innerHTML\s*=\s*['"](//[^'"]+get_video[^'"]+)['"]""").find(response)?.groupValues?.get(1)
+        val part2Regex = Regex("""\+\s*(?:\([^)]+\)\s*\+\s*)?['"]([^'"]+)['"]""")
+        val part2Matches = part2Regex.findAll(response).toList()
+        val part2 = if (part2Matches.isNotEmpty()) part2Matches.last().groupValues[1] else ""
+
+        if (part1 != null) {
+            var videoUrl = "https:$part1$part2"
+            if (!videoUrl.contains("&stream=1")) {
+                videoUrl += "&stream=1"
+            }
+
+            callback.invoke(
+                ExtractorLink(
+                    source = this.name,
+                    name = this.name,
+                    url = videoUrl,
+                    referer = url,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = false 
+                )
+            )
+        }
+    }
+}
+
+// Pasukan Kloningan Vidhide
+class RpmPlay : com.lagradost.cloudstream3.extractors.VidHide() {
+    override val name = "RpmPlay"
+    override val mainUrl = "https://my.rpmplay.online"
+}
+
+class UpnsOnline : com.lagradost.cloudstream3.extractors.VidHide() {
+    override val name = "UpnsOnline"
+    override val mainUrl = "https://my.upns.online"
+}
+
+class EasyVidPlayer : com.lagradost.cloudstream3.extractors.VidHide() {
+    override val name = "EasyVidPlayer"
+    override val mainUrl = "https://p.easyvidplayer.com"
+}
+
+class EmbedSeek : com.lagradost.cloudstream3.extractors.VidHide() {
+    override val name = "EmbedSeek"
+    override val mainUrl = "https://my.embedseek.online"
+}
+
+class SeekPlayer : com.lagradost.cloudstream3.extractors.VidHide() {
+    override val name = "SeekPlayer"
+    override val mainUrl = "https://vip.seekplayer.vip"
 }
