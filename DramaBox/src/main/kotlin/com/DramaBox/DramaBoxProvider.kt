@@ -4,7 +4,6 @@ import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.KeyFactory
@@ -19,11 +18,12 @@ class DramaBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // Rem tangan agar tidak kena blokir Anti-DDOS CloudStream
-    override var sequentialMainPage = true 
-    override var sequentialMainPageDelay = 500L 
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 1500L
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
+    // Token sudah dipasang sesuai log Reqable-mu yang valid!
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -57,7 +57,7 @@ class DramaBoxProvider : MainAPI() {
     private fun getAppHeaders(timestamp: String, sn: String): Map<String, String> {
         return mapOf(
             "pline" to "ANDROID",
-            "version" to "100", // Trik Time Travel (Tanpa st)
+            "version" to "100", // TRIK TIME TRAVEL: Bypass st file C++
             "vn" to "1.0.0",   
             "package-name" to "com.storymatrix.drama",
             "cid" to "DAPRAAG1050005",
@@ -67,7 +67,8 @@ class DramaBoxProvider : MainAPI() {
             "device-id" to DEVICE_ID,
             "tn" to TN_TOKEN,
             "sn" to sn,
-            "user-agent" to "okhttp/4.12.0"
+            "user-agent" to "okhttp/4.12.0",
+            "content-type" to "application/json; charset=UTF-8"
         )
     }
 
@@ -80,18 +81,24 @@ class DramaBoxProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val timestamp = System.currentTimeMillis().toString()
-        // Menggunakan STRING PATEN agar bentuk JSON tidak berubah sama sekali!
         val payloadStr = """{"keyword":"${request.data}","pageNo":$page,"pageSize":20,"sortType":1,"synSwitch":1}"""
-        
         val sn = generateSn(timestamp, payloadStr)
         val requestBody = payloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-        val response = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
-            headers = getAppHeaders(timestamp, sn), requestBody = requestBody).parsedSafe<SearchApiRes>()
+        // Ambil data mentah (text) agar bisa dibaca kalau error
+        val responseText = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
+            headers = getAppHeaders(timestamp, sn), requestBody = requestBody).text
+        
+        val response = parseJson<SearchApiRes>(responseText)
+        
+        // JIKA SERVER MENOLAK, TAMPILKAN ALASANNYA DI LAYAR CLOUDSTREAM
+        if (response.status != 0) {
+            throw ErrorLoadingException("Server Error: ${response.message} | Raw: $responseText")
+        }
 
-        val items = response?.data?.searchList?.map {
+        val items = response.data?.searchList?.map {
             newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.cover }
-        } ?: emptyList() // Mengembalikan list kosong jika gagal, mencegah Canceled massal!
+        } ?: throw ErrorLoadingException("Daftar film kosong. Raw Server: $responseText")
 
         return newHomePageResponse(request.name, items)
     }
@@ -99,14 +106,19 @@ class DramaBoxProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val timestamp = System.currentTimeMillis().toString()
         val payloadStr = """{"keyword":"$query","pageNo":1,"pageSize":20,"sortType":1,"synSwitch":1}"""
-        
         val sn = generateSn(timestamp, payloadStr)
         val requestBody = payloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-        val response = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
-            headers = getAppHeaders(timestamp, sn), requestBody = requestBody).parsedSafe<SearchApiRes>()
+        val responseText = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
+            headers = getAppHeaders(timestamp, sn), requestBody = requestBody).text
+            
+        val response = parseJson<SearchApiRes>(responseText)
+        
+        if (response.status != 0) {
+            throw ErrorLoadingException("Search Error: ${response.message} | Raw: $responseText")
+        }
 
-        return response?.data?.searchList?.map {
+        return response.data?.searchList?.map {
             newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.cover }
         } ?: emptyList()
     }
@@ -167,8 +179,9 @@ class DramaBoxProvider : MainAPI() {
         return true
     }
 
+    // Class parsing JSON
     data class EpisodeData(val bookId: String, val chapterId: String, val videoUrl: String)
-    data class SearchApiRes(val data: SearchData?)
+    data class SearchApiRes(val status: Int?, val message: String?, val data: SearchData?)
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
     data class BatchLoadRes(val data: BatchLoadData?)
