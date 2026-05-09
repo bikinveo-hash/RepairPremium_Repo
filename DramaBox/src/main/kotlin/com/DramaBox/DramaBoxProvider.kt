@@ -15,7 +15,7 @@ class DramaBoxProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // Rem tangan agar tidak dianggap SPAM oleh server
+    // Rem tangan agar tidak kena blokir Anti-DDOS CloudStream
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
@@ -55,7 +55,7 @@ class DramaBoxProvider : MainAPI() {
     private fun getAppHeaders(timestamp: String, sn: String): Map<String, String> {
         return mapOf(
             "pline" to "ANDROID",
-            "version" to "100", // BYPASS: Pura-pura jadi app jadul tanpa st!
+            "version" to "100", // TRIK TIME TRAVEL: Bypass st file C++
             "vn" to "1.0.0",   
             "package-name" to "com.storymatrix.drama",
             "cid" to "DAPRAAG1050005",
@@ -65,54 +65,65 @@ class DramaBoxProvider : MainAPI() {
             "device-id" to DEVICE_ID,
             "tn" to TN_TOKEN,
             "sn" to sn,
-            "user-agent" to "okhttp/4.12.0"
+            "user-agent" to "okhttp/4.12.0",
+            "content-type" to "application/json; charset=UTF-8"
         )
     }
 
     override val mainPage = mainPageOf(
-        "Miliarder" to "Drama Miliarder",
-        "CEO" to "Romansa CEO",
-        "Balas Dendam" to "Balas Dendam",
-        "Cinta" to "Kisah Cinta"
+        "Beranda" to "Beranda"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val timestamp = System.currentTimeMillis().toString()
         
-        // Kita kembali menggunakan Map bawaan CloudStream agar tidak dimarahi server
+        // Payload Asli Beranda DramaBox dari hasil sniffing Reqable-mu
         val payload = mapOf(
-            "keyword" to request.data, 
-            "pageNo" to page, 
-            "pageSize" to 20, 
-            "sortType" to 1, 
-            "synSwitch" to 1
+            "homePageStyle" to 0,
+            "isNeedRank" to 1,
+            "isNeedNewChannel" to 1,
+            "type" to 0
         )
         
-        // Memakai mapper bawaan CloudStream untuk merakit JSON String buat tanda tangan RSA
         val jsonString = mapper.writeValueAsString(payload)
         val sn = generateSn(timestamp, jsonString.replace(" ", ""))
 
-        val responseText = app.post("$mainUrl/drama-box/search/search?timestamp=$timestamp",
+        val responseText = app.post("$mainUrl/drama-box/he001/theater?timestamp=$timestamp",
             headers = getAppHeaders(timestamp, sn), 
-            json = payload // CloudStream otomatis mengubah Map ini jadi JSON yang "Halal" di mata server
+            json = payload 
         ).text
         
-        val response = parseJson<SearchApiRes>(responseText)
+        val response = parseJson<TheaterApiRes>(responseText)
         
         if (response.status != 0) {
             throw ErrorLoadingException("Server Error: ${response.message} | Raw: $responseText")
         }
 
-        val items = response.data?.searchList?.mapNotNull {
-            val bId = it.bookId
-            val bName = it.bookName
-            if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
-            newTvSeriesSearchResponse(bName, bId) { 
-                this.posterUrl = it.cover 
+        val homePageList = mutableListOf<HomePageList>()
+        
+        // Looping untuk merakit kategori secara dinamis sesuai balasan server
+        response.data?.columnVoList?.forEach { column ->
+            val title = column.title ?: return@forEach
+            val items = column.bookList?.mapNotNull { book ->
+                val bId = book.bookId
+                val bName = book.bookName
+                if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
+                newTvSeriesSearchResponse(bName, bId) { 
+                    this.posterUrl = book.coverWap 
+                }
+            } ?: emptyList()
+            
+            if (items.isNotEmpty()) {
+                homePageList.add(HomePageList(title, items))
             }
-        } ?: emptyList()
+        }
 
-        return newHomePageResponse(request.name, items)
+        if (homePageList.isEmpty()) {
+            throw ErrorLoadingException("Daftar kategori kosong. Raw Server: $responseText")
+        }
+
+        // Karena kita sudah punya multiple HomePageList, kembalikan secara langsung
+        return newHomePageResponse(homePageList)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -182,7 +193,7 @@ class DramaBoxProvider : MainAPI() {
             val videoUrl = bestVideo?.videoPath
             if (videoUrl.isNullOrEmpty()) return@mapNotNull null
 
-            // Bikin JSON string secara manual MURNI agar terhindar dari error epData.toJson() saat Build!
+            // Bikin JSON string secara manual murni agar terhindar dari error epData.toJson() saat Build!
             val dataString = """{"bookId":"$bookId","chapterId":"${chapter.chapterId ?: ""}","videoUrl":"$videoUrl"}"""
             
             newEpisode(dataString) {
@@ -199,12 +210,16 @@ class DramaBoxProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val parsed = parseJson<EpisodeData>(data)
+        // Ekstrak data string yang kita buat manual di atas
+        val parsedId = data.substringAfter("\"chapterId\":\"").substringBefore("\"")
+        val parsedBook = data.substringAfter("\"bookId\":\"").substringBefore("\"")
+        val parsedUrl = data.substringAfter("\"videoUrl\":\"").substringBefore("\"")
+
         val timestamp = System.currentTimeMillis().toString()
         
         val payload = mapOf(
-            "bookId" to parsed.bookId, 
-            "chapterId" to parsed.chapterId, 
+            "bookId" to parsedBook, 
+            "chapterId" to parsedId, 
             "vip" to true, 
             "unLockType" to 1, 
             "confirmPay" to true, 
@@ -223,7 +238,7 @@ class DramaBoxProvider : MainAPI() {
             newExtractorLink(
                 source = "DramaBox", 
                 name = "DramaBox VIP", 
-                url = parsed.videoUrl, 
+                url = parsedUrl, 
                 type = ExtractorLinkType.VIDEO
             ) {
                 this.quality = Qualities.P1080.value
@@ -233,10 +248,15 @@ class DramaBoxProvider : MainAPI() {
     }
 
     // Class parsing JSON
-    data class EpisodeData(val bookId: String, val chapterId: String, val videoUrl: String)
+    data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
+    data class TheaterData(val columnVoList: List<ColumnVo>?)
+    data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
+    data class BookItem(val bookId: String?, val bookName: String?, val coverWap: String?)
+
     data class SearchApiRes(val status: Int?, val message: String?, val data: SearchData?)
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
+    
     data class BatchLoadRes(val data: BatchLoadData?)
     data class BatchLoadData(val bookName: String?, val bookCover: String?, val introduction: String?, val tags: List<String>?, val chapterList: List<Chapter>?)
     data class Chapter(val chapterId: String?, val chapterIndex: Int?, val chapterName: String?, val cdnList: List<Cdn>?)
