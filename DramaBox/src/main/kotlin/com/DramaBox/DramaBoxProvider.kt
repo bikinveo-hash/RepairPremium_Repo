@@ -17,13 +17,12 @@ class DramaBoxProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // Rem tangan agar tidak kena blokir Anti-DDOS CloudStream
+    // Rem tangan Anti-DDOS CloudStream
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
-    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -148,9 +147,12 @@ class DramaBoxProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val bookId = url
+        // INI KUNCI PENYELESAIAN ERROR KOSONG KEMARIN:
+        // Cloudstream memasukkan URL penuh, kita hanya ambil ID-nya (angka terakhir)
+        val bookId = url.substringAfterLast("/")
+        
         val timestamp = System.currentTimeMillis().toString()
-        val payloadStr = """{"boundaryIndex":0,"comingPlaySectionId":null,"index":-1,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$bookId"}"""
+        val payloadStr = """{"boundaryIndex":0,"index":-1,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$bookId"}"""
         
         val sn = generateSn(timestamp, payloadStr)
         val requestBody = payloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -159,7 +161,13 @@ class DramaBoxProvider : MainAPI() {
             headers = getAppHeaders(timestamp, sn), requestBody = requestBody).text
             
         val response = parseJson<BatchLoadRes>(responseText)
-        val data = response.data ?: throw ErrorLoadingException("Data Episode Kosong")
+        
+        // Debugging mode jika server menolak
+        if (response.status != 0) {
+            throw ErrorLoadingException("Load Error: ${response.message} | Raw: $responseText")
+        }
+        
+        val data = response.data ?: throw ErrorLoadingException("Data Episode Kosong. Raw: $responseText")
 
         val episodes = data.chapterList?.mapNotNull { chapter ->
             val videoUrl = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }?.videoPath
@@ -167,7 +175,7 @@ class DramaBoxProvider : MainAPI() {
 
             val dataString = """{"bookId":"$bookId","chapterId":"${chapter.chapterId ?: ""}","videoUrl":"$videoUrl"}"""
             newEpisode(dataString) {
-                this.name = chapter.chapterName ?: ""
+                this.name = chapter.chapterName ?: "Episode ${(chapter.chapterIndex ?: 0) + 1}"
                 this.episode = (chapter.chapterIndex ?: 0) + 1
             }
         } ?: emptyList()
@@ -190,22 +198,23 @@ class DramaBoxProvider : MainAPI() {
         val sn = generateSn(timestamp, payloadStr)
         val requestBody = payloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         
-        app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), requestBody = requestBody)
+        // Coba bypass VIP
+        try {
+            app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), requestBody = requestBody)
+        } catch (e: Exception) {}
 
         callback.invoke(
             newExtractorLink(
                 source = "DramaBox", 
                 name = "DramaBox VIP", 
                 url = parsedUrl, 
-                type = ExtractorLinkType.VIDEO
-            ) {
-                this.quality = Qualities.P1080.value
-            }
+                isM3u8 = false, 
+                quality = Qualities.P1080.value
+            )
         )
         return true
     }
 
-    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
@@ -215,7 +224,7 @@ class DramaBoxProvider : MainAPI() {
     data class SearchData(val searchList: List<SearchItem>?)
     data class SearchItem(val bookId: String?, val bookName: String?, val cover: String?)
     
-    data class BatchLoadRes(val status: Int?, val data: BatchLoadData?)
+    data class BatchLoadRes(val status: Int?, val message: String?, val data: BatchLoadData?)
     data class BatchLoadData(val bookName: String?, val bookCover: String?, val introduction: String?, val tags: List<String>?, val chapterList: List<Chapter>?)
     data class Chapter(val chapterId: String?, val chapterIndex: Int?, val chapterName: String?, val cdnList: List<Cdn>?)
     data class Cdn(val videoPathList: List<VideoPath>?)
