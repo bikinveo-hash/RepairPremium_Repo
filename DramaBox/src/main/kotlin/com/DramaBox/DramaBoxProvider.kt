@@ -96,8 +96,13 @@ class DramaBoxProvider : MainAPI() {
             throw ErrorLoadingException("Server Error: ${response.message} | Raw: $responseText")
         }
 
-        val items = response.data?.searchList?.map {
-            newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.cover }
+        val items = response.data?.searchList?.mapNotNull {
+            val bId = it.bookId
+            val bName = it.bookName
+            if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
+            newTvSeriesSearchResponse(bName, bId) { 
+                this.posterUrl = it.cover 
+            }
         } ?: throw ErrorLoadingException("Daftar film kosong. Raw Server: $responseText")
 
         return newHomePageResponse(request.name, items)
@@ -118,8 +123,13 @@ class DramaBoxProvider : MainAPI() {
             throw ErrorLoadingException("Search Error: ${response.message} | Raw: $responseText")
         }
 
-        return response.data?.searchList?.map {
-            newTvSeriesSearchResponse(it.bookName ?: "", it.bookId ?: "") { this.posterUrl = it.cover }
+        return response.data?.searchList?.mapNotNull {
+            val bId = it.bookId
+            val bName = it.bookName
+            if (bId.isNullOrEmpty() || bName.isNullOrEmpty()) return@mapNotNull null
+            newTvSeriesSearchResponse(bName, bId) { 
+                this.posterUrl = it.cover 
+            }
         } ?: emptyList()
     }
 
@@ -138,12 +148,16 @@ class DramaBoxProvider : MainAPI() {
         
         val data = response.data ?: throw ErrorLoadingException("Data Episode Kosong")
 
-        val episodes = data.chapterList?.map { chapter ->
+        val episodes = data.chapterList?.mapNotNull { chapter ->
             val bestVideo = chapter.cdnList?.firstOrNull()?.videoPathList?.maxByOrNull { it.quality ?: 0 }
-            val epData = EpisodeData(bookId, chapter.chapterId ?: "", bestVideo?.videoPath ?: "")
+            val videoUrl = bestVideo?.videoPath
+            if (videoUrl.isNullOrEmpty()) return@mapNotNull null
+
+            // KITA BIKIN JSON STRING MANUAL BIAR GAK ERROR toJson()
+            val dataString = """{"bookId":"$bookId","chapterId":"${chapter.chapterId ?: ""}","videoUrl":"$videoUrl"}"""
             
-            newEpisode(epData.toJson()) {
-                this.name = chapter.chapterName
+            newEpisode(dataString) {
+                this.name = chapter.chapterName ?: "" // Fixed String? error
                 this.episode = (chapter.chapterIndex ?: 0) + 1
             }
         } ?: emptyList()
