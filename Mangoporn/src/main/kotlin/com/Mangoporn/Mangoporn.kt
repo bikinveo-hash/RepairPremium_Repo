@@ -223,8 +223,8 @@ class MangoPorn : MainAPI() {
 // ==========================================
 
 class Luluvid : ExtractorApi() {
-    override val name = "Luluvid"
-    override val mainUrl = "https://luluvid.com"
+    override var name = "Luluvid"
+    override var mainUrl = "https://luluvid.com"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -260,8 +260,8 @@ class Luluvid : ExtractorApi() {
 }
 
 class StreamtapeCustom : ExtractorApi() {
-    override val name = "Streamtape"
-    override val mainUrl = "https://streamtape.com"
+    override var name = "Streamtape"
+    override var mainUrl = "https://streamtape.com"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -297,28 +297,28 @@ class StreamtapeCustom : ExtractorApi() {
     }
 }
 
-// Pasukan Kloningan Vidhide (Menggunakan VidhideExtractor)
+// Pasukan Kloningan Vidhide (Menggunakan VidhideExtractor dengan var)
 class RpmPlay : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
-    override val name = "RpmPlay"
-    override val mainUrl = "https://my.rpmplay.online"
+    override var name = "RpmPlay"
+    override var mainUrl = "https://my.rpmplay.online"
 }
 
 class UpnsOnline : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
-    override val name = "UpnsOnline"
-    override val mainUrl = "https://my.upns.online"
+    override var name = "UpnsOnline"
+    override var mainUrl = "https://my.upns.online"
 }
 
 class EasyVidPlayer : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
-    override val name = "EasyVidPlayer"
-    override val mainUrl = "https://p.easyvidplayer.com"
+    override var name = "EasyVidPlayer"
+    override var mainUrl = "https://p.easyvidplayer.com"
 }
 
 class EmbedSeek : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
-    override val name = "EmbedSeek"
-    override val mainUrl = "https://my.embedseek.online"
+    override var name = "EmbedSeek"
+    override var mainUrl = "https://my.embedseek.online"
 }
 
 class SeekPlayer : com.lagradost.cloudstream3.extractors.VidhideExtractor() {
-    override val name = "SeekPlayer"
-    override val mainUrl = "https://vip.seekplayer.vip"
+    override var name = "SeekPlayer"
+    override var mainUrl = "https://vip.seekplayer.vip"
 }
