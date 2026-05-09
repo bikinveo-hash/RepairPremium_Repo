@@ -14,24 +14,22 @@ class MangoPorn : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = false
 
-    // HEADERS PENTING (JANGAN DIUBAH)
+    // Menggunakan User-Agent Windows Desktop yang lebih aman dari deteksi bot
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer" to "$mainUrl/",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
     )
 
     // ==============================
-    // 1. MAIN PAGE CONFIGURATION (UPDATED)
+    // 1. MAIN PAGE CONFIGURATION
     // ==============================
     override val mainPage = mainPageOf(
-        // Kategori Utama (Recent Movies dihapus)
         "$mainUrl/trending/" to "Trending",
         "$mainUrl/ratings/" to "Top Rated",
         "$mainUrl/genres/porn-movies/" to "Porn Movies",
         "$mainUrl/xxxclips/" to "XXX Clips",
         
-        // 15 Kategori Tambahan (Filtered)
         "$mainUrl/genre/18-teens/" to "18+ Teens",
         "$mainUrl/genre/all-girl/" to "All Girl",
         "$mainUrl/genre/all-sex/" to "All Sex",
@@ -50,15 +48,21 @@ class MangoPorn : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        // Logic pintar untuk menangani pagination agar URL tidak double-slash
         val url = if (page == 1) {
             request.data
         } else {
-            "${request.data}page/$page/"
+            if (request.data.endsWith("/")) {
+                "${request.data}page/$page/"
+            } else {
+                "${request.data}/page/$page/"
+            }
         }
 
         val document = app.get(url, headers = headers).document
         
-        val items = document.select("article.item").mapNotNull {
+        // Mempertajam selector pencarian items
+        val items = document.select("div.items article.item").mapNotNull {
             toSearchResult(it)
         }
 
@@ -66,16 +70,16 @@ class MangoPorn : MainAPI() {
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        // Logic pintar untuk handle Home & Search structure
-        val titleElement = element.selectFirst("h3 > a") 
+        // Fallback logic jika ada perubahan struktur judul
+        val titleElement = element.selectFirst("div.data h3 a")
+            ?: element.selectFirst("h3 > a") 
             ?: element.selectFirst("div.title > a")
-            ?: element.selectFirst("div.image > a")
             ?: return null
 
         val title = titleElement.text().trim()
         val url = fixUrl(titleElement.attr("href"))
         
-        val imgElement = element.selectFirst("img")
+        val imgElement = element.selectFirst("div.poster img") ?: element.selectFirst("img")
         val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
             imgElement.attr("src") 
         }
@@ -106,7 +110,6 @@ class MangoPorn : MainAPI() {
         val document = app.get(url, headers = headers).document
 
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown"
-
         val description = document.selectFirst("div.wp-content p")?.text()?.trim()
         
         val imgElement = document.selectFirst("div.poster img")
@@ -115,7 +118,6 @@ class MangoPorn : MainAPI() {
         }
 
         val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
-        
         val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
         
         val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
@@ -141,7 +143,6 @@ class MangoPorn : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data, headers = headers).document
-
         val potentialLinks = mutableListOf<String>()
 
         document.select("#playeroptionsul li a").forEach { link ->
@@ -176,6 +177,7 @@ class MangoPorn : MainAPI() {
                         try {
                             loadExtractor(link, data, subtitleCallback, callback)
                         } catch (e: Exception) {
+                            // Abaikan server yang gagal agar server lain tetap lanjut
                         }
                     }
                 }
