@@ -72,7 +72,7 @@ class DramaBoxProvider : MainAPI() {
             "device-id" to DEVICE_ID,
             "tn" to TN_TOKEN,
             "sn" to sn,
-            // st TIDAK DISERTAKAN LAGI! KITA BEBAS!
+            // st TIDAK DISERTAKAN LAGI! KITA BEBAS DARI FILE .SO!
             "user-agent" to "okhttp/4.12.0",
             "content-type" to "application/json; charset=UTF-8"
         )
@@ -167,11 +167,28 @@ class DramaBoxProvider : MainAPI() {
         val timestamp = System.currentTimeMillis().toString()
         
         // Tembak API Unlock agar terhitung VIP
-        val unlockPayload = mapOf("bookId" to parsed.bookId, "chapterId" to parsed.chapterId, "vip" to true, "unLockType" to 1, "confirmPay" to true, "autoPay" to true)
+        val unlockPayload = mapOf(
+            "bookId" to parsed.bookId, 
+            "chapterId" to parsed.chapterId, 
+            "vip" to true, 
+            "unLockType" to 1, 
+            "confirmPay" to true, 
+            "autoPay" to true
+        )
         val sn = generateSn(timestamp, unlockPayload.toJson().replace(" ", ""))
         app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, sn), json = unlockPayload)
 
-        callback.invoke(newExtractorLink("DramaBox", "DramaBox VIP", parsed.videoUrl, false, Qualities.P1080.value))
+        // Penulisan newExtractorLink yang benar sesuai API CloudStream terbaru
+        callback.invoke(
+            newExtractorLink(
+                source = "DramaBox", 
+                name = "DramaBox VIP", 
+                url = parsed.videoUrl, 
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.quality = Qualities.P1080.value
+            }
+        )
         return true
     }
 
