@@ -23,7 +23,6 @@ class DramaBoxProvider : MainAPI() {
 
     private val DEVICE_ID = "821b6618-ce1a-4c79-9ecc-25efbd9883a8"
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
-    // Token yang valid dari Reqable
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
 
     private fun generateSn(timestamp: String, payload: String): String {
@@ -87,7 +86,10 @@ class DramaBoxProvider : MainAPI() {
             "srn" to "1080x2400",
             "is_vpn" to "1",
             "build" to "Build/TP1A.220905.001",
-            "pline" to "ANDROID",
+            // RAHASIA TERBESAR ADA DI SINI:
+            // Mengubah 'ANDROID' menjadi 'H5' (HTML5 Web)
+            // Memaksa server DramaBox memberikan link video murni tanpa Enkripsi Aliyun DRM
+            "pline" to "H5", 
             "vn" to "1.0.0",
             "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
@@ -151,7 +153,7 @@ class DramaBoxProvider : MainAPI() {
         val bookId = url.substringAfterLast("/")
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Ambil Info Meta (Judul, Cover, Plot) pakai /batch/load dengan index 0
+        // 1. Meta Data (Judul & Cover)
         val metaPayloadStr = """{"boundaryIndex":0,"index":0,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$bookId"}"""
         val snMeta = generateSn(timestamp, metaPayloadStr)
         val requestMeta = metaPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -163,7 +165,7 @@ class DramaBoxProvider : MainAPI() {
         val title = metaData?.bookName ?: "DramaBox"
         val plot = metaData?.introduction
 
-        // 2. Ambil LIST FULL EPISODE dari awal sampai akhir pakai /detail
+        // 2. Full Episode List dari API Detail
         val detailPayloadStr = """{"needRecommend":true,"from":"book_ablum","bookId":"$bookId"}"""
         val snDetail = generateSn(timestamp, detailPayloadStr)
         val requestDetail = detailPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -203,7 +205,7 @@ class DramaBoxProvider : MainAPI() {
 
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Tembak Unlock VIP
+        // 1. Tembak Unlock VIP agar server membuka akses
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
         val requestUnlock = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -211,7 +213,7 @@ class DramaBoxProvider : MainAPI() {
             app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestUnlock)
         } catch (e: Exception) {}
 
-        // 2. Ambil Link Video resolusi tinggi
+        // 2. Ambil Link Video murni (Bebas enkripsi berkat 'pline: H5')
         val loadPayloadStr = """{"boundaryIndex":$parsedIndex,"index":$parsedIndex,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$parsedBook"}"""
         val snLoad = generateSn(timestamp, loadPayloadStr)
         val requestLoad = loadPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -222,33 +224,18 @@ class DramaBoxProvider : MainAPI() {
         val targetChapter = loadRes.data?.chapterList?.find { it.chapterId == parsedId } ?: loadRes.data?.chapterList?.firstOrNull()
         
         targetChapter?.cdnList?.firstOrNull()?.videoPathList?.forEach { videoInfo ->
-            val originalUrl = videoInfo.videoPath
-            if (!originalUrl.isNullOrEmpty()) {
-                val qualityNum = videoInfo.quality ?: Qualities.Unknown.value
+            val videoUrl = videoInfo.videoPath
+            if (!videoUrl.isNullOrEmpty()) {
+                val qualityNum = videoInfo.quality ?: Qualities.P1080.value
+                val isM3u8 = videoUrl.contains(".m3u8")
                 
-                val cleanMp4 = originalUrl.replace(".nav2.encrypt", "").replace(".encrypt", "")
-                val cleanM3u8 = originalUrl.replace(".nav2.encrypt.mp4", ".m3u8").replace(".encrypt.mp4", ".m3u8")
-                
-                // M3U8 (Tipe wajib diletakkan di dalam KURUNG BULAT sesuai ExtractorApi.kt)
+                // Masukkan ke CloudStream sesuai standar MainAPI.kt
                 callback.invoke(
                     newExtractorLink(
                         source = "DramaBox",
-                        name = "HLS Q${qualityNum}",
-                        url = cleanM3u8,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = qualityNum
-                    }
-                )
-                
-                // MP4 (Tipe wajib diletakkan di dalam KURUNG BULAT sesuai ExtractorApi.kt)
-                callback.invoke(
-                    newExtractorLink(
-                        source = "DramaBox",
-                        name = "MP4 Q${qualityNum}",
-                        url = cleanMp4,
-                        type = ExtractorLinkType.VIDEO
+                        name = "DramaBox Q${qualityNum}",
+                        url = videoUrl,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
                         this.referer = mainUrl
                         this.quality = qualityNum
@@ -260,7 +247,6 @@ class DramaBoxProvider : MainAPI() {
         return true
     }
 
-    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
