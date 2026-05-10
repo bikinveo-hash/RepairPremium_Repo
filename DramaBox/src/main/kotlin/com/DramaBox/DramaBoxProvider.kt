@@ -88,12 +88,12 @@ class DramaBoxProvider : MainAPI() {
             "srn" to "1080x2400",
             "is_vpn" to "1",
             "build" to "Build/TP1A.220905.001",
-            "pline" to "WEB", // WAJIB WEB: Agar tidak diberi file .encrypt yang merusak Player!
+            "pline" to "ANDROID",
             "vn" to "1.0.0",
             "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
             "sn" to sn,
-            "user-agent" to CUSTOM_USER_AGENT // WAJIB SAMA DENGAN PLAYER
+            "user-agent" to "okhttp/4.12.0"
         )
     }
 
@@ -163,6 +163,8 @@ class DramaBoxProvider : MainAPI() {
 
         val detailResText = app.post("$mainUrl/drama-box/chapterv2/detail?timestamp=$timestamp", headers = getAppHeaders(timestamp, snDetail), requestBody = requestDetail).text
         val detailResponse = parseJson<DetailApiRes>(detailResText)
+        if (detailResponse.status != 0) throw ErrorLoadingException("Detail Error: ${detailResponse.message}")
+        
         val listEps = detailResponse.data?.list ?: throw ErrorLoadingException("Daftar Episode Kosong")
 
         val episodes = listEps.mapNotNull { chapter ->
@@ -200,7 +202,7 @@ class DramaBoxProvider : MainAPI() {
             app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestBody)
         } catch (e: Exception) {}
 
-        // 2. Loop Pencarian Batch Otomatis
+        // 2. Paginasi Pencarian Episode
         var targetChapter: Chapter? = null
         var currentBoundary = 0
         var lastIndex = -1
@@ -236,26 +238,52 @@ class DramaBoxProvider : MainAPI() {
              targetChapter = fbRes.data?.chapterList?.find { it.chapterId == parsedId } ?: fbRes.data?.chapterList?.firstOrNull()
         }
 
-        // 3. Masukkan link video ke CloudStream
+        // 3. Masukkan link video dengan PEMBELAHAN URL
         targetChapter?.cdnList?.forEachIndexed { serverIndex, cdn ->
             cdn.videoPathList?.forEach { videoInfo ->
-                val videoUrl = videoInfo.videoPath ?: return@forEach
+                val rawUrl = videoInfo.videoPath ?: return@forEach
                 val qualityNum = videoInfo.quality ?: Qualities.P1080.value
                 
-                // Hapus ekstensi .encrypt JIKA ADA (untuk berjaga-jaga), tapi biarkan ekstensinya tetap MP4
-                val cleanUrl = videoUrl.replace(".nav2.encrypt", "").replace(".encrypt", "")
-                val isM3u8 = cleanUrl.contains(".m3u8")
+                // RAHASIA UTAMA: Belah URL jadi 2 (Kiri = File, Kanan = Token Signature)
+                val urlParts = rawUrl.split("?")
+                val baseUrl = urlParts[0]
+                val token = if (urlParts.size > 1) "?" + urlParts[1] else ""
+                
+                // Bersihkan HANYA bagian kiri (baseUrl) dari nama-nama aneh
+                var cleanBase = baseUrl
+                    .replace(".nav2", "")
+                    .replace(".nav3", "")
+                    .replace(".narrowv2", "")
+                    .replace(".narrowv3", "")
+                    .replace(".encrypt", "")
+                
+                // Hasilkan 2 jenis URL (MP4 murni & M3U8 murni) tanpa merusak Token
+                val cleanMp4Url = cleanBase.replace(".m3u8", ".mp4") + token
+                val cleanM3u8Url = cleanBase.replace(".mp4", ".m3u8") + token
+                
+                // LEMPARKAN KE CLOUDSTREAM!
+                callback.invoke(
+                    newExtractorLink(
+                        source = "DramaBox",
+                        name = "Server ${serverIndex + 1} HLS Q${qualityNum}",
+                        url = cleanM3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityNum
+                        this.headers = mapOf("User-Agent" to CUSTOM_USER_AGENT)
+                    }
+                )
                 
                 callback.invoke(
                     newExtractorLink(
                         source = "DramaBox",
-                        name = "Server ${serverIndex + 1} - Q${qualityNum}",
-                        url = cleanUrl,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        name = "Server ${serverIndex + 1} MP4 Q${qualityNum}",
+                        url = cleanMp4Url,
+                        type = ExtractorLinkType.VIDEO
                     ) {
                         this.referer = mainUrl
                         this.quality = qualityNum
-                        // Paksa ExoPlayer untuk memakai User-Agent yang sama dengan yang kita pakai di API (Bypass 403)
                         this.headers = mapOf("User-Agent" to CUSTOM_USER_AGENT)
                     }
                 )
@@ -264,6 +292,7 @@ class DramaBoxProvider : MainAPI() {
         return true
     }
 
+    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
