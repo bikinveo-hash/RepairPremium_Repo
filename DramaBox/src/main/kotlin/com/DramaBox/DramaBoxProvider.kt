@@ -85,7 +85,7 @@ class DramaBoxProvider : MainAPI() {
             "srn" to "1080x2400",
             "is_vpn" to "1",
             "build" to "Build/TP1A.220905.001",
-            "pline" to "WEB", // Trik maut bypass DRM! Server akan memberi MP4 Polos
+            "pline" to "WEB", // Trick Bypass Aliyun
             "vn" to "1.0.0",
             "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
@@ -160,8 +160,6 @@ class DramaBoxProvider : MainAPI() {
 
         val detailResText = app.post("$mainUrl/drama-box/chapterv2/detail?timestamp=$timestamp", headers = getAppHeaders(timestamp, snDetail), requestBody = requestDetail).text
         val detailResponse = parseJson<DetailApiRes>(detailResText)
-        if (detailResponse.status != 0) throw ErrorLoadingException("Detail Error: ${detailResponse.message}")
-        
         val listEps = detailResponse.data?.list ?: throw ErrorLoadingException("Daftar Episode Kosong")
 
         val episodes = listEps.mapNotNull { chapter ->
@@ -191,7 +189,6 @@ class DramaBoxProvider : MainAPI() {
 
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Tembak Unlock VIP
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
         val requestBody = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -199,7 +196,6 @@ class DramaBoxProvider : MainAPI() {
             app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestBody)
         } catch (e: Exception) {}
 
-        // 2. Loop Pencarian Batch Otomatis
         var targetChapter: Chapter? = null
         var currentBoundary = 0
         var lastIndex = -1
@@ -216,17 +212,16 @@ class DramaBoxProvider : MainAPI() {
             if (chapterList.isNullOrEmpty()) break
             
             targetChapter = chapterList.find { it.chapterId == parsedId }
-            if (targetChapter != null) break // Episode ketemu!
+            if (targetChapter != null) break 
             
             val newLastIndex = chapterList.last().chapterIndex ?: break
-            if (newLastIndex == lastIndex) break // Mentok di akhir
+            if (newLastIndex == lastIndex) break 
             lastIndex = newLastIndex
             currentBoundary = lastIndex 
             
             if (currentBoundary > parsedIndex + 50) break 
         }
 
-        // Kalau benar-benar tidak ketemu (fallback murni)
         if (targetChapter == null) {
              val fbPayload = """{"boundaryIndex":$parsedIndex,"index":$parsedIndex,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$parsedBook"}"""
              val snFb = generateSn(timestamp, fbPayload)
@@ -236,20 +231,45 @@ class DramaBoxProvider : MainAPI() {
              targetChapter = fbRes.data?.chapterList?.find { it.chapterId == parsedId } ?: fbRes.data?.chapterList?.firstOrNull()
         }
 
-        // 3. Masukkan semua link video secara langsung tanpa modifikasi string!
         targetChapter?.cdnList?.forEachIndexed { serverIndex, cdn ->
             cdn.videoPathList?.forEach { videoInfo ->
                 val videoUrl = videoInfo.videoPath ?: return@forEach
                 val qualityNum = videoInfo.quality ?: Qualities.P1080.value
-                val isM3u8 = videoUrl.contains(".m3u8")
                 
-                // Gunakan URL langsung yang dikasih server! (Bisa MP4 polos atau M3U8 polos)
+                // BERSIHKAN URL TANPA MEMBUANG SIGNATURE
+                // Aliyun Web Video Player butuh MP4 bersih tanpa ekstensi encrypt
+                val cleanMp4 = videoUrl
+                    .replace(".nav2.encrypt.mp4", ".mp4")
+                    .replace(".nav2.mp4", ".mp4")
+                    .replace(".encrypt.mp4", ".mp4")
+                
+                // M3U8 Murni untuk HLS
+                val cleanM3u8 = videoUrl
+                    .replace(".nav2.encrypt.mp4", ".m3u8")
+                    .replace(".nav2.mp4", ".m3u8")
+                    .replace(".encrypt.mp4", ".m3u8")
+                    .replace(".mp4", ".m3u8")
+                
+                // TEMBAKAN PERTAMA: M3U8 Mutlak (Bypass HLS Aliyun)
                 callback.invoke(
                     newExtractorLink(
                         source = "DramaBox",
-                        name = "Server ${serverIndex + 1} - Q${qualityNum}",
-                        url = videoUrl,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        name = "Server ${serverIndex + 1} HLS Q${qualityNum}",
+                        url = cleanM3u8,
+                        type = ExtractorLinkType.M3U8 // PASTI DIBACA SEBAGAI M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityNum
+                    }
+                )
+                
+                // TEMBAKAN KEDUA: MP4 Mutlak (Bypass MP4 Direct)
+                callback.invoke(
+                    newExtractorLink(
+                        source = "DramaBox",
+                        name = "Server ${serverIndex + 1} MP4 Q${qualityNum}",
+                        url = cleanMp4,
+                        type = ExtractorLinkType.VIDEO // PASTI DIBACA SEBAGAI VIDEO MP4
                     ) {
                         this.referer = mainUrl
                         this.quality = qualityNum
@@ -260,7 +280,6 @@ class DramaBoxProvider : MainAPI() {
         return true
     }
 
-    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
