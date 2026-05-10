@@ -17,7 +17,6 @@ class DramaBoxProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // Rem tangan Anti-DDOS
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
@@ -86,7 +85,7 @@ class DramaBoxProvider : MainAPI() {
             "srn" to "1080x2400",
             "is_vpn" to "1",
             "build" to "Build/TP1A.220905.001",
-            "pline" to "WEB", // Trick agar server memberikan video tanpa DRM Aliyun
+            "pline" to "WEB", // Trik maut bypass DRM! Server akan memberi MP4 Polos
             "vn" to "1.0.0",
             "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
@@ -145,7 +144,6 @@ class DramaBoxProvider : MainAPI() {
         val bookId = url.substringAfterLast("/")
         val timestamp = System.currentTimeMillis().toString()
         
-        // 1. Meta Data
         val metaPayloadStr = """{"boundaryIndex":0,"index":0,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$bookId"}"""
         val snMeta = generateSn(timestamp, metaPayloadStr)
         val requestMeta = metaPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -156,13 +154,14 @@ class DramaBoxProvider : MainAPI() {
         val title = metaData?.bookName ?: "DramaBox"
         val plot = metaData?.introduction
 
-        // 2. Full Episode List
         val detailPayloadStr = """{"needRecommend":true,"from":"book_ablum","bookId":"$bookId"}"""
         val snDetail = generateSn(timestamp, detailPayloadStr)
         val requestDetail = detailPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
         val detailResText = app.post("$mainUrl/drama-box/chapterv2/detail?timestamp=$timestamp", headers = getAppHeaders(timestamp, snDetail), requestBody = requestDetail).text
         val detailResponse = parseJson<DetailApiRes>(detailResText)
+        if (detailResponse.status != 0) throw ErrorLoadingException("Detail Error: ${detailResponse.message}")
+        
         val listEps = detailResponse.data?.list ?: throw ErrorLoadingException("Daftar Episode Kosong")
 
         val episodes = listEps.mapNotNull { chapter ->
@@ -195,12 +194,12 @@ class DramaBoxProvider : MainAPI() {
         // 1. Tembak Unlock VIP
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
-        val requestUnlock = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+        val requestBody = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         try {
-            app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestUnlock)
+            app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestBody)
         } catch (e: Exception) {}
 
-        // 2. Loop Paginasi Batch Otomatis (Mencari episode di halaman ke-sekian)
+        // 2. Loop Pencarian Batch Otomatis
         var targetChapter: Chapter? = null
         var currentBoundary = 0
         var lastIndex = -1
@@ -208,9 +207,9 @@ class DramaBoxProvider : MainAPI() {
         for (i in 0..10) {
             val loadPayloadStr = """{"boundaryIndex":$currentBoundary,"index":-1,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$parsedBook"}"""
             val snLoad = generateSn(timestamp, loadPayloadStr)
-            val requestLoad = loadPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val loadReqBody = loadPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
             
-            val loadResText = app.post("$mainUrl/drama-box/chapterv2/batch/load?timestamp=$timestamp", headers = getAppHeaders(timestamp, snLoad), requestBody = requestLoad).text
+            val loadResText = app.post("$mainUrl/drama-box/chapterv2/batch/load?timestamp=$timestamp", headers = getAppHeaders(timestamp, snLoad), requestBody = loadReqBody).text
             val loadRes = parseJson<BatchLoadRes>(loadResText)
             
             val chapterList = loadRes.data?.chapterList
@@ -224,18 +223,27 @@ class DramaBoxProvider : MainAPI() {
             lastIndex = newLastIndex
             currentBoundary = lastIndex 
             
-            if (currentBoundary > parsedIndex + 50) break // Mencegah looping bablas
+            if (currentBoundary > parsedIndex + 50) break 
         }
-        
-        // 3. MULTI-CDN FALLBACK (Ini Kunci Utamanya!)
-        // CloudStream akan mencoba Server 1. Kalau dienkripsi (error NAL), akan pindah ke Server 2 yang polos.
+
+        // Kalau benar-benar tidak ketemu (fallback murni)
+        if (targetChapter == null) {
+             val fbPayload = """{"boundaryIndex":$parsedIndex,"index":$parsedIndex,"currencyPlaySource":"jmtj","needEndRecommend":0,"currencyPlaySourceName":"剧末推荐","preLoad":false,"rid":"","pullCid":"","loadDirection":0,"startUpKey":"76892858-3e57-40b1-80cd-bfe098991909","bookId":"$parsedBook"}"""
+             val snFb = generateSn(timestamp, fbPayload)
+             val reqFb = fbPayload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+             val fbText = app.post("$mainUrl/drama-box/chapterv2/batch/load?timestamp=$timestamp", headers = getAppHeaders(timestamp, snFb), requestBody = reqFb).text
+             val fbRes = parseJson<BatchLoadRes>(fbText)
+             targetChapter = fbRes.data?.chapterList?.find { it.chapterId == parsedId } ?: fbRes.data?.chapterList?.firstOrNull()
+        }
+
+        // 3. Masukkan semua link video secara langsung tanpa modifikasi string!
         targetChapter?.cdnList?.forEachIndexed { serverIndex, cdn ->
             cdn.videoPathList?.forEach { videoInfo ->
                 val videoUrl = videoInfo.videoPath ?: return@forEach
                 val qualityNum = videoInfo.quality ?: Qualities.P1080.value
                 val isM3u8 = videoUrl.contains(".m3u8")
                 
-                // Murni memberikan URL bawaan server tanpa diubah-ubah agar Signature tetap Valid!
+                // Gunakan URL langsung yang dikasih server! (Bisa MP4 polos atau M3U8 polos)
                 callback.invoke(
                     newExtractorLink(
                         source = "DramaBox",
@@ -249,7 +257,6 @@ class DramaBoxProvider : MainAPI() {
                 )
             }
         }
-
         return true
     }
 
