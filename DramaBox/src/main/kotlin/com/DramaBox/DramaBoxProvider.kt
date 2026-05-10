@@ -24,8 +24,8 @@ class DramaBoxProvider : MainAPI() {
     private val ANDROID_ID = "000000003801f1c83801f1c800000000"
     private val TN_TOKEN = "Bearer ZXlKMGVYQWlPaUpLVjFRaUxDSmhiR2NpT2lKSVV6STFOaUo5LmV5SnlaV2RwYzNSbGNsUjVjR1VpT2lKVVJVMVFJaXdpZFhObGNrbGtJam8wTmpNek1qTTJOakI5LnVoYkVTODg1RlZCYVItMFEtY05KQ3hfcXBKeEJYc3VjajhJMS1EcGlRLUk="
     
-    // User Agent disamakan agar Signature CDN tidak menolak (Bypass 403 Forbidden)
-    private val CUSTOM_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    // User-Agent Chrome wajib untuk menemani pline H5 (Web)
+    private val CUSTOM_USER_AGENT = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     private fun generateSn(timestamp: String, payload: String): String {
         try {
@@ -88,12 +88,12 @@ class DramaBoxProvider : MainAPI() {
             "srn" to "1080x2400",
             "is_vpn" to "1",
             "build" to "Build/TP1A.220905.001",
-            "pline" to "ANDROID",
+            "pline" to "H5", // WAJIB H5 AGAR TERBEBAS DARI ENKRIPSI!
             "vn" to "1.0.0",
             "over-flow" to "new-fly",
             "tn" to TN_TOKEN,
             "sn" to sn,
-            "user-agent" to "okhttp/4.12.0"
+            "user-agent" to CUSTOM_USER_AGENT
         )
     }
 
@@ -197,12 +197,12 @@ class DramaBoxProvider : MainAPI() {
         // 1. Tembak Unlock VIP
         val unlockPayloadStr = """{"bookId":"$parsedBook","chapterId":"$parsedId","vip":true,"unLockType":1,"confirmPay":true,"autoPay":true}"""
         val snUnlock = generateSn(timestamp, unlockPayloadStr)
-        val requestBody = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+        val requestUnlock = unlockPayloadStr.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         try {
-            app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestBody)
+            app.post("$mainUrl/drama-box/chapterv2/unlock?timestamp=$timestamp", headers = getAppHeaders(timestamp, snUnlock), requestBody = requestUnlock)
         } catch (e: Exception) {}
 
-        // 2. Paginasi Pencarian Episode
+        // 2. Loop Paginasi Batch
         var targetChapter: Chapter? = null
         var currentBoundary = 0
         var lastIndex = -1
@@ -238,49 +238,19 @@ class DramaBoxProvider : MainAPI() {
              targetChapter = fbRes.data?.chapterList?.find { it.chapterId == parsedId } ?: fbRes.data?.chapterList?.firstOrNull()
         }
 
-        // 3. Masukkan link video dengan PEMBELAHAN URL
+        // 3. Masukkan link video MURNI (TANPA DIUBAH APAPUN)
         targetChapter?.cdnList?.forEachIndexed { serverIndex, cdn ->
             cdn.videoPathList?.forEach { videoInfo ->
-                val rawUrl = videoInfo.videoPath ?: return@forEach
+                val videoUrl = videoInfo.videoPath ?: return@forEach
                 val qualityNum = videoInfo.quality ?: Qualities.P1080.value
-                
-                // RAHASIA UTAMA: Belah URL jadi 2 (Kiri = File, Kanan = Token Signature)
-                val urlParts = rawUrl.split("?")
-                val baseUrl = urlParts[0]
-                val token = if (urlParts.size > 1) "?" + urlParts[1] else ""
-                
-                // Bersihkan HANYA bagian kiri (baseUrl) dari nama-nama aneh
-                var cleanBase = baseUrl
-                    .replace(".nav2", "")
-                    .replace(".nav3", "")
-                    .replace(".narrowv2", "")
-                    .replace(".narrowv3", "")
-                    .replace(".encrypt", "")
-                
-                // Hasilkan 2 jenis URL (MP4 murni & M3U8 murni) tanpa merusak Token
-                val cleanMp4Url = cleanBase.replace(".m3u8", ".mp4") + token
-                val cleanM3u8Url = cleanBase.replace(".mp4", ".m3u8") + token
-                
-                // LEMPARKAN KE CLOUDSTREAM!
-                callback.invoke(
-                    newExtractorLink(
-                        source = "DramaBox",
-                        name = "Server ${serverIndex + 1} HLS Q${qualityNum}",
-                        url = cleanM3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = qualityNum
-                        this.headers = mapOf("User-Agent" to CUSTOM_USER_AGENT)
-                    }
-                )
+                val isM3u8 = videoUrl.contains(".m3u8")
                 
                 callback.invoke(
                     newExtractorLink(
                         source = "DramaBox",
-                        name = "Server ${serverIndex + 1} MP4 Q${qualityNum}",
-                        url = cleanMp4Url,
-                        type = ExtractorLinkType.VIDEO
+                        name = "Server ${serverIndex + 1} - Q${qualityNum}",
+                        url = videoUrl, // URL 100% murni bawaan API 'pline: H5'
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
                         this.referer = mainUrl
                         this.quality = qualityNum
@@ -292,7 +262,6 @@ class DramaBoxProvider : MainAPI() {
         return true
     }
 
-    // Class parsing JSON
     data class TheaterApiRes(val status: Int?, val message: String?, val data: TheaterData?)
     data class TheaterData(val columnVoList: List<ColumnVo>?)
     data class ColumnVo(val title: String?, val bookList: List<BookItem>?)
