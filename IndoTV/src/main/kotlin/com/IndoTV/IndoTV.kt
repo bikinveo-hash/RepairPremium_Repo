@@ -8,48 +8,44 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import java.util.UUID
 
 class IndoTV : MainAPI() {
-    // Tautan playlist M3U sudah di-update ke repositori Zaneta
     override var mainUrl = "https://raw.githubusercontent.com/michat88/Zaneta/master/Indonesia.m3u"
     override var name = "IndoTV"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Live)
 
-    // Mapping kategori berdasarkan group-title di playlist
-    override val mainPage = mainPageOf(
-        "INDONESIA" to "Saluran Indonesia",
-        "KIDS" to "Anak-anak",
-        "MOVIES" to "Film",
-        "SPORTS" to "Olahraga",
-        "KNOWLEDGE" to "Pengetahuan",
-        "HATI-HATI PENIPUAN" to "Info Admin"
-    )
+    // HAPUS mainPageOf sesuai petunjuk agar kita bisa membuat list HORIZONTAL otomatis
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val playlistRaw = app.get(mainUrl).text
         val channels = parseM3U(playlistRaw)
         
-        // Filter berdasarkan kategori yang dipilih user
-        val filteredChannels = channels.filter { it.group == request.data }
-            .map { channel ->
-                newMovieSearchResponse(channel.name, channel.toJson(), TvType.Live) {
+        // Mengelompokkan channel berdasarkan Group Title (Kategori)
+        val groupedChannels = channels.groupBy { it.group }
+        
+        // Membuat baris horizontal untuk setiap kategori
+        val homePageLists = groupedChannels.map { (groupName, channelList) ->
+            val shows = channelList.map { channel ->
+                // Menggunakan newLiveSearchResponse khusus untuk TV
+                newLiveSearchResponse(channel.name, channel.toJson(), TvType.Live) {
                     this.posterUrl = channel.logo
                 }
             }
+            // isHorizontalImages = true membuat daftar ini bisa di-scroll ke samping tanpa putus
+            HomePageList(groupName, shows, isHorizontalImages = true)
+        }
 
-        return newHomePageResponse(request.name, filteredChannels)
+        return newHomePageResponse(homePageLists)
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Karena url berisi data JSON dari channel, kita parse kembali
         val channel = AppUtils.tryParseJson<M3UChannel>(url) ?: throw ErrorLoadingException("Gagal parse data")
 
         return newLiveStreamLoadResponse(channel.name, url, url) {
             this.posterUrl = channel.logo
-            this.plot = "Kategori: ${channel.group}"
+            this.plot = "Kategori: ${channel.group}\nSistem: ${if(channel.drmType != null) "DRM Protected" else "Direct Stream"}"
         }
     }
 
@@ -61,33 +57,41 @@ class IndoTV : MainAPI() {
     ): Boolean {
         val channel = AppUtils.tryParseJson<M3UChannel>(data) ?: return false
 
-        // Pengecekan apakah menggunakan proteksi ClearKey DRM
-        if (channel.drmType == "clearkey" && channel.drmKey != null) {
+        // DETEKSI TIPE LINK OTOMATIS (Mencegah error M3U8/ParserException di Logcat)
+        val linkType = when {
+            channel.url.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
+            channel.url.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
+            else -> ExtractorLinkType.VIDEO // Untuk Google Drive atau MP4 biasa
+        }
+
+        // Pembacaan Kunci DRM yang diperbarui
+        if (channel.drmType?.contains("clearkey", ignoreCase = true) == true && !channel.drmKey.isNullOrEmpty()) {
             val keyParts = channel.drmKey!!.split(":")
-            if (keyParts.size == 2) {
-                callback.invoke(
-                    newDrmExtractorLink(
-                        source = name,
-                        name = "${channel.name} (DRM)",
-                        url = channel.url,
-                        type = if (channel.url.contains(".mpd")) ExtractorLinkType.DASH else ExtractorLinkType.M3U8,
-                        uuid = CLEARKEY_UUID // Menggunakan UUID ClearKey dari API
-                    ) {
-                        this.kid = keyParts[0]
-                        this.key = keyParts[1]
-                        this.headers = channel.headers
-                        this.referer = channel.headers["referer"] ?: ""
-                    }
-                )
-            }
+            val kid = if (keyParts.size >= 2) keyParts[0] else ""
+            val key = if (keyParts.size >= 2) keyParts[1] else channel.drmKey!!
+            
+            callback.invoke(
+                newDrmExtractorLink(
+                    source = name,
+                    name = "${channel.name} (DRM)",
+                    url = channel.url,
+                    type = linkType,
+                    uuid = CLEARKEY_UUID
+                ) {
+                    this.kid = kid
+                    this.key = key
+                    this.headers = channel.headers
+                    this.referer = channel.headers["referer"] ?: ""
+                }
+            )
         } else {
-            // Pemutaran biasa dengan kustom Headers/Referrer
+            // Pemutaran Normal + Suntik Headers
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = channel.name,
                     url = channel.url,
-                    type = if (channel.url.contains(".mpd")) ExtractorLinkType.DASH else ExtractorLinkType.M3U8
+                    type = linkType
                 ) {
                     this.headers = channel.headers
                     this.referer = channel.headers["referer"] ?: ""
@@ -104,36 +108,36 @@ class IndoTV : MainAPI() {
         var currentChannel: M3UChannel? = null
 
         for (line in lines) {
+            val cleanLine = line.trim()
             when {
-                line.startsWith("#EXTINF") -> {
-                    // Ekstrak Nama, Logo, dan Group-Title
-                    val name = line.substringAfterLast(",").trim()
-                    val logo = Regex("""tvg-logo="([^"]+)"""").find(line)?.groupValues?.get(1)
-                    val group = Regex("""group-title="([^"]+)"""").find(line)?.groupValues?.get(1) ?: "Other"
+                cleanLine.startsWith("#EXTINF") -> {
+                    val name = cleanLine.substringAfterLast(",").trim()
+                    
+                    // Regex disempurnakan agar lebih tangguh membaca logo
+                    val logo = Regex("""tvg-logo=["'](.*?)["']""").find(cleanLine)?.groupValues?.get(1)
+                        ?: Regex("""group-logo=["'](.*?)["']""").find(cleanLine)?.groupValues?.get(1)
+                    
+                    val group = Regex("""group-title=["'](.*?)["']""").find(cleanLine)?.groupValues?.get(1) ?: "Lainnya"
+                    
                     currentChannel = M3UChannel(name, "", logo, group)
                 }
-                line.startsWith("#EXTVLCOPT:http-referrer") -> {
-                    // Ekstrak Referrer
-                    val ref = line.substringAfter("=").trim()
+                cleanLine.startsWith("#EXTVLCOPT:http-referrer") -> {
+                    val ref = cleanLine.substringAfter("=").trim()
                     currentChannel?.headers?.put("referer", ref)
                 }
-                line.startsWith("#EXTVLCOPT:http-user-agent") -> {
-                    // Ekstrak User-Agent
-                    val ua = line.substringAfter("=").trim()
+                cleanLine.startsWith("#EXTVLCOPT:http-user-agent") -> {
+                    val ua = cleanLine.substringAfter("=").trim()
                     currentChannel?.headers?.put("user-agent", ua)
                 }
-                line.startsWith("#KODIPROP:inputstream.adaptive.license_type") -> {
-                    // Ekstrak Tipe DRM
-                    currentChannel?.drmType = line.substringAfter("=").trim()
+                cleanLine.startsWith("#KODIPROP:inputstream.adaptive.license_type") -> {
+                    currentChannel?.drmType = cleanLine.substringAfter("=").trim()
                 }
-                line.startsWith("#KODIPROP:inputstream.adaptive.license_key") -> {
-                    // Ekstrak Kunci Lisensi DRM
-                    currentChannel?.drmKey = line.substringAfter("=").trim()
+                cleanLine.startsWith("#KODIPROP:inputstream.adaptive.license_key") -> {
+                    currentChannel?.drmKey = cleanLine.substringAfter("=").trim()
                 }
-                line.startsWith("http") -> {
-                    // Baris terakhir adalah URL Video
+                cleanLine.startsWith("http") -> {
                     currentChannel?.let {
-                        it.url = line.trim()
+                        it.url = cleanLine
                         list.add(it)
                     }
                     currentChannel = null
@@ -143,7 +147,7 @@ class IndoTV : MainAPI() {
         return list
     }
 
-    // Data class internal untuk menampung info channel hasil parsing
+    // Data class internal
     data class M3UChannel(
         val name: String,
         var url: String,
