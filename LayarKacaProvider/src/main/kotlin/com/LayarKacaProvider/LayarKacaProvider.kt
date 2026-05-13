@@ -22,6 +22,9 @@ class LayarKacaProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    
+    // INI SANGAT PENTING AGAR WEBVIEW BISA BERJALAN DI BACKGROUND!
+    override val usesWebView = true 
 
     // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
@@ -306,7 +309,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS (MENGGUNAKAN WEBVIEW RESOLVER CLOUDSTREAM) ---
+    // --- LOAD LINKS (WEBVIEW RESOLVER + DIRECT API CALL) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -323,46 +326,105 @@ class LayarKacaProvider : MainAPI() {
         }
 
         try {
-            // WEBVIEW RESOLVER: 
-            // Kita biarkan Chrome Android tersembunyi di background membuka web LK21, 
-            // menjalankan JS mereka, dan kita TANGKAP link-nya saat iframe mulai dimuat!
-            val interceptRegex = Regex("(?i)(playeriframe\\.sbs/iframe/|cloud\\.hownetwork\\.xyz/video|emturbovid\\.com/t/|abyssplayer\\.com/|turbovidhls\\.com/t/)")
+            // Kita jalankan halaman web di background, WebView akan tereksekusi otomatis
+            // dan kita tangkap URL rahasia playeriframe.sbs yang dipanggil oleh script mereka
+            val interceptRegex = Regex("(?i)(playeriframe\\.sbs|hownetwork\\.xyz|turbovidhls\\.com|abyssplayer\\.com)")
             
             val response = app.get(
                 currentUrl,
-                interceptor = WebViewResolver(interceptRegex)
+                interceptor = WebViewResolver(interceptRegex),
+                timeout = 45L // Beri waktu yang cukup agar Cloudflare di background terlewati
             )
             
-            val capturedUrl = response.url
-            Log.d("LK21", "WEBVIEW BERHASIL MENANGKAP: \$capturedUrl")
-            
-            // Ekstrak URL yang ditangkap
-            if (capturedUrl.contains("playeriframe.sbs") || capturedUrl.contains("turbovidhls.com")) {
-                val iframeDoc = app.get(capturedUrl, referer = currentUrl).document
-                val innerIframes = iframeDoc.select("iframe").map { it.attr("src") }
+            val capturedUrl = response.url // Ini adalah URL yang tertangkap oleh WebView!
+            Log.d("LK21", "WEBVIEW MENANGKAP URL: $capturedUrl")
+
+            // Jika WebView berhasil menangkap playeriframe.sbs
+            if (capturedUrl.contains("playeriframe.sbs/iframe/")) {
+                val parts = capturedUrl.split("/")
+                val server = parts.getOrNull(parts.size - 2)
+                val id = parts.lastOrNull()
                 
-                if (innerIframes.isNotEmpty()) {
-                    innerIframes.forEach { src ->
-                        loadExtractor(fixUrl(src), capturedUrl, subtitleCallback, callback)
+                if (server != null && id != null) {
+                    
+                    // DIRECT API CALL: P2P
+                    if (server == "p2p") {
+                        val apiUrl = "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                        val p2pHeaders = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                            "Referer" to "https://playeriframe.sbs/",
+                            "Origin" to "https://cloud.hownetwork.xyz",
+                            "X-Requested-With" to "XMLHttpRequest"
+                        )
+                        val p2pForm = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
+                        
+                        // Tembak langsung seperti hasil cURL kamu!
+                        val p2pRes = app.post(apiUrl, headers = p2pHeaders, data = p2pForm).text
+                        val videoUrl = tryParseJson<Map<String, String>>(p2pRes)?.get("file")
+                        
+                        if (videoUrl != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "P2P",
+                                    name = "P2P VIP",
+                                    url = videoUrl,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = "https://cloud.hownetwork.xyz/"
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                        }
+                    } 
+                    
+                    // DIRECT API CALL: TURBOVIP
+                    else if (server == "turbovip") {
+                        val turboUrl = "https://turbovidhls.com/t/$id"
+                        val turboRes = app.get(turboUrl, referer = "https://playeriframe.sbs/").text
+                        val m3u8Url = turboRes.substringAfter("var urlPlay = '").substringBefore("'")
+                        
+                        if (m3u8Url.contains(".m3u8")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "TurboVip",
+                                    name = "TurboVip HD",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = turboUrl
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                        }
+                    } 
+                    
+                    // Fallback untuk server lain (seperti hydrax)
+                    else {
+                        loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
                     }
+                }
+            } else {
+                // Jika WebView menangkap M3U8 langsung
+                if (capturedUrl.contains(".m3u8") || capturedUrl.contains(".mp4")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "LK21 Auto",
+                            name = "LK21 Auto",
+                            url = capturedUrl,
+                            type = if (capturedUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = currentUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
                 } else {
                     loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
                 }
-            } else {
-                // Jika langsung tertangkap hownetwork / emturbovid
-                loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
             }
-            
         } catch (e: Exception) {
-            Log.e("LK21", "WebViewResolver Error: \${e.message}")
+            Log.e("LK21", "WebViewResolver Error: ${e.message}")
         }
-
-        // JAGA-JAGA: Coba tangkap iframe utama HTML statis sebagai fallback (biasanya ini trailer YT)
-        val mainIframeSrc = doc.select("iframe#main-player").attr("src")
-        if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
-            loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
-        }
-
+        
         return true
     }
 }
