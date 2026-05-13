@@ -23,10 +23,9 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     
-    // INI SANGAT PENTING AGAR WEBVIEW BISA BERJALAN DI BACKGROUND!
+    // PENTING: Wajib true agar WebView bisa berjalan sebagai "Browser Hantu"
     override val usesWebView = true 
 
-    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
@@ -34,7 +33,6 @@ class LayarKacaProvider : MainAPI() {
         return clean.trim()
     }
 
-    // FITUR: Fallback URL Poster
     private fun fixPosterUrl(url: String?): String? {
         if (url.isNullOrBlank()) return null
         var cleanUrl = url
@@ -305,7 +303,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS (WEBVIEW RESOLVER + HYDRAX SUPPORT) ---
+    // --- LOAD LINKS (WEBVIEW RESOLVER + FULL HEADERS PLAYBACK) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -315,141 +313,124 @@ class LayarKacaProvider : MainAPI() {
         var currentUrl = data
         val doc = app.get(currentUrl).document
 
-        // Bypass Web Nontondrama
+        // Bypass Nontondrama
         val redirectButton = doc.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
         try {
-            // WEBVIEW TAHAP 1: Menangkap link playeriframe.sbs yang terenkripsi
+            // WEBVIEW TAHAP 1: Menangkap URL rahasia hasil dari JS LK21
             val interceptRegex = Regex("(?i)(playeriframe\\.sbs|hownetwork\\.xyz|turbovidhls\\.com|abyssplayer\\.com)")
             
             val response = app.get(
                 currentUrl,
                 interceptor = WebViewResolver(interceptRegex),
-                timeout = 45L 
+                timeout = 30L 
             )
             
             val capturedUrl = response.url 
-            Log.d("LK21", "WEBVIEW TAHAP 1 MENANGKAP URL: $capturedUrl")
+            Log.d("LK21", "WEBVIEW MENANGKAP URL: $capturedUrl")
 
-            // JIKA MENANGKAP playeriframe.sbs
+            // Headers standar browser untuk mengelabuhi server video
+            val defaultHeaders = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Accept" to "*/*"
+            )
+
+            // Jika WebView menangkap format "playeriframe.sbs/iframe/NAMA_SERVER/ID_VIDEO"
             if (capturedUrl.contains("playeriframe.sbs/iframe/")) {
                 val parts = capturedUrl.split("/")
                 val server = parts.getOrNull(parts.size - 2)
                 val id = parts.lastOrNull()
                 
                 if (server != null && id != null) {
-                    
-                    // ==============================================
-                    // 1. API: HYDRAX (ABYSSPLAYER) - BARU!
-                    // ==============================================
-                    if (server == "hydrax") {
-                        val hydraxUrl = "https://abyssplayer.com/$id"
-                        try {
-                            // WEBVIEW TAHAP 2: Buka abyssplayer.com, biarkan JS nya jalan, lalu tangkap MP4/M3U8-nya!
-                            val hydraxRes = app.get(
-                                hydraxUrl,
-                                referer = "https://playeriframe.sbs/",
-                                interceptor = WebViewResolver(Regex("(?i)\\.(mp4|m3u8|mkv)"))
+                    when (server.lowercase()) {
+                        
+                        // ===== SERVER P2P =====
+                        "p2p" -> {
+                            val apiUrl = "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                            val p2pHeaders = defaultHeaders + mapOf(
+                                "Referer" to "https://playeriframe.sbs/",
+                                "Origin" to "https://cloud.hownetwork.xyz",
+                                "X-Requested-With" to "XMLHttpRequest"
                             )
-                            val finalVideoUrl = hydraxRes.url
-                            Log.d("LK21", "HYDRAX DIRETAS: $finalVideoUrl")
+                            val p2pForm = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
                             
-                            if (finalVideoUrl.contains(Regex("(?i)\\.(mp4|m3u8|mkv)"))) {
+                            val p2pRes = app.post(apiUrl, headers = p2pHeaders, data = p2pForm).text
+                            val videoUrl = tryParseJson<Map<String, String>>(p2pRes)?.get("file")
+                            
+                            if (videoUrl != null) {
                                 callback.invoke(
                                     newExtractorLink(
-                                        source = "Hydrax",
-                                        name = "Hydrax HD",
-                                        url = finalVideoUrl,
-                                        type = if (finalVideoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        source = "P2P VIP",
+                                        name = "P2P VIP",
+                                        url = videoUrl,
+                                        type = ExtractorLinkType.M3U8
                                     ) {
-                                        this.referer = hydraxUrl
-                                        this.quality = Qualities.Unknown.value
+                                        // INI KUNCI FIX ERROR 403 & M3U8 TS FILES:
+                                        this.headers = defaultHeaders + mapOf(
+                                            "Origin" to "https://cloud.hownetwork.xyz",
+                                            "Referer" to "https://cloud.hownetwork.xyz/"
+                                        )
                                     }
                                 )
-                            } else {
-                                // Fallback jika tidak tertangkap
-                                loadExtractor(hydraxUrl, "https://playeriframe.sbs/", subtitleCallback, callback)
                             }
-                        } catch(e: Exception) {
-                            Log.e("LK21", "Gagal meretas Hydrax: ${e.message}")
-                            loadExtractor(hydraxUrl, "https://playeriframe.sbs/", subtitleCallback, callback)
                         }
-                    }
-                    
-                    // ==============================================
-                    // 2. API: P2P
-                    // ==============================================
-                    else if (server == "p2p") {
-                        val apiUrl = "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                        val p2pHeaders = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                            "Referer" to "https://playeriframe.sbs/",
-                            "Origin" to "https://cloud.hownetwork.xyz",
-                            "X-Requested-With" to "XMLHttpRequest"
-                        )
-                        val p2pForm = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
                         
-                        val p2pRes = app.post(apiUrl, headers = p2pHeaders, data = p2pForm).text
-                        val videoUrl = tryParseJson<Map<String, String>>(p2pRes)?.get("file")
-                        
-                        if (videoUrl != null) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "P2P",
-                                    name = "P2P VIP",
-                                    url = videoUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = "https://cloud.hownetwork.xyz/"
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
+                        // ===== SERVER TURBOVIP =====
+                        "turbovip", "emturbovid" -> {
+                            val turboUrl = "https://emturbovid.com/t/$id"
+                            val turboRes = app.get(turboUrl, headers = defaultHeaders + mapOf("Referer" to "https://playeriframe.sbs/")).text
+                            val m3u8Url = turboRes.substringAfter("var urlPlay = '").substringBefore("'")
+                            
+                            if (m3u8Url.contains(".m3u8")) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = "TurboVip",
+                                        name = "TurboVip HD",
+                                        url = m3u8Url,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        // INI KUNCI FIX ERROR 403 UNTUK TURBOVIP:
+                                        this.headers = defaultHeaders + mapOf(
+                                            "Origin" to "https://emturbovid.com",
+                                            "Referer" to "https://emturbovid.com/"
+                                        )
+                                    }
+                                )
+                            }
                         }
-                    } 
-                    
-                    // ==============================================
-                    // 3. API: TURBOVIP
-                    // ==============================================
-                    else if (server == "turbovip") {
-                        val turboUrl = "https://turbovidhls.com/t/$id"
-                        val turboRes = app.get(turboUrl, referer = "https://playeriframe.sbs/").text
-                        val m3u8Url = turboRes.substringAfter("var urlPlay = '").substringBefore("'")
-                        
-                        if (m3u8Url.contains(".m3u8")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "TurboVip",
-                                    name = "TurboVip HD",
-                                    url = m3u8Url,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = turboUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
+
+                        // ===== SERVER F16 =====
+                        "f16" -> {
+                            val realUrl = "https://f16px.com/e/$id"
+                            loadExtractor(realUrl, currentUrl, subtitleCallback, callback)
                         }
-                    } 
-                    
-                    // Fallback Server Lain
-                    else {
-                        loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
+
+                        // ===== SERVER HYDRAX =====
+                        "hydrax" -> {
+                            val realUrl = "https://abyssplayer.com/$id"
+                            // Kita arahkan ke file Extractor.kt milikmu kalau ada
+                            loadExtractor(realUrl, currentUrl, subtitleCallback, callback)
+                        }
+
+                        else -> {
+                            loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
+                        }
                     }
                 }
             } else {
-                // Jika WebView menangkap M3U8 langsung
+                // Jika WebView menangkap langsung file raw (seperti storage.googleapis.com)
                 if (capturedUrl.contains(Regex("(?i)\\.(m3u8|mp4)"))) {
                     callback.invoke(
                         newExtractorLink(
-                            source = "LK21 Auto",
-                            name = "LK21 Auto",
+                            source = "LK21 Raw",
+                            name = "LK21 Raw Video",
                             url = capturedUrl,
                             type = if (capturedUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
-                            this.referer = currentUrl
-                            this.quality = Qualities.Unknown.value
+                            this.headers = defaultHeaders + mapOf("Referer" to currentUrl)
                         }
                     )
                 } else {
