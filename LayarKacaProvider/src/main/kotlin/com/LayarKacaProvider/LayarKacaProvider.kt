@@ -1,5 +1,6 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -7,7 +8,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.WebViewResolver
+import com.lagradost.cloudstream3.utils.Coroutines.mainWork
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -23,7 +24,6 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
@@ -103,12 +103,14 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
             }
         } else {
             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
             }
         }
     }
@@ -158,12 +160,14 @@ class LayarKacaProvider : MainAPI() {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
                             }
                         }
                     }
@@ -272,6 +276,7 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
+                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
                 
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(
@@ -289,6 +294,7 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
+                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
                 
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(
@@ -299,7 +305,12 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- SOLUSI ANTI-CLOUDFLARE: DENGAN WEBVIEW MURNI ---
+    data class DecryptedLink(
+        @JsonProperty("server") val server: String,
+        @JsonProperty("url") val url: String
+    )
+
+    // --- LOAD LINKS: SUPER MOCK RHINO JS & BYPASS CLOUDFLARE ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -316,36 +327,107 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // Cari iframe url yang dieksekusi secara native oleh Cloudstream
-        // Kita intercept semua request yang mengarah ke playeriframe.sbs
-        val interceptor = WebViewResolver(Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/[A-Za-z0-9_-]+"""))
-        
-        var iframeUrl: String? = null
-        try {
-            // Biarkan Cloudstream mendarat di halaman film layaknya manusia, 
-            // lalu tangkap link videonya setelah Javascript/Cloudflare selesai bekerja!
-            iframeUrl = app.get(currentUrl, interceptor = interceptor).url
-        } catch (e: Exception) {
-            Log.e("LayarKacaProvider", "Intercept Error: ${e.message}")
+        val playerList = document.select("ul#player-list li a")
+        if (playerList.isEmpty()) return false
+
+        // Wajib sisipkan Referer saat mengambil player.js agar lolos 403
+        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
+        val playerJs = if (playerJsUrl.isNotBlank()) {
+            app.get(fixUrl(playerJsUrl), referer = currentUrl).text
+        } else ""
+
+        val extractedLinks = mutableListOf<DecryptedLink>()
+
+        if (playerJs.isNotBlank()) {
+            val serversJsonArray = playerList.map { 
+                "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
+            }.joinToString(",", "[", "]")
+
+            // KUNCI EMAS: Menghapus keyword 'async', 'await' dan 'import' agar parser ES6 Mozilla Rhino tidak SyntaxError!
+            val safePlayerJs = playerJs
+                .replace(Regex("""async\s+function"""), "function")
+                .replace("await ", "")
+                .replace("import(", "String(")
+
+            // Mock env lengkap agar script tidak mendeteksi Headless mode
+            val script = """
+                var window = this;
+                var globalThis = this;
+                var document = {
+                    addEventListener: function(){},
+                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {}, parentElement: { style: {} } }; },
+                    querySelectorAll: function(){ return []; },
+                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "", classList: { add: function(){}, remove: function(){} }, parentElement: { style: {} } }; },
+                    body: { dataset: {} },
+                    createElement: function() { return { style: {}, setAttribute: function(){} }; }
+                };
+                var navigator = { userAgent: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0", platform: "Linux", maxTouchPoints: 1 };
+                var location = { href: "$currentUrl" };
+                var screen = { orientation: {} };
+                var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
+                var alert = function(){};
+                var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
+                var setInterval = function(){};
+                var setTimeout = function(){};
+                var clearTimeout = function(){};
+                var clearInterval = function(){};
+                
+                $safePlayerJs
+                
+                var inputs = $serversJsonArray;
+                var results = [];
+                for (var i = 0; i < inputs.length; i++) {
+                    try {
+                        var dec = _L(inputs[i].url);
+                        if (dec) {
+                            results.push({ server: inputs[i].server, url: dec });
+                        }
+                    } catch(e) {}
+                }
+                JSON.stringify(results);
+            """.trimIndent()
+
+            try {
+                // Dieksekusi 100% pada Main Thread menggunakan utilitas standar Cloudstream
+                mainWork {
+                    val rhino = org.mozilla.javascript.Context.enter()
+                    try {
+                        rhino.optimizationLevel = -1
+                        rhino.languageVersion = 200 // Paksa Engine berjalan di ES6 mode
+                        val scope = rhino.initSafeStandardObjects()
+                        
+                        val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
+                        if (!resultJson.isNullOrBlank()) {
+                            val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
+                            if (parsed != null) extractedLinks.addAll(parsed)
+                        }
+                    } finally {
+                        org.mozilla.javascript.Context.exit()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("LayarKacaProvider", "Rhino Engine Error: ${e.message}")
+            }
         }
 
-        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
-            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
-            val id = iframeUrl.substringAfterLast("/")
+        extractedLinks.forEach { decrypted ->
+            val iframeUrl = decrypted.url
+            val serverName = decrypted.server
             
-            // Konversi ke Extractor milikmu
-            val extractorUrl = when (serverName.lowercase()) {
-                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                "turbovip" -> "https://emturbovid.com/e/$id"
-                "cast" -> "https://f16px.com/e/$id"
-                "hydrax" -> "https://hydrax.net/watch?v=$id"
-                else -> iframeUrl
+            if (iframeUrl.contains("playeriframe.sbs")) {
+                val id = iframeUrl.substringAfterLast("/")
+                
+                // Meneruskan URL Asli ke ExtractorApi
+                val extractorUrl = when (serverName.lowercase()) {
+                    "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                    "turbovip" -> "https://emturbovid.com/e/$id"
+                    "cast" -> "https://f16px.com/e/$id"
+                    "hydrax" -> "https://hydrax.net/watch?v=$id"
+                    else -> iframeUrl
+                }
+                
+                loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
             }
-            
-            // Eksekusi Extractor Api
-            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
-        } else {
-            Log.e("LayarKacaProvider", "Iframe Url Gagal Didapatkan atau Cloudflare Memblokir WebView")
         }
         
         return true
