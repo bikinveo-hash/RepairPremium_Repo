@@ -56,39 +56,56 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. P2P EXTRACTOR
+// 2. P2P EXTRACTOR (SUDAH DIPERBAIKI)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
     override var mainUrl = "https://cloud.hownetwork.xyz"
     override val requiresReferer = false
-    
+ 
     data class HownetworkResponse(val file: String?, val link: String?, val label: String?)
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
+        
+        // KUNCI PERBAIKAN: Menyamakan persis headers dari browser (Browser Fingerprinting)
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-            "Referer" to url,
+            "Accept" to "*/*",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
             "Origin" to mainUrl,
-            "X-Requested-With" to "XMLHttpRequest"
+            "Referer" to url, 
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+            "sec-ch-ua-mobile" to "?1",
+            "sec-ch-ua-platform" to "\"Android\"",
+            "sec-fetch-dest" to "empty",
+            "sec-fetch-mode" to "cors",
+            "sec-fetch-site" to "same-origin"
         )
+        
         val formBody = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
         val sources = mutableListOf<ExtractorLink>()
         
         try {
             val response = app.post(apiUrl, headers = headers, data = formBody).text
             val json = tryParseJson<HownetworkResponse>(response)
+            
             val videoUrl = json?.file ?: json?.link
    
             if (!videoUrl.isNullOrBlank()) {
                 sources.add(newExtractorLink(source = name, name = name, url = videoUrl, type = ExtractorLinkType.M3U8) {
                     this.referer = mainUrl
                     this.quality = Qualities.Unknown.value
+                    this.headers = mapOf(
+                        "User-Agent" to headers["User-Agent"]!!,
+                        "Origin" to mainUrl
+                    )
                 })
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
         return sources
     }
 }
@@ -103,7 +120,6 @@ open class F16Extractor : ExtractorApi() {
 
     data class F16Playback(val playback: PlaybackData?)
     data class PlaybackData(val iv: String?, val payload: String?, val key_parts: List<String>?)
-  
     data class DecryptedSource(val url: String?, val label: String?)
     data class DecryptedResponse(val sources: List<DecryptedSource>?)
 
