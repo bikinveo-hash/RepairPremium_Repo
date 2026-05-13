@@ -7,28 +7,27 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.WebViewResolver
+import com.lagradost.api.Log
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import com.lagradost.api.Log
-import android.webkit.CookieManager
 
 class LayarKacaProvider : MainAPI() {
-    override var mainUrl = "https://tv10.lk21official.cc"
+    override var mainUrl = "https://tv8.lk21official.cc"
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-    
-    override val usesWebView = true 
 
+    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
-        clean = clean.replace(Regex("\\(\\d{4}\\)"), "") 
+        clean = clean.replace(Regex("\\(\\d{4}\\)"), "")
         return clean.trim()
     }
 
@@ -114,117 +113,236 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
+    data class Lk21SearchItem(val title: String, val slug: String, val poster: String?, val type: String?, val year: Int?, val quality: String?)
+
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "https://gudangvape.com/search.php?s=$query&page=1"
+        val headers = mapOf(
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        )
+
         try {
-            val response = app.get(searchUrl).text
+            val response = app.get(searchUrl, headers = headers).text
             val json = tryParseJson<Lk21SearchResponse>(response)
+
             return coroutineScope {
                 json?.data?.map { item ->
                     async {
                         val cleanTitle = getCleanTitle(item.title)
                         val href = fixUrl(item.slug)
-                        val posterUrl = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
-                        if (item.type?.contains("series", true) == true) {
-                            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) { this.posterUrl = posterUrl }
+                        
+                        val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
+                        val fallbackPoster = fixPosterUrl(rawPoster)
+                        
+                        var hdPoster: String? = null
+                        try {
+                            val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
+                            val tmdbRes = app.get("https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle").parsedSafe<TmdbSearchResponse>()
+                            val match = tmdbRes?.results?.firstOrNull { 
+                                val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
+                                item.year == null || resYear == null || resYear == item.year
+                            } ?: tmdbRes?.results?.firstOrNull()
+                            
+                            hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
+                        } catch(e: Exception) {}
+
+                        val posterUrl = hdPoster ?: fallbackPoster
+                        val quality = getQualityFromString(item.quality)
+                        val isSeries = item.type?.contains("series", ignoreCase = true) == true
+
+                        if (isSeries) {
+                            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
+                            }
                         } else {
-                            newMovieSearchResponse(cleanTitle, href, TvType.Movie) { this.posterUrl = posterUrl }
+                            newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
+                            }
                         }
                     }
                 }?.awaitAll()?.filterNotNull() ?: emptyList()
             }
-        } catch (e: Exception) { return emptyList() }
-    }
-
-    data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
-    data class Lk21SearchItem(val title: String, val slug: String, val poster: String?, val type: String?, val year: Int?, val quality: String?)
-    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
-
-    override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-        val title = getCleanTitle(document.select("h1.entry-title").text())
-        val poster = fixPosterUrl(document.select("meta[property='og:image']").attr("content"))
-        
-        return newMovieLoadResponse(title, url, TvType.Movie, url) {
-            this.posterUrl = poster
-            this.plot = document.select("div.synopsis").text()
+        } catch (e: Exception) {
+            return emptyList()
         }
     }
 
+    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
+
+    override suspend fun load(url: String): LoadResponse {
+        var cleanUrl = fixUrl(url)
+        var response = app.get(cleanUrl)
+        var document = response.document
+
+        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        if (redirectButton != null) {
+            val newUrl = redirectButton.attr("href")
+            if (newUrl.isNotEmpty()) {
+                cleanUrl = fixUrl(newUrl)
+                response = app.get(cleanUrl)
+                document = response.document
+            }
+        }
+
+        val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
+        val title = getCleanTitle(rawTitle) 
+        
+        val plot = document.select("div.synopsis, div.entry-content p").text().trim()
+        val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
+        val fallbackPoster = fixPosterUrl(rawPoster)
+        
+        val ratingText = document.select("span.rating-value").text().ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore = Regex("(\\d\\.\\d)").find(ratingText)?.value
+        
+        val year = document.select("span.year").text().toIntOrNull() 
+            ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
+            ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
+
+        val tags = document.select("div.tag-list a, div.genre a").map { it.text() }
+        val actors = document.select("div.detail p:contains(Bintang Film) a, div.cast a").map { ActorData(Actor(it.text(), "")) }
+        val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
+
+        val episodes = ArrayList<Episode>()
+        val jsonScript = document.select("script#season-data").html()
+
+        if (jsonScript.isNotBlank()) {
+            tryParseJson<Map<String, List<NontonDramaEpisode>>>(jsonScript)?.forEach { (_, epsList) ->
+                epsList.forEach { epData ->
+                    episodes.add(newEpisode(fixUrl(epData.slug ?: "")) {
+                        this.name = epData.title ?: "Episode ${epData.episode_no}"
+                        this.season = epData.s
+                        this.episode = epData.episode_no
+                    })
+                }
+            }
+        } else {
+            document.select("ul.episodes li a").forEach {
+                episodes.add(newEpisode(fixUrl(it.attr("href"))) {
+                    this.name = it.text()
+                    val epNum = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = epNum
+                })
+            }
+        }
+
+        var tmdbPoster: String? = null
+        var tmdbBackdrop: String? = null
+        try {
+            val encodedTitle = URLEncoder.encode(title, "UTF-8")
+            val tmdbSearchUrl = "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
+            val tmdbRes = app.get(tmdbSearchUrl).parsedSafe<TmdbSearchResponse>()
+            
+            val match = tmdbRes?.results?.firstOrNull { 
+                val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
+                year == null || resYear == null || resYear == year
+            } ?: tmdbRes?.results?.firstOrNull()
+
+            if (match != null) {
+                tmdbPoster = match.poster_path?.let { "https://image.tmdb.org/t/p/original$it" }
+                tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
+            }
+        } catch (e: Exception) {}
+
+        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
+        }
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
+        }
+        
+        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
+        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
+
+        return if (episodes.isNotEmpty()) {
+            newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
+                this.posterUrl = tmdbPoster ?: fallbackPoster
+                this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags
+                this.actors = actors
+                this.recommendations = recommendations
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
+                    ))
+                }
+            }
+        } else {
+            newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
+                this.posterUrl = tmdbPoster ?: fallbackPoster
+                this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags
+                this.actors = actors
+                this.recommendations = recommendations
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false
+                    ))
+                }
+            }
+        }
+    }
+
+    // --- LOAD LINKS: WEBVIEWRESOLVER BYPASS ENKRIPSI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val currentUrl = data
-        try {
-            val interceptRegex1 = Regex("(?i)playeriframe\\.sbs/iframe/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)")
-            val res1 = app.get(currentUrl, interceptor = WebViewResolver(interceptRegex1))
-            val capturedUrl = res1.url
-            val match = interceptRegex1.find(capturedUrl)
+        var currentUrl = data
+        var document = app.get(currentUrl).document
 
-            if (match != null) {
-                val server = match.groupValues[1].lowercase()
-                val id = match.groupValues[2]
+        // Cek Redirect (Nontondrama)
+        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
+            currentUrl = fixUrl(redirectButton.attr("href"))
+            document = app.get(currentUrl).document
+        }
 
-                when (server) {
-                    "p2p" -> {
-                        val apiUrl = "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                        val p2pRes = app.post(apiUrl, data = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")).text
-                        val videoUrl = tryParseJson<Map<String, String>>(p2pRes)?.get("file")
-                        
-                        if (videoUrl != null) {
-                            callback.invoke(
-                                newExtractorLink("P2P VIP", "P2P HD", videoUrl, "https://cloud.hownetwork.xyz/", Qualities.Unknown.value, true)
-                            )
-                        }
-                    }
+        // Ninja Fix: Biarkan Cloudstream membuka web di background (Headless) 
+        // sehingga JS enkripsi bekerja, lalu kita tangkap hasil URL Iframe-nya
+        val interceptor = WebViewResolver(Regex("playeriframe\\.sbs/iframe/.*"))
+        
+        val iframeUrl = try {
+            app.get(currentUrl, interceptor = interceptor).url
+        } catch (e: Exception) {
+            Log.e("LayarKacaProvider", "Gagal intercept: ${e.message}")
+            null
+        }
 
-                    "cast", "f16", "turbovip", "emturbovid", "hydrax" -> {
-                        val targetUrl = when (server) {
-                            "cast", "f16" -> "https://f16px.com/e/$id"
-                            "hydrax" -> "https://abyssplayer.com/$id"
-                            else -> "https://turbovidhls.com/t/$id"
-                        }
-                        val refererUrl = when (server) {
-                            "cast", "f16" -> "https://playeriframe.sbs/"
-                            "hydrax" -> "https://abysscdn.com/"
-                            else -> "https://turbovidhls.com/"
-                        }
-
-                        val videoRegex = Regex("(?i)\\.(m3u8|mp4|mkv)|googleusercontent\\.com")
-                        val videoRes = app.get(targetUrl, referer = "https://playeriframe.sbs/", interceptor = WebViewResolver(videoRegex))
-                        val finalUrl = videoRes.url
-
-                        if (videoRegex.containsMatchIn(finalUrl)) {
-                            val cfCookies = CookieManager.getInstance().getCookie(targetUrl) ?: ""
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "${server.uppercase()} VIP",
-                                    name = "${server.uppercase()} HD",
-                                    url = finalUrl,
-                                    referer = refererUrl, // Parameter Referer diletakkan di sini (posisi ke-4)
-                                    quality = Qualities.Unknown.value, // Parameter Quality (posisi ke-5)
-                                    isM3u8 = finalUrl.contains(".m3u8", true)
-                                ) {
-                                    this.headers = mapOf(
-                                        "Cookie" to cfCookies,
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            } else {
-                if (capturedUrl.contains(Regex("(?i)\\.(m3u8|mp4|mkv)"))) {
-                    callback.invoke(
-                        newExtractorLink("LK21 Auto", "LK21 Auto", capturedUrl, currentUrl, Qualities.Unknown.value, capturedUrl.contains(".m3u8", true))
-                    )
-                }
+        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
+            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
+            val id = iframeUrl.substringAfterLast("/")
+            
+            // Rakit kembali URL-nya agar bisa ditangkap oleh Extractor milikmu
+            val extractorUrl = when (serverName) {
+                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                "turbovip" -> "https://emturbovid.com/e/$id"
+                "cast" -> "https://f16px.com/e/$id"
+                "hydrax" -> "https://hydrax.net/watch?v=$id"
+                else -> iframeUrl
             }
-        } catch (e: Exception) { Log.e("LK21", "Error: ${e.message}") }
+            
+            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+        }
+        
         return true
     }
 }
