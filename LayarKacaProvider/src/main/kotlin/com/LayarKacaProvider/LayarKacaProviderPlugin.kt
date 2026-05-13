@@ -11,9 +11,8 @@ class LayarKacaPlugin : Plugin() {
         registerMainAPI(LayarKacaProvider())
         
         // Extractor Servers
-        registerExtractorAPI(EmturbovidExtractor()) // TurboVIP
+        registerExtractorAPI(EmturbovidExtractor()) // TurboVip
         registerExtractorAPI(P2PExtractor())        // P2P
-        registerExtractorAPI(F16Extractor())        // CAST
-        registerExtractorAPI(HydraxExtractor())     // Hydrax
+        registerExtractorAPI(F16Extractor())        // CAST (Baru!)
     }
 }
