@@ -10,7 +10,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.utils.Unpacker
+import com.lagradost.cloudstream3.utils.JsUnpacker
 import java.net.URI
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -283,7 +283,7 @@ open class HydraxExtractor : ExtractorApi() {
                 
                 if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
                     
-                    val unpackedJS = Unpacker.unpack(scriptText)
+                    val unpackedJS = JsUnpacker(scriptText).unpack() ?: ""
                     
                     val mp4Regex = Regex("(?i)https?://[^\"]+\\.mp4(?:\\?[^\"']*)?")
                     val match = mp4Regex.find(unpackedJS)
