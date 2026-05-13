@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.WebViewResolver
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -299,7 +298,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS: WEBVIEWRESOLVER BYPASS ENKRIPSI ---
+    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -316,33 +315,83 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // Ninja Fix: Biarkan Cloudstream membuka web di background (Headless) 
-        // sehingga JS enkripsi bekerja, lalu kita tangkap hasil URL Iframe-nya
-        val interceptor = WebViewResolver(Regex("playeriframe\\.sbs/iframe/.*"))
-        
-        val iframeUrl = try {
-            app.get(currentUrl, interceptor = interceptor).url
+        val playerList = document.select("ul#player-list li a")
+        if (playerList.isEmpty()) return false
+
+        // Ambil script JS player untuk didekripsi via Rhino
+        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
+        val playerJs = if (playerJsUrl.isNotBlank()) app.get(fixUrl(playerJsUrl)).text else ""
+
+        var rhino: org.mozilla.javascript.Context? = null
+        var scope: org.mozilla.javascript.Scriptable? = null
+
+        try {
+            rhino = getRhinoContext()
+            scope = rhino.initSafeStandardObjects()
+
+            // Injeksi tiruan environment browser agar player.js tidak error saat dieksekusi
+            if (playerJs.isNotBlank()) {
+                val mockJs = """
+                    var window = this;
+                    var globalThis = this;
+                    var document = {
+                        addEventListener: function() {},
+                        querySelector: function() { return null; },
+                        querySelectorAll: function() { return []; },
+                        getElementById: function() { return null; }
+                    };
+                    var navigator = { userAgent: "" };
+                """.trimIndent()
+                
+                rhino.evaluateString(scope, mockJs + "\n" + playerJs, "JavaScript", 1, null)
+            }
+
+            playerList.forEach { element ->
+                val serverName = element.attr("data-server")
+                val encryptedUrl = element.attr("data-url")
+                
+                var iframeUrl: String? = null
+                
+                if (encryptedUrl.isNotBlank()) {
+                    try {
+                        // Mengeksekusi fungsi _L dari player.js untuk membongkar URL acak
+                        val result = rhino.evaluateString(scope, "_L('${encryptedUrl}')", "JavaScript", 1, null)
+                        if (result is String && result.isNotBlank()) {
+                            iframeUrl = result
+                        }
+                    } catch (e: Exception) {
+                        Log.e("LayarKacaProvider", "Rhino Eval Error: ${e.message}")
+                    }
+                }
+                
+                // Jika Rhino gagal (misal update web), fallback ambil URL dari href biasa
+                if (iframeUrl.isNullOrBlank()) {
+                    iframeUrl = element.attr("href")
+                }
+                
+                if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
+                    val id = iframeUrl.substringAfterLast("/")
+                    
+                    // Rakit kembali URL-nya agar bisa ditangkap oleh server-server di Extractor.kt
+                    val extractorUrl = when (serverName.lowercase()) {
+                        "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                        "turbovip" -> "https://emturbovid.com/e/$id"
+                        "cast" -> "https://f16px.com/e/$id"
+                        "hydrax" -> "https://hydrax.net/watch?v=$id"
+                        else -> iframeUrl
+                    }
+                    
+                    loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                }
+            }
         } catch (e: Exception) {
-            Log.e("LayarKacaProvider", "Gagal intercept: ${e.message}")
-            null
+            Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
+        } finally {
+            if (rhino != null) {
+                org.mozilla.javascript.Context.exit()
+            }
         }
 
-        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
-            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
-            val id = iframeUrl.substringAfterLast("/")
-            
-            // Rakit kembali URL-nya agar bisa ditangkap oleh Extractor milikmu
-            val extractorUrl = when (serverName) {
-                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                "turbovip" -> "https://emturbovid.com/e/$id"
-                "cast" -> "https://f16px.com/e/$id"
-                "hydrax" -> "https://hydrax.net/watch?v=$id"
-                else -> iframeUrl
-            }
-            
-            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
-        }
-        
         return true
     }
 }
