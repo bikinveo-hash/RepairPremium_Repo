@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.utils.Unpacker
 import java.net.URI
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -17,35 +18,47 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
 // ============================================================================
-// 1. EMTURBOVID EXTRACTOR
+// 1. EMTURBOVID / TURBOVIP EXTRACTOR 
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
-    override var name = "Emturbovid"
-    override var mainUrl = "https://emturbovid.com"
+    override var name = "TurboVIP"
+    // Tetap pertahankan emturbovid agar Cloudstream mengenali iframe-nya
+    override var mainUrl = "https://emturbovid.com" 
     override val requiresReferer = false
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val finalReferer = referer ?: "$mainUrl/"
         val sources = mutableListOf<ExtractorLink>()
         
+        val videoId = url.substringAfterLast("/")
+        val targetUrl = "https://turbovidhls.com/t/$videoId"
+        val finalReferer = referer ?: "https://playeriframe.sbs/"
+        
         try {
-            val response = app.get(url, referer = finalReferer)
-            val playerScript = response.document.selectXpath("//script[contains(text(),'var urlPlay')]").html()
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Referer" to finalReferer,
+                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+            )
             
-            if (playerScript.isNotBlank()) {
-                val m3u8Url = playerScript.substringAfter("var urlPlay = '").substringBefore("'")
-                val originUrl = try { URI(finalReferer).let { "${it.scheme}://${it.host}" } } catch (e: Exception) { mainUrl }
+            val responseText = app.get(targetUrl, headers = headers).text
+            
+            val streamRegex = Regex("(?i)https?://[^\"]+\\.(mp4|m3u8)(?:\\?[^\"']*)?")
+            val streamLinks = streamRegex.findAll(responseText).map { it.value }.toList()
+            
+            streamLinks.distinct().forEach { streamUrl ->
+                val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
                 
-                val headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer" to finalReferer,
-                    "Origin" to originUrl
-                )
-                
-                sources.add(newExtractorLink(source = name, name = name, url = m3u8Url, type = ExtractorLinkType.M3U8) {
-                    this.referer = finalReferer
+                sources.add(newExtractorLink(
+                    source = name, 
+                    name = name, 
+                    url = streamUrl, 
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = targetUrl
                     this.quality = Qualities.Unknown.value
-                    this.headers = headers
+                    this.headers = mapOf(
+                        "User-Agent" to headers["User-Agent"]!!
+                    )
                 })
             }
         } catch (e: Exception) {
@@ -56,7 +69,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. P2P EXTRACTOR (SUDAH DIPERBAIKI)
+// 2. P2P EXTRACTOR
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -69,7 +82,6 @@ open class P2PExtractor : ExtractorApi() {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
         
-        // KUNCI PERBAIKAN: Menyamakan persis headers dari browser (Browser Fingerprinting)
         val headers = mapOf(
             "Accept" to "*/*",
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -111,7 +123,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 EXTRACTOR (FINAL BOSS FIX: NO REFERER & EXACT USER-AGENT)
+// 3. F16 EXTRACTOR (CAST)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -152,7 +164,6 @@ open class F16Extractor : ExtractorApi() {
             val jwtSignature = randomHex(43)
             val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
 
-            // KUNCI UTAMA: Kita patenkan 1 User-Agent untuk API & Player
             val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
             val headers = mapOf(
@@ -189,7 +200,6 @@ open class F16Extractor : ExtractorApi() {
                 if (decryptedJson != null) {
                     val result = tryParseJson<DecryptedResponse>(decryptedJson)
                     
-                    // FIX: Hanya pakai User-Agent yang sama, TANPA Referer/Origin
                     val videoHeaders = mapOf(
                         "User-Agent" to customUserAgent
                     )
@@ -197,8 +207,6 @@ open class F16Extractor : ExtractorApi() {
                     result?.sources?.forEach { source ->
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
-                            
-                            // KEMBALI KE newExtractorLink AGAR LOLOS BUILD (TIDAK DEPRECATED)
                             sources.add(
                                 newExtractorLink(
                                     source = "CAST",
@@ -206,12 +214,11 @@ open class F16Extractor : ExtractorApi() {
                                     url = streamUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.referer = "" // INI KUNCI UTAMANYA: KOSONGKAN REFERER
+                                    this.referer = "" // KOSONGKAN REFERER
                                     this.quality = getQualityFromName(source.label)
                                     this.headers = videoHeaders
                                 }
                             )
-                            
                         }
                     }
                 }
@@ -241,5 +248,67 @@ open class F16Extractor : ExtractorApi() {
             Log.e("F16Extractor", "Decrypt Failed: ${e.message}")
             null
         }
+    }
+}
+
+// ============================================================================
+// 4. HYDRAX EXTRACTOR (DENGAN JS UNPACKER)
+// ============================================================================
+open class HydraxExtractor : ExtractorApi() {
+    override var name = "Hydrax"
+    override var mainUrl = "https://abysscdn.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        
+        val videoId = url.substringAfterLast("/")
+        val targetUrl = "$mainUrl/?v=$videoId"
+        
+        val headers = mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer" to "https://playeriframe.sbs/",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+            "sec-ch-ua-mobile" to "?1",
+            "sec-ch-ua-platform" to "\"Android\""
+        )
+        
+        try {
+            val document = app.get(targetUrl, headers = headers).document
+            
+            document.select("script").forEach { script ->
+                val scriptText = script.html()
+                
+                if (scriptText.contains("eval(function(p,a,c,k,e,d)")) {
+                    
+                    val unpackedJS = Unpacker.unpack(scriptText)
+                    
+                    val mp4Regex = Regex("(?i)https?://[^\"]+\\.mp4(?:\\?[^\"']*)?")
+                    val match = mp4Regex.find(unpackedJS)
+                    
+                    if (match != null) {
+                        val streamUrl = match.value
+                        
+                        sources.add(newExtractorLink(
+                            source = name, 
+                            name = name, 
+                            url = streamUrl, 
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = targetUrl
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mapOf(
+                               "User-Agent" to headers["User-Agent"]!!
+                            )
+                        })
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return sources
     }
 }
