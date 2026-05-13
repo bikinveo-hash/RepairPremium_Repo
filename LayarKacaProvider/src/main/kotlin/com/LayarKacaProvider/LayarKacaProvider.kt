@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.Coroutines.mainWork
+import com.lagradost.cloudstream3.utils.WebViewResolver
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -17,7 +17,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class LayarKacaProvider : MainAPI() {
-    override var mainUrl = "https://tv8.lk21official.cc"
+    override var mainUrl = "https://tv10.lk21official.cc"
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
@@ -299,7 +299,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS (100% THREAD SAFE) ---
+    // --- SOLUSI ANTI-CLOUDFLARE: DENGAN WEBVIEW MURNI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -316,88 +316,36 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        val playerList = document.select("ul#player-list li a")
-        if (playerList.isEmpty()) return false
-
-        // Ambil script JS player
-        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
-        val playerJs = if (playerJsUrl.isNotBlank()) app.get(fixUrl(playerJsUrl)).text else ""
-
-        val mockJs = """
-            var window = this;
-            var globalThis = this;
-            var document = {
-                addEventListener: function(){},
-                querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
-                querySelectorAll: function(){ return []; },
-                getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
-                body: { dataset: {} }
-            };
-            var navigator = { userAgent: "Mozilla/5.0 (Linux; Android 10)", platform: "Linux", maxTouchPoints: 1 };
-            var location = { href: "$currentUrl" };
-            var screen = { orientation: {} };
-            var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
-            var alert = function(){};
-        """.trimIndent()
-
-        // KUNCI UTAMA: Kita isolasi Mozilla Rhino sepenuhnya di dalam mainWork (Satu Thread Tunggal)
-        val extractedLinks = try {
-            mainWork {
-                val rhino = org.mozilla.javascript.Context.enter()
-                try {
-                    rhino.optimizationLevel = -1
-                    val scope = rhino.initSafeStandardObjects()
-                    
-                    if (playerJs.isNotBlank()) {
-                        rhino.evaluateString(scope, mockJs + "\n" + playerJs, "JavaScript", 1, null)
-                    }
-
-                    // Mapping hasil dekripsi langsung dari memori Rhino
-                    playerList.mapNotNull { element ->
-                        val serverName = element.attr("data-server")
-                        val encryptedUrl = element.attr("data-url")
-                        
-                        if (encryptedUrl.isNotBlank()) {
-                            val result = rhino.evaluateString(scope, "_L('$encryptedUrl')", "JavaScript", 1, null)
-                            if (result is String && result.isNotBlank()) {
-                                Pair(serverName, result)
-                            } else null
-                        } else null
-                    }
-                } finally {
-                    org.mozilla.javascript.Context.exit()
-                }
-            }
+        // Cari iframe url yang dieksekusi secara native oleh Cloudstream
+        // Kita intercept semua request yang mengarah ke playeriframe.sbs
+        val interceptor = WebViewResolver(Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/[A-Za-z0-9_-]+"""))
+        
+        var iframeUrl: String? = null
+        try {
+            // Biarkan Cloudstream mendarat di halaman film layaknya manusia, 
+            // lalu tangkap link videonya setelah Javascript/Cloudflare selesai bekerja!
+            iframeUrl = app.get(currentUrl, interceptor = interceptor).url
         } catch (e: Exception) {
-            Log.e("LayarKacaProvider", "Rhino Block Error: ${e.message}")
-            emptyList()
+            Log.e("LayarKacaProvider", "Intercept Error: ${e.message}")
         }
 
-        // Kalau Rhino entah bagaimana tetap gagal, fallback ke href standar
-        val finalLinks = extractedLinks.ifEmpty {
-            playerList.mapNotNull {
-                val href = it.attr("href")
-                val serverName = it.attr("data-server")
-                if (href.isNotBlank() && href != "#") Pair(serverName, href) else null
+        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
+            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
+            val id = iframeUrl.substringAfterLast("/")
+            
+            // Konversi ke Extractor milikmu
+            val extractorUrl = when (serverName.lowercase()) {
+                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                "turbovip" -> "https://emturbovid.com/e/$id"
+                "cast" -> "https://f16px.com/e/$id"
+                "hydrax" -> "https://hydrax.net/watch?v=$id"
+                else -> iframeUrl
             }
-        }
-
-        // Eksekusi loadExtractor AMAN di luar Coroutine mainWork 
-        finalLinks.forEach { (serverName, iframeUrl) ->
-            if (iframeUrl.contains("playeriframe.sbs")) {
-                val id = iframeUrl.substringAfterLast("/")
-                
-                // Susun URL format node.js sesuai API ExtractorApi-mu
-                val extractorUrl = when (serverName.lowercase()) {
-                    "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                    "turbovip" -> "https://emturbovid.com/e/$id"
-                    "cast" -> "https://f16px.com/e/$id"
-                    "hydrax" -> "https://hydrax.net/watch?v=$id"
-                    else -> iframeUrl
-                }
-                
-                loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
-            }
+            
+            // Eksekusi Extractor Api
+            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+        } else {
+            Log.e("LayarKacaProvider", "Iframe Url Gagal Didapatkan atau Cloudflare Memblokir WebView")
         }
         
         return true
