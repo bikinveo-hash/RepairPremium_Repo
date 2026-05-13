@@ -13,7 +13,6 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import app.cash.quickjs.QuickJs
 import com.lagradost.api.Log
 
 class LayarKacaProvider : MainAPI() {
@@ -306,7 +305,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS (JURUS QUICKJS DECRYPTOR) ---
+    // --- LOAD LINKS (MENGGUNAKAN MESIN RHINO BAWAAN CLOUDSTREAM) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -334,31 +333,36 @@ class LayarKacaProvider : MainAPI() {
             
         val playerJsCode = app.get(fixUrl(playerJsUrl), referer = currentUrl).text
 
-        var quickJs: QuickJs? = null
         try {
-            // MENGINISIALISASI "BROWSER PALSU" (QuickJS VM)
-            quickJs = QuickJs.create()
+            // MENGGUNAKAN RHINO JAVASCRIPT BAWAAN CLOUDSTREAM
+            val rhino = getRhinoContext()
+            val scope = rhino.initSafeStandardObjects()
+            
+            // 1. Suntikkan lingkungan browser palsu agar script LK21 tidak crash
             val mockEnv = """
-                var window = globalThis;
+                var window = globalThis || {};
                 var navigator = { userAgent: 'Mozilla/5.0' };
                 var location = { href: 'https://tv8.lk21official.cc/' };
                 window.location = location;
                 var document = { addEventListener: function(event, cb){} };
             """.trimIndent()
             
-            // 1. Suntikkan lingkungan browser palsu agar script LK21 tidak crash
-            quickJs.evaluate(mockEnv)
+            rhino.evaluateString(scope, mockEnv, "MockEnv", 1, null)
             
             // 2. Suntikkan script peretas LK21 ke memori aplikasi kita
-            quickJs.evaluate(playerJsCode)
+            rhino.evaluateString(scope, playerJsCode, "PlayerJS", 1, null)
             
             // 3. Meretas setiap link sandi Base64 yang ditemukan
             dataUrls.forEach { encryptedData ->
                 try {
-                    // Panggil fungsi `_L(kode)` buatan LK21 sendiri
-                    val decryptedStr = quickJs.evaluate("_L('$encryptedData')") as? String
+                    // Panggil fungsi `_L(kode)` buatan LK21 sendiri menggunakan Rhino
+                    val script = "_L('$encryptedData')"
+                    val result = rhino.evaluateString(scope, script, "Decrypt", 1, null)
                     
-                    if (!decryptedStr.isNullOrBlank()) {
+                    // Terjemahkan hasilnya kembali ke teks (String)
+                    val decryptedStr = org.mozilla.javascript.Context.toString(result)
+                    
+                    if (decryptedStr.isNotBlank() && decryptedStr != "undefined") {
                         val decryptedUrl = fixUrl(decryptedStr)
                         Log.d("LK21", "BERHASIL DIRETAS: $decryptedUrl")
                         
@@ -378,14 +382,14 @@ class LayarKacaProvider : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("LK21", "QuickJs Gagal Meretas Link: ${e.message}")
+                    Log.e("LK21", "Rhino Gagal Meretas Link: ${e.message}")
                 }
             }
         } catch (e: Exception) {
-            Log.e("LK21", "QuickJs Error: ${e.message}")
+            Log.e("LK21", "Rhino Error Keseluruhan: ${e.message}")
         } finally {
-            // Tutup mesin untuk mencegah memory leak
-            quickJs?.close()
+            // Wajib menutup (exit) mesin Rhino agar tidak memakan RAM berlebihan
+            org.mozilla.javascript.Context.exit()
         }
 
         // JAGA-JAGA: Coba tangkap iframe utama sebagai fallback (biasanya ini trailer YT)
