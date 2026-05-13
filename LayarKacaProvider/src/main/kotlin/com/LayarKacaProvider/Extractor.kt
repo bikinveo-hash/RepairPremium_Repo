@@ -42,13 +42,11 @@ open class EmturbovidExtractor : ExtractorApi() {
                     "Origin" to originUrl
                 )
                 
-                sources.add(
-                    newExtractorLink(source = name, name = name, url = m3u8Url, type = ExtractorLinkType.M3U8) {
-                        this.referer = finalReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = headers
-                    }
-                )
+                sources.add(newExtractorLink(source = name, name = name, url = m3u8Url, type = ExtractorLinkType.M3U8) {
+                    this.referer = finalReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = headers
+                })
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -85,16 +83,12 @@ open class P2PExtractor : ExtractorApi() {
             val videoUrl = json?.file ?: json?.link
    
             if (!videoUrl.isNullOrBlank()) {
-                sources.add(
-                    newExtractorLink(source = name, name = name, url = videoUrl, type = ExtractorLinkType.M3U8) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
+                sources.add(newExtractorLink(source = name, name = name, url = videoUrl, type = ExtractorLinkType.M3U8) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                })
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
         return sources
     }
 }
@@ -109,6 +103,7 @@ open class F16Extractor : ExtractorApi() {
 
     data class F16Playback(val playback: PlaybackData?)
     data class PlaybackData(val iv: String?, val payload: String?, val key_parts: List<String>?)
+  
     data class DecryptedSource(val url: String?, val label: String?)
     data class DecryptedResponse(val sources: List<DecryptedSource>?)
 
@@ -187,7 +182,7 @@ open class F16Extractor : ExtractorApi() {
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
                             
-                            // MENGGUNAKAN STANDAR TERBARU (Tidak Deprecated)
+                            // KEMBALI KE newExtractorLink AGAR LOLOS BUILD (TIDAK DEPRECATED)
                             sources.add(
                                 newExtractorLink(
                                     source = "CAST",
@@ -200,6 +195,7 @@ open class F16Extractor : ExtractorApi() {
                                     this.headers = videoHeaders
                                 }
                             )
+                            
                         }
                     }
                 }
@@ -221,7 +217,6 @@ open class F16Extractor : ExtractorApi() {
             val spec = GCMParameterSpec(128, iv)
             val keySpec = SecretKeySpec(keyBytes, "AES")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-           
             cipher.init(Cipher.DECRYPT_MODE, keySpec, spec)
             
             val decryptedBytes = cipher.doFinal(cipherText)
