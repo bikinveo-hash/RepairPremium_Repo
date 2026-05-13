@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.Coroutines.mainWork
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -298,7 +299,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS MURNI (FIXED THREAD) ---
+    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS (100% THREAD SAFE) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -322,73 +323,71 @@ class LayarKacaProvider : MainAPI() {
         val playerJsUrl = document.select("script[src*=player.js]").attr("src")
         val playerJs = if (playerJsUrl.isNotBlank()) app.get(fixUrl(playerJsUrl)).text else ""
 
-        val extractedLinks = mutableListOf<String>()
+        val mockJs = """
+            var window = this;
+            var globalThis = this;
+            var document = {
+                addEventListener: function(){},
+                querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
+                querySelectorAll: function(){ return []; },
+                getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
+                body: { dataset: {} }
+            };
+            var navigator = { userAgent: "Mozilla/5.0 (Linux; Android 10)", platform: "Linux", maxTouchPoints: 1 };
+            var location = { href: "$currentUrl" };
+            var screen = { orientation: {} };
+            var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
+            var alert = function(){};
+        """.trimIndent()
 
-        if (playerJs.isNotBlank()) {
-            val mockJs = """
-                var window = this;
-                var globalThis = this;
-                var document = {
-                    addEventListener: function(){},
-                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
-                    querySelectorAll: function(){ return []; },
-                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
-                    body: { dataset: {} }
-                };
-                var navigator = { userAgent: "Mozilla/5.0", platform: "Linux", maxTouchPoints: 1 };
-                var location = { href: "$currentUrl" };
-                var screen = { orientation: {} };
-                var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
-                var alert = function(){};
-            """.trimIndent()
-
-            // Block eksekusi Rhino dijamin sinkron dan aman dari error State
-            try {
+        // KUNCI UTAMA: Kita isolasi Mozilla Rhino sepenuhnya di dalam mainWork (Satu Thread Tunggal)
+        val extractedLinks = try {
+            mainWork {
                 val rhino = org.mozilla.javascript.Context.enter()
-                rhino.optimizationLevel = -1 // Sangat penting di Android agar tidak error kompilasi byte-code
-                val scope = rhino.initSafeStandardObjects()
-                
-                rhino.evaluateString(scope, mockJs + "\n" + playerJs, "JavaScript", 1, null)
-
-                playerList.forEach { element ->
-                    val serverName = element.attr("data-server")
-                    val encryptedUrl = element.attr("data-url")
+                try {
+                    rhino.optimizationLevel = -1
+                    val scope = rhino.initSafeStandardObjects()
                     
-                    if (encryptedUrl.isNotBlank()) {
-                        try {
+                    if (playerJs.isNotBlank()) {
+                        rhino.evaluateString(scope, mockJs + "\n" + playerJs, "JavaScript", 1, null)
+                    }
+
+                    // Mapping hasil dekripsi langsung dari memori Rhino
+                    playerList.mapNotNull { element ->
+                        val serverName = element.attr("data-server")
+                        val encryptedUrl = element.attr("data-url")
+                        
+                        if (encryptedUrl.isNotBlank()) {
                             val result = rhino.evaluateString(scope, "_L('$encryptedUrl')", "JavaScript", 1, null)
                             if (result is String && result.isNotBlank()) {
-                                extractedLinks.add(result)
-                            }
-                        } catch (e: Exception) {
-                            Log.e("LayarKacaProvider", "Gagal dekripsi $serverName: ${e.message}")
-                        }
+                                Pair(serverName, result)
+                            } else null
+                        } else null
                     }
+                } finally {
+                    org.mozilla.javascript.Context.exit()
                 }
-            } catch (e: Exception) {
-                Log.e("LayarKacaProvider", "Rhino Engine Error: ${e.message}")
-            } finally {
-                org.mozilla.javascript.Context.exit() // Pastikan keluar context di Thread yang persis sama
             }
+        } catch (e: Exception) {
+            Log.e("LayarKacaProvider", "Rhino Block Error: ${e.message}")
+            emptyList()
         }
 
-        // Kalau Rhino gagal (fallback aman)
-        if (extractedLinks.isEmpty()) {
-            playerList.forEach {
+        // Kalau Rhino entah bagaimana tetap gagal, fallback ke href standar
+        val finalLinks = extractedLinks.ifEmpty {
+            playerList.mapNotNull {
                 val href = it.attr("href")
-                if (href.isNotBlank() && href != "#") {
-                    extractedLinks.add(href)
-                }
+                val serverName = it.attr("data-server")
+                if (href.isNotBlank() && href != "#") Pair(serverName, href) else null
             }
         }
 
-        // Eksekusi Extractor secara asinkron di luar jangkauan Rhino
-        extractedLinks.forEach { iframeUrl ->
+        // Eksekusi loadExtractor AMAN di luar Coroutine mainWork 
+        finalLinks.forEach { (serverName, iframeUrl) ->
             if (iframeUrl.contains("playeriframe.sbs")) {
-                val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
                 val id = iframeUrl.substringAfterLast("/")
                 
-                // Rakit URL Extractor sesuai format dari Node.js yang sudah kita buktikan
+                // Susun URL format node.js sesuai API ExtractorApi-mu
                 val extractorUrl = when (serverName.lowercase()) {
                     "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                     "turbovip" -> "https://emturbovid.com/e/$id"
@@ -397,7 +396,6 @@ class LayarKacaProvider : MainAPI() {
                     else -> iframeUrl
                 }
                 
-                // Panggil Extractor kamu (P2P, TurboVip, dll)
                 loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
             }
         }
