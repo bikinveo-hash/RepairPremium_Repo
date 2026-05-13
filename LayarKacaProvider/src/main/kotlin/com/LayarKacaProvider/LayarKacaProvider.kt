@@ -298,7 +298,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS ---
+    // --- LOAD LINKS: DECRYPT MENGGUNAKAN MOZILLA RHINO JS (Thread-Safe) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -324,6 +324,9 @@ class LayarKacaProvider : MainAPI() {
 
         var rhino: org.mozilla.javascript.Context? = null
         var scope: org.mozilla.javascript.Scriptable? = null
+        
+        // Simpan URL di dalam List agar aman dari Coroutine Suspension
+        val extractedLinks = mutableListOf<String>()
 
         try {
             rhino = getRhinoContext()
@@ -364,7 +367,7 @@ class LayarKacaProvider : MainAPI() {
                     }
                 }
                 
-                // Jika Rhino gagal (misal update web), fallback ambil URL dari href biasa
+                // Jika Rhino gagal, fallback ambil URL dari href biasa
                 if (iframeUrl.isNullOrBlank()) {
                     iframeUrl = element.attr("href")
                 }
@@ -381,15 +384,22 @@ class LayarKacaProvider : MainAPI() {
                         else -> iframeUrl
                     }
                     
-                    loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                    // Tambahkan ke keranjang, jangan dieksekusi dulu!
+                    extractedLinks.add(extractorUrl)
                 }
             }
         } catch (e: Exception) {
             Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
         } finally {
             if (rhino != null) {
+                // Sangat penting: Menutup context di Thread yang Murni sama
                 org.mozilla.javascript.Context.exit()
             }
+        }
+
+        // Sekarang kita aman! Eksekusi loadExtractor di luar blok Rhino
+        extractedLinks.forEach { targetUrl ->
+            loadExtractor(targetUrl, currentUrl, subtitleCallback, callback)
         }
 
         return true
