@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.WebViewResolver
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -21,10 +21,6 @@ class LayarKacaProvider : MainAPI() {
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
-    
-    // KUNCI UTAMA: Wajib bernilai true agar Cloudstream mengizinkan kita menggunakan Browser Gaib!
-    override val usesWebView = true 
-    
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // FITUR PREMIUM 1: Pembersih Judul Ultra
@@ -310,9 +306,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // ==========================================================
-    // JURUS TERAKHIR: TEMBAK IFRAME VIA WEBVIEW RESOLVER!
-    // ==========================================================
+    // --- LOAD LINKS (MENGGUNAKAN WEBVIEW RESOLVER CLOUDSTREAM) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -320,39 +314,51 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-        val document = app.get(currentUrl).document
+        val doc = app.get(currentUrl).document
 
-        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        // Bypass Web Nontondrama
+        val redirectButton = doc.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Kita menyusun Regex untuk mencegat request ke domain server mereka (yang muncul di log-mu tadi!)
-        val iframeRegex = Regex("(?i)(playeriframe\\.sbs|turbovidhls\\.com|abysscdn\\.com|cloud\\.hownetwork\\.xyz)")
-        
         try {
-            // Membuka halaman LK21 menggunakan Browser Bawaan (WebView). 
-            // Browser ini akan membiarkan Script VM mereka membongkar sandinya secara otomatis.
-            // Setelah selesai, WebView akan mencegat jaringan (Network Intercept) saat iframe dipanggil!
+            // WEBVIEW RESOLVER: 
+            // Kita biarkan Chrome Android tersembunyi di background membuka web LK21, 
+            // menjalankan JS mereka, dan kita TANGKAP link-nya saat iframe mulai dimuat!
+            val interceptRegex = Regex("(?i)(playeriframe\\.sbs/iframe/|cloud\\.hownetwork\\.xyz/video|emturbovid\\.com/t/|abyssplayer\\.com/|turbovidhls\\.com/t/)")
+            
             val response = app.get(
                 currentUrl,
-                interceptor = WebViewResolver(iframeRegex),
-                timeout = 15L // Tunggu maksimal 15 detik agar proses render di HP sukses
+                interceptor = WebViewResolver(interceptRegex)
             )
             
-            val interceptedUrl = response.url
-            Log.d("LK21", "BERHASIL DITEMBAK OLEH WEBVIEW: $interceptedUrl")
+            val capturedUrl = response.url
+            Log.d("LK21", "WEBVIEW BERHASIL MENANGKAP: \$capturedUrl")
             
-            // Lemparkan hasil tangkapan tersebut langsung ke pasukan Ekstraktormu
-            if (interceptedUrl != currentUrl && iframeRegex.containsMatchIn(interceptedUrl)) {
-                loadExtractor(interceptedUrl, currentUrl, subtitleCallback, callback)
+            // Ekstrak URL yang ditangkap
+            if (capturedUrl.contains("playeriframe.sbs") || capturedUrl.contains("turbovidhls.com")) {
+                val iframeDoc = app.get(capturedUrl, referer = currentUrl).document
+                val innerIframes = iframeDoc.select("iframe").map { it.attr("src") }
+                
+                if (innerIframes.isNotEmpty()) {
+                    innerIframes.forEach { src ->
+                        loadExtractor(fixUrl(src), capturedUrl, subtitleCallback, callback)
+                    }
+                } else {
+                    loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
+                }
+            } else {
+                // Jika langsung tertangkap hownetwork / emturbovid
+                loadExtractor(capturedUrl, currentUrl, subtitleCallback, callback)
             }
+            
         } catch (e: Exception) {
-            Log.e("LK21", "Jurus WebView Gagal: ${e.message}")
+            Log.e("LK21", "WebViewResolver Error: \${e.message}")
         }
 
-        // JAGA-JAGA: Tembakan manual jika ada iframe nyasar di HTML
-        val mainIframeSrc = document.select("iframe#main-player").attr("src")
+        // JAGA-JAGA: Coba tangkap iframe utama HTML statis sebagai fallback (biasanya ini trailer YT)
+        val mainIframeSrc = doc.select("iframe#main-player").attr("src")
         if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
             loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
         }
