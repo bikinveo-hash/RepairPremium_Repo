@@ -78,7 +78,6 @@ open class P2PExtractor : ExtractorApi() {
     data class HownetworkResponse(val file: String?, val link: String?, val label: String?)
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        // PERBAIKAN: Ambil ID dengan lebih cerdas
         val id = if (url.contains("id=")) url.substringAfter("id=").substringBefore("&") else url.substringAfterLast("/")
         val apiUrl = "$mainUrl/api2.php?id=$id"
         
@@ -262,7 +261,6 @@ open class HydraxExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         
-        // PERBAIKAN: Ambil ID dengan lebih cerdas
         val videoId = if (url.contains("v=")) url.substringAfter("v=").substringBefore("&") else url.substringAfterLast("/")
         val targetUrl = "$mainUrl/?v=$videoId"
         
