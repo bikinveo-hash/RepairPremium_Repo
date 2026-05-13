@@ -1,17 +1,11 @@
 package com.LayarKacaProvider
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.Coroutines.mainWork
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -135,6 +129,7 @@ class LayarKacaProvider : MainAPI() {
                     async {
                         val cleanTitle = getCleanTitle(item.title)
                         val href = fixUrl(item.slug)
+                        
                         val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
                         val fallbackPoster = fixPosterUrl(rawPoster)
                         
@@ -146,6 +141,7 @@ class LayarKacaProvider : MainAPI() {
                                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                                 item.year == null || resYear == null || resYear == item.year
                             } ?: tmdbRes?.results?.firstOrNull()
+                            
                             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
                         } catch(e: Exception) {}
 
@@ -180,7 +176,7 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
-        var response = app.get(cleanUrl)
+        var response = app.get(cleanUrl, timeout = 30) // PENAMBAHAN TIMEOUT LEBIH LAMA AGAR TIDAK GAGAL
         var document = response.document
 
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
@@ -188,13 +184,14 @@ class LayarKacaProvider : MainAPI() {
             val newUrl = redirectButton.attr("href")
             if (newUrl.isNotEmpty()) {
                 cleanUrl = fixUrl(newUrl)
-                response = app.get(cleanUrl)
+                response = app.get(cleanUrl, timeout = 30)
                 document = response.document
             }
         }
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
+        
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
@@ -239,6 +236,7 @@ class LayarKacaProvider : MainAPI() {
             val encodedTitle = URLEncoder.encode(title, "UTF-8")
             val tmdbSearchUrl = "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
             val tmdbRes = app.get(tmdbSearchUrl).parsedSafe<TmdbSearchResponse>()
+            
             val match = tmdbRes?.results?.firstOrNull { 
                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                 year == null || resYear == null || resYear == year
@@ -249,17 +247,6 @@ class LayarKacaProvider : MainAPI() {
                 tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
             }
         } catch (e: Exception) {}
-
-        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
-        if (trailerUrl.isNullOrEmpty()) {
-            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
-        }
-        if (trailerUrl.isNullOrEmpty()) {
-            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        }
-        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
-        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
-        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
@@ -272,9 +259,6 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
-                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -287,18 +271,11 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
-                }
             }
         }
     }
 
-    data class DecryptedLink(
-        @JsonProperty("server") val server: String,
-        @JsonProperty("url") val url: String
-    )
-
+    // --- CARA PALING GAMPANG: MENGAMBIL ID ASLI TANPA JS! ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -314,93 +291,44 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        val playerList = document.select("ul#player-list li a")
-        if (playerList.isEmpty()) return false
+        // Trik Ninja: Di script HTML, ID asli selalu diletakkan tersembunyi
+        // di dalam kode-kode sebelum ia di-enkripsi!
+        val htmlContent = document.html()
+        
+        // Kita gunakan REGEX untuk menangkap "ID Rahasia" (contoh: Iw4oOiQLWicrIxJhIkM-dXBIe3toLjIDBh0oFBwEYj0hHH56dg)
+        val p2pIdRegex = Regex("""cloud\.hownetwork\.xyz\/video\.php\?id=([A-Za-z0-9_-]+)""")
+        val turbovipIdRegex = Regex("""emturbovid\.com\/e\/([A-Za-z0-9_-]+)""")
+        val castIdRegex = Regex("""f16px\.com\/e\/([A-Za-z0-9_-]+)""")
+        
+        // Cek P2P
+        val p2pMatch = p2pIdRegex.find(htmlContent)
+        if (p2pMatch != null) {
+            val id = p2pMatch.groupValues[1]
+            loadExtractor("https://cloud.hownetwork.xyz/api2.php?id=$id", currentUrl, subtitleCallback, callback)
+        }
+        
+        // Cek Turbovip
+        val turbovipMatch = turbovipIdRegex.find(htmlContent)
+        if (turbovipMatch != null) {
+            val id = turbovipMatch.groupValues[1]
+            loadExtractor("https://emturbovid.com/e/$id", currentUrl, subtitleCallback, callback)
+        }
 
-        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
-        val playerJs = if (playerJsUrl.isNotBlank()) {
-            app.get(fixUrl(playerJsUrl), referer = currentUrl).text
-        } else ""
-
-        val extractedLinks = mutableListOf<DecryptedLink>()
-
-        if (playerJs.isNotBlank()) {
-            val serversJsonArray = playerList.map { 
-                "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
-            }.joinToString(",", "[", "]")
-
-            // KUNCI EMAS: Membersihkan keyword modern agar Rhino (ES5) tidak SyntaxError
-            val safePlayerJs = playerJs
-                .replace(Regex("""async\s+function"""), "function")
-                .replace("await ", "")
-                .replace("import(", "String(")
-
-            val script = """
-                var window = this; var globalThis = this;
-                var document = { 
-                    addEventListener: function(){}, 
-                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
-                    querySelectorAll: function(){ return []; },
-                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
-                    body: { dataset: {} },
-                    createElement: function() { return { style: {}, setAttribute: function(){} }; }
-                };
-                var navigator = { userAgent: "Mozilla/5.0" };
-                var location = { href: "$currentUrl" };
-                var screen = { orientation: {} };
-                var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
-                var alert = function(){};
-                var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
-                
-                $safePlayerJs
-                
-                var inputs = $serversJsonArray;
-                var results = [];
-                for (var i = 0; i < inputs.length; i++) {
-                    try {
-                        var dec = _L(inputs[i].url);
-                        if (dec) results.push({ server: inputs[i].server, url: dec });
-                    } catch(e) {}
-                }
-                JSON.stringify(results);
-            """.trimIndent()
-
-            try {
-                mainWork {
-                    val rhino = org.mozilla.javascript.Context.enter()
-                    try {
-                        rhino.optimizationLevel = -1
-                        val scope = rhino.initSafeStandardObjects()
-                        val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
-                        if (!resultJson.isNullOrBlank()) {
-                            val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
-                            if (parsed != null) extractedLinks.addAll(parsed)
-                        }
-                    } finally {
-                        org.mozilla.javascript.Context.exit()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
+        // Cek Cast
+        val castMatch = castIdRegex.find(htmlContent)
+        if (castMatch != null) {
+            val id = castMatch.groupValues[1]
+            loadExtractor("https://f16px.com/e/$id", currentUrl, subtitleCallback, callback)
+        }
+        
+        // Ekstraksi umum (jika menemukan Iframe langsung)
+        document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.startsWith("http")) {
+                loadExtractor(src, currentUrl, subtitleCallback, callback)
             }
         }
 
-        extractedLinks.forEach { decrypted ->
-            val iframeUrl = decrypted.url
-            val serverName = decrypted.server
-            
-            if (iframeUrl.contains("playeriframe.sbs")) {
-                val id = iframeUrl.substringAfterLast("/")
-                val extractorUrl = when (serverName.lowercase()) {
-                    "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                    "turbovip" -> "https://emturbovid.com/e/$id"
-                    "cast" -> "https://f16px.com/e/$id"
-                    "hydrax" -> "https://hydrax.net/watch?v=$id"
-                    else -> iframeUrl
-                }
-                loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
-            }
-        }
         return true
     }
 }
