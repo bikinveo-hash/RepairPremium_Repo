@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.WebViewResolver
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -20,6 +21,10 @@ class LayarKacaProvider : MainAPI() {
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
+    
+    // KUNCI UTAMA: Wajib bernilai true agar Cloudstream mengizinkan kita menggunakan Browser Gaib!
+    override val usesWebView = true 
+    
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // FITUR PREMIUM 1: Pembersih Judul Ultra
@@ -305,7 +310,9 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS (MENGGUNAKAN MESIN RHINO BAWAAN CLOUDSTREAM) ---
+    // ==========================================================
+    // JURUS TERAKHIR: TEMBAK IFRAME VIA WEBVIEW RESOLVER!
+    // ==========================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -313,86 +320,38 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-        var document = app.get(currentUrl).document
+        val document = app.get(currentUrl).document
 
-        // Bypass Web Nontondrama
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
-            document = app.get(currentUrl).document
         }
 
-        // Kumpulkan target Sandi (Base64 VM)
-        val dataUrls = document.select("ul#player-list li a")
-            .mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
-            .distinct()
-
-        // Ambil URL Skrip Dekripsi VM milik LK21 (player.js)
-        val playerJsUrl = document.select("script[src*=player.js]").attr("src").takeIf { it.isNotBlank() }
-            ?: "https://assets.lk21.party/js/player.js?v=4"
-            
-        val playerJsCode = app.get(fixUrl(playerJsUrl), referer = currentUrl).text
-
+        // Kita menyusun Regex untuk mencegat request ke domain server mereka (yang muncul di log-mu tadi!)
+        val iframeRegex = Regex("(?i)(playeriframe\\.sbs|turbovidhls\\.com|abysscdn\\.com|cloud\\.hownetwork\\.xyz)")
+        
         try {
-            // MENGGUNAKAN RHINO JAVASCRIPT BAWAAN CLOUDSTREAM
-            val rhino = getRhinoContext()
-            val scope = rhino.initSafeStandardObjects()
+            // Membuka halaman LK21 menggunakan Browser Bawaan (WebView). 
+            // Browser ini akan membiarkan Script VM mereka membongkar sandinya secara otomatis.
+            // Setelah selesai, WebView akan mencegat jaringan (Network Intercept) saat iframe dipanggil!
+            val response = app.get(
+                currentUrl,
+                interceptor = WebViewResolver(iframeRegex),
+                timeout = 15L // Tunggu maksimal 15 detik agar proses render di HP sukses
+            )
             
-            // 1. Suntikkan lingkungan browser palsu agar script LK21 tidak crash
-            val mockEnv = """
-                var window = globalThis || {};
-                var navigator = { userAgent: 'Mozilla/5.0' };
-                var location = { href: 'https://tv8.lk21official.cc/' };
-                window.location = location;
-                var document = { addEventListener: function(event, cb){} };
-            """.trimIndent()
+            val interceptedUrl = response.url
+            Log.d("LK21", "BERHASIL DITEMBAK OLEH WEBVIEW: $interceptedUrl")
             
-            rhino.evaluateString(scope, mockEnv, "MockEnv", 1, null)
-            
-            // 2. Suntikkan script peretas LK21 ke memori aplikasi kita
-            rhino.evaluateString(scope, playerJsCode, "PlayerJS", 1, null)
-            
-            // 3. Meretas setiap link sandi Base64 yang ditemukan
-            dataUrls.forEach { encryptedData ->
-                try {
-                    // Panggil fungsi `_L(kode)` buatan LK21 sendiri menggunakan Rhino
-                    val script = "_L('$encryptedData')"
-                    val result = rhino.evaluateString(scope, script, "Decrypt", 1, null)
-                    
-                    // Terjemahkan hasilnya kembali ke teks (String)
-                    val decryptedStr = org.mozilla.javascript.Context.toString(result)
-                    
-                    if (decryptedStr.isNotBlank() && decryptedStr != "undefined") {
-                        val decryptedUrl = fixUrl(decryptedStr)
-                        Log.d("LK21", "BERHASIL DIRETAS: $decryptedUrl")
-                        
-                        // DecryptedUrl biasanya mengarah ke `playeriframe.sbs/iframe/p2p/...`
-                        // Kita buka URL tersebut untuk mengambil iframe pemutar videonya
-                        val iframeDoc = app.get(decryptedUrl, referer = currentUrl).document
-                        val innerIframes = iframeDoc.select("iframe").map { it.attr("src") }
-                        
-                        if (innerIframes.isNotEmpty()) {
-                            // Melempar link iframe tersebut ke Extractor.kt buatanmu
-                            innerIframes.forEach { src ->
-                                loadExtractor(fixUrl(src), decryptedUrl, subtitleCallback, callback)
-                            }
-                        } else {
-                            // Jika langsung mengarah ke file mp4/m3u8 atau extractor yang kita kenali
-                            loadExtractor(decryptedUrl, currentUrl, subtitleCallback, callback)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("LK21", "Rhino Gagal Meretas Link: ${e.message}")
-                }
+            // Lemparkan hasil tangkapan tersebut langsung ke pasukan Ekstraktormu
+            if (interceptedUrl != currentUrl && iframeRegex.containsMatchIn(interceptedUrl)) {
+                loadExtractor(interceptedUrl, currentUrl, subtitleCallback, callback)
             }
         } catch (e: Exception) {
-            Log.e("LK21", "Rhino Error Keseluruhan: ${e.message}")
-        } finally {
-            // Wajib menutup (exit) mesin Rhino agar tidak memakan RAM berlebihan
-            org.mozilla.javascript.Context.exit()
+            Log.e("LK21", "Jurus WebView Gagal: ${e.message}")
         }
 
-        // JAGA-JAGA: Coba tangkap iframe utama sebagai fallback (biasanya ini trailer YT)
+        // JAGA-JAGA: Tembakan manual jika ada iframe nyasar di HTML
         val mainIframeSrc = document.select("iframe#main-player").attr("src")
         if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
             loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
