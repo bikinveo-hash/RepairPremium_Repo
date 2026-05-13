@@ -21,12 +21,11 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR PREMIUM 1: Pembersih Judul Ultra (Hapus "Nonton", "Sub Indo", "di Lk21", dll)
+    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
-        // PERBAIKAN: Menambahkan "di lk21", "lk21", dan "layarkaca21" ke dalam daftar yang dihapus
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
-        clean = clean.replace(Regex("\\(\\d{4}\\)"), "") // Hapus tahun di dalam kurung
+        clean = clean.replace(Regex("\\(\\d{4}\\)"), "") 
         return clean.trim()
     }
 
@@ -84,7 +83,6 @@ class LayarKacaProvider : MainAPI() {
         val yearText = element.select("div.year, span.year").text()
         val year = yearText.toIntOrNull() ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull()
 
-        // FITUR PREMIUM 2: Injeksi Poster HD dari TMDB untuk Halaman Depan
         var hdPoster: String? = null
         try {
             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
@@ -239,9 +237,6 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
-        // ==============================================
-        // FITUR TMDB BACKDROP & POSTER HD 
-        // ==============================================
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         try {
@@ -259,11 +254,7 @@ class LayarKacaProvider : MainAPI() {
                 tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
             }
         } catch (e: Exception) {}
-        // ==============================================
 
-        // ==============================================
-        // FITUR TRAILER EXTRACTION
-        // ==============================================
         var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
         if (trailerUrl.isNullOrEmpty()) {
             trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
@@ -275,7 +266,6 @@ class LayarKacaProvider : MainAPI() {
         val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
         val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
-        // ==============================================
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
@@ -314,7 +304,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS ---
+    // --- LOAD LINKS (AUTO-DETECT REDIRECT & AJAX POST) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -324,60 +314,96 @@ class LayarKacaProvider : MainAPI() {
         var currentUrl = data
         var document = app.get(currentUrl).document
 
+        // Bypass Nontondrama
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
             document = app.get(currentUrl).document
         }
 
-        val playerLinks = document.select("ul#player-list li a").map { it.attr("data-url").ifEmpty { it.attr("href") } }
-        val mainIframe = document.select("iframe#main-player").attr("src")
-    
-        val allSources = (playerLinks + mainIframe).filter { it.isNotBlank() }.map { fixUrl(it) }.distinct()
+        // 1. Tangkap Iframe Utama Jika Ada (Jurus Dasar)
+        val mainIframeSrc = document.select("iframe#main-player").attr("src")
+        if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
+            loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
+        }
 
-        allSources.forEach { url ->
-            val directLoaded = loadExtractor(url, currentUrl, subtitleCallback, callback)
-            if (!directLoaded) {
-                try {
-                    val response = app.get(url, referer = currentUrl)
-                    val wrapperUrl = response.url
-                    val iframePage = response.document
+        // 2. Tangkap API rahasia milik LK21
+        val ymlHost = document.select("body").attr("data-yml_host")
+        val dataUrls = document.select("ul#player-list li a")
+            .mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
+            .distinct()
 
-                    // Nested Iframes
-                    iframePage.select("iframe").forEach { 
-                        loadExtractor(fixUrl(it.attr("src")), wrapperUrl, subtitleCallback, callback) 
-                    }
-                    
-                    // Manual Unwrap
-                    val scriptHtml = iframePage.html().replace("\\/", "/")
-                    Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                        val streamUrl = match.value
-                        val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                        val originUrl = try { URI(wrapperUrl).let { "${it.scheme}://${it.host}" } } catch(e:Exception) { "https://playeriframe.sbs" }
+        if (ymlHost != null && ymlHost.isNotBlank()) {
+            dataUrls.forEach { dUrl ->
+                val encodedData = URLEncoder.encode(dUrl, "UTF-8")
+
+                // METODE A: GET REQUEST DENGAN DETEKSI REDIRECT
+                val getUrls = listOf("$ymlHost?id=$encodedData", "$ymlHost?url=$encodedData")
+                for (reqUrl in getUrls) {
+                    try {
+                        val response = app.get(reqUrl, referer = currentUrl)
+                        val finalUrl = response.url 
                         
-                        val headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Referer" to wrapperUrl,
-                            "Origin" to originUrl
-                        )
+                        // KUNCI PERBAIKAN: Jika setelah dibuka link-nya berubah (Redirect ke F16/P2P)
+                        if (finalUrl != reqUrl) {
+                            if (loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)) continue
+                        }
+                        
+                        // Jika bukan redirect, cek frame di dalam response-nya
+                        response.document.select("iframe").forEach { iframe ->
+                            val iframeSrc = fixUrl(iframe.attr("src"))
+                            loadExtractor(iframeSrc, finalUrl, subtitleCallback, callback)
+                        }
+                    } catch (e: Exception) {}
+                }
 
-                        // MENGGUNAKAN LAMBDA BUILDER {}
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "LK21 VIP",
-                                name = "LK21 VIP",
-                                url = streamUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = wrapperUrl
-                                this.quality = Qualities.Unknown.value
-                                this.headers = headers
-                            }
-                        )
+                // METODE B: AJAX POST REQUEST (Jika Metode A ditolak server LK21)
+                try {
+                    val headers = mapOf(
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "Referer" to currentUrl,
+                        "Origin" to mainUrl
+                    )
+                    
+                    val postRes = app.post(ymlHost, headers = headers, data = mapOf("id" to dUrl))
+                    val text = postRes.text
+                    val json = tryParseJson<Map<String, String>>(text)
+                    
+                    // Terkadang respon JSON, terkadang HTML Iframe
+                    val iframeUrl = json?.get("url") ?: json?.get("iframe") ?: json?.get("src")
+                    
+                    if (iframeUrl != null && iframeUrl.isNotBlank()) {
+                        loadExtractor(fixUrl(iframeUrl), currentUrl, subtitleCallback, callback)
+                    } else {
+                        postRes.document.select("iframe").forEach { iframe ->
+                            loadExtractor(fixUrl(iframe.attr("src")), currentUrl, subtitleCallback, callback)
+                        }
                     }
                 } catch (e: Exception) {}
             }
         }
+
+        // 3. JURUS TERAKHIR: Raw Link (.m3u8/.mp4) Scraper
+        try {
+            val scriptHtml = document.html().replace("\\/", "/")
+            Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
+                val streamUrl = match.value
+                val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                
+                callback.invoke(
+                    newExtractorLink(
+                        source = "LK21 VIP",
+                        name = "LK21 VIP",
+                        url = streamUrl,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = currentUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (e: Exception) {}
+
         return true
     }
 }
