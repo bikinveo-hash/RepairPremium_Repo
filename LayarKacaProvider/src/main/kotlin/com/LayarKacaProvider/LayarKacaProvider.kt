@@ -334,24 +334,20 @@ class LayarKacaProvider : MainAPI() {
 
             val directLoaded = loadExtractor(mappedUrl, currentUrl, subtitleCallback, callback)
             if (!directLoaded) {
-                // Fallback jika masih lolos
                 try {
                     val response = app.get(mappedUrl, referer = currentUrl)
                     val wrapperUrl = response.url
                     
-                    // Kalau server ternyata melakukan redirect otomatis, tangkap lagi!
                     if (wrapperUrl != mappedUrl) {
                         if (loadExtractor(wrapperUrl, currentUrl, subtitleCallback, callback)) return@forEach
                     }
 
                     val iframePage = response.document
 
-                    // Nested Iframes
                     iframePage.select("iframe").forEach { 
                         loadExtractor(fixUrl(it.attr("src")), wrapperUrl, subtitleCallback, callback) 
                     }
                     
-                    // Manual Unwrap
                     val scriptHtml = iframePage.html().replace("\\/", "/")
                     Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                         val streamUrl = match.value
