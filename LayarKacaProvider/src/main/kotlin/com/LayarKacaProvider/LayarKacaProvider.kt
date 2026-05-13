@@ -13,6 +13,8 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import app.cash.quickjs.QuickJs
+import com.lagradost.api.Log
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv8.lk21official.cc"
@@ -304,7 +306,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD LINKS (AUTO-DETECT REDIRECT & AJAX POST) ---
+    // --- LOAD LINKS (JURUS QUICKJS DECRYPTOR) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -314,95 +316,83 @@ class LayarKacaProvider : MainAPI() {
         var currentUrl = data
         var document = app.get(currentUrl).document
 
-        // Bypass Nontondrama
+        // Bypass Web Nontondrama
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
             document = app.get(currentUrl).document
         }
 
-        // 1. Tangkap Iframe Utama Jika Ada (Jurus Dasar)
-        val mainIframeSrc = document.select("iframe#main-player").attr("src")
-        if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
-            loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
-        }
-
-        // 2. Tangkap API rahasia milik LK21
-        val ymlHost = document.select("body").attr("data-yml_host")
+        // Kumpulkan target Sandi (Base64 VM)
         val dataUrls = document.select("ul#player-list li a")
             .mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
             .distinct()
 
-        if (ymlHost != null && ymlHost.isNotBlank()) {
-            dataUrls.forEach { dUrl ->
-                val encodedData = URLEncoder.encode(dUrl, "UTF-8")
+        // Ambil URL Skrip Dekripsi VM milik LK21 (player.js)
+        val playerJsUrl = document.select("script[src*=player.js]").attr("src").takeIf { it.isNotBlank() }
+            ?: "https://assets.lk21.party/js/player.js?v=4"
+            
+        val playerJsCode = app.get(fixUrl(playerJsUrl), referer = currentUrl).text
 
-                // METODE A: GET REQUEST DENGAN DETEKSI REDIRECT
-                val getUrls = listOf("$ymlHost?id=$encodedData", "$ymlHost?url=$encodedData")
-                for (reqUrl in getUrls) {
-                    try {
-                        val response = app.get(reqUrl, referer = currentUrl)
-                        val finalUrl = response.url 
-                        
-                        // KUNCI PERBAIKAN: Jika setelah dibuka link-nya berubah (Redirect ke F16/P2P)
-                        if (finalUrl != reqUrl) {
-                            if (loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)) continue
-                        }
-                        
-                        // Jika bukan redirect, cek frame di dalam response-nya
-                        response.document.select("iframe").forEach { iframe ->
-                            val iframeSrc = fixUrl(iframe.attr("src"))
-                            loadExtractor(iframeSrc, finalUrl, subtitleCallback, callback)
-                        }
-                    } catch (e: Exception) {}
-                }
-
-                // METODE B: AJAX POST REQUEST (Jika Metode A ditolak server LK21)
+        var quickJs: QuickJs? = null
+        try {
+            // MENGINISIALISASI "BROWSER PALSU" (QuickJS VM)
+            quickJs = QuickJs.create()
+            val mockEnv = """
+                var window = globalThis;
+                var navigator = { userAgent: 'Mozilla/5.0' };
+                var location = { href: 'https://tv8.lk21official.cc/' };
+                window.location = location;
+                var document = { addEventListener: function(event, cb){} };
+            """.trimIndent()
+            
+            // 1. Suntikkan lingkungan browser palsu agar script LK21 tidak crash
+            quickJs.evaluate(mockEnv)
+            
+            // 2. Suntikkan script peretas LK21 ke memori aplikasi kita
+            quickJs.evaluate(playerJsCode)
+            
+            // 3. Meretas setiap link sandi Base64 yang ditemukan
+            dataUrls.forEach { encryptedData ->
                 try {
-                    val headers = mapOf(
-                        "X-Requested-With" to "XMLHttpRequest",
-                        "Referer" to currentUrl,
-                        "Origin" to mainUrl
-                    )
+                    // Panggil fungsi `_L(kode)` buatan LK21 sendiri
+                    val decryptedStr = quickJs.evaluate("_L('$encryptedData')") as? String
                     
-                    val postRes = app.post(ymlHost, headers = headers, data = mapOf("id" to dUrl))
-                    val text = postRes.text
-                    val json = tryParseJson<Map<String, String>>(text)
-                    
-                    // Terkadang respon JSON, terkadang HTML Iframe
-                    val iframeUrl = json?.get("url") ?: json?.get("iframe") ?: json?.get("src")
-                    
-                    if (iframeUrl != null && iframeUrl.isNotBlank()) {
-                        loadExtractor(fixUrl(iframeUrl), currentUrl, subtitleCallback, callback)
-                    } else {
-                        postRes.document.select("iframe").forEach { iframe ->
-                            loadExtractor(fixUrl(iframe.attr("src")), currentUrl, subtitleCallback, callback)
+                    if (!decryptedStr.isNullOrBlank()) {
+                        val decryptedUrl = fixUrl(decryptedStr)
+                        Log.d("LK21", "BERHASIL DIRETAS: $decryptedUrl")
+                        
+                        // DecryptedUrl biasanya mengarah ke `playeriframe.sbs/iframe/p2p/...`
+                        // Kita buka URL tersebut untuk mengambil iframe pemutar videonya
+                        val iframeDoc = app.get(decryptedUrl, referer = currentUrl).document
+                        val innerIframes = iframeDoc.select("iframe").map { it.attr("src") }
+                        
+                        if (innerIframes.isNotEmpty()) {
+                            // Melempar link iframe tersebut ke Extractor.kt buatanmu
+                            innerIframes.forEach { src ->
+                                loadExtractor(fixUrl(src), decryptedUrl, subtitleCallback, callback)
+                            }
+                        } else {
+                            // Jika langsung mengarah ke file mp4/m3u8 atau extractor yang kita kenali
+                            loadExtractor(decryptedUrl, currentUrl, subtitleCallback, callback)
                         }
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    Log.e("LK21", "QuickJs Gagal Meretas Link: ${e.message}")
+                }
             }
+        } catch (e: Exception) {
+            Log.e("LK21", "QuickJs Error: ${e.message}")
+        } finally {
+            // Tutup mesin untuk mencegah memory leak
+            quickJs?.close()
         }
 
-        // 3. JURUS TERAKHIR: Raw Link (.m3u8/.mp4) Scraper
-        try {
-            val scriptHtml = document.html().replace("\\/", "/")
-            Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                val streamUrl = match.value
-                val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                
-                callback.invoke(
-                    newExtractorLink(
-                        source = "LK21 VIP",
-                        name = "LK21 VIP",
-                        url = streamUrl,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = currentUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (e: Exception) {}
+        // JAGA-JAGA: Coba tangkap iframe utama sebagai fallback (biasanya ini trailer YT)
+        val mainIframeSrc = document.select("iframe#main-player").attr("src")
+        if (mainIframeSrc.isNotBlank() && mainIframeSrc != "#") {
+            loadExtractor(fixUrl(mainIframeSrc), currentUrl, subtitleCallback, callback)
+        }
 
         return true
     }
