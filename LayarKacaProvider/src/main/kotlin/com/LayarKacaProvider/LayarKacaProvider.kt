@@ -103,14 +103,14 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
-                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
+                this.posterHeaders = mapOf("Referer" to mainUrl)
             }
         } else {
             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
-                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
+                this.posterHeaders = mapOf("Referer" to mainUrl)
             }
         }
     }
@@ -135,7 +135,6 @@ class LayarKacaProvider : MainAPI() {
                     async {
                         val cleanTitle = getCleanTitle(item.title)
                         val href = fixUrl(item.slug)
-                        
                         val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
                         val fallbackPoster = fixPosterUrl(rawPoster)
                         
@@ -147,7 +146,6 @@ class LayarKacaProvider : MainAPI() {
                                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                                 item.year == null || resYear == null || resYear == item.year
                             } ?: tmdbRes?.results?.firstOrNull()
-                            
                             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
                         } catch(e: Exception) {}
 
@@ -160,14 +158,14 @@ class LayarKacaProvider : MainAPI() {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
-                                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
-                                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
                             }
                         }
                     }
@@ -197,7 +195,6 @@ class LayarKacaProvider : MainAPI() {
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
-        
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
@@ -242,7 +239,6 @@ class LayarKacaProvider : MainAPI() {
             val encodedTitle = URLEncoder.encode(title, "UTF-8")
             val tmdbSearchUrl = "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
             val tmdbRes = app.get(tmdbSearchUrl).parsedSafe<TmdbSearchResponse>()
-            
             val match = tmdbRes?.results?.firstOrNull { 
                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                 year == null || resYear == null || resYear == year
@@ -261,7 +257,6 @@ class LayarKacaProvider : MainAPI() {
         if (trailerUrl.isNullOrEmpty()) {
             trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
         }
-        
         val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
         val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
@@ -276,12 +271,9 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
-                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
-                
+                this.posterHeaders = mapOf("Referer" to mainUrl)
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         } else {
@@ -294,12 +286,9 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
-                this.posterHeaders = mapOf("Referer" to mainUrl) // FIX HTTP 403 Poster
-                
+                this.posterHeaders = mapOf("Referer" to mainUrl)
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         }
@@ -310,7 +299,6 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("url") val url: String
     )
 
-    // --- LOAD LINKS: SUPER MOCK RHINO JS & BYPASS CLOUDFLARE ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -320,7 +308,6 @@ class LayarKacaProvider : MainAPI() {
         var currentUrl = data
         var document = app.get(currentUrl).document
 
-        // Cek Redirect (Nontondrama)
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
@@ -330,7 +317,6 @@ class LayarKacaProvider : MainAPI() {
         val playerList = document.select("ul#player-list li a")
         if (playerList.isEmpty()) return false
 
-        // Wajib sisipkan Referer saat mengambil player.js agar lolos 403
         val playerJsUrl = document.select("script[src*=player.js]").attr("src")
         val playerJs = if (playerJsUrl.isNotBlank()) {
             app.get(fixUrl(playerJsUrl), referer = currentUrl).text
@@ -343,34 +329,28 @@ class LayarKacaProvider : MainAPI() {
                 "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
             }.joinToString(",", "[", "]")
 
-            // KUNCI EMAS: Menghapus keyword 'async', 'await' dan 'import' agar parser ES6 Mozilla Rhino tidak SyntaxError!
+            // KUNCI EMAS: Membersihkan keyword modern agar Rhino (ES5) tidak SyntaxError
             val safePlayerJs = playerJs
                 .replace(Regex("""async\s+function"""), "function")
                 .replace("await ", "")
                 .replace("import(", "String(")
 
-            // Mock env lengkap agar script tidak mendeteksi Headless mode
             val script = """
-                var window = this;
-                var globalThis = this;
-                var document = {
-                    addEventListener: function(){},
-                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {}, parentElement: { style: {} } }; },
+                var window = this; var globalThis = this;
+                var document = { 
+                    addEventListener: function(){}, 
+                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
                     querySelectorAll: function(){ return []; },
-                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "", classList: { add: function(){}, remove: function(){} }, parentElement: { style: {} } }; },
+                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
                     body: { dataset: {} },
                     createElement: function() { return { style: {}, setAttribute: function(){} }; }
                 };
-                var navigator = { userAgent: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0", platform: "Linux", maxTouchPoints: 1 };
+                var navigator = { userAgent: "Mozilla/5.0" };
                 var location = { href: "$currentUrl" };
                 var screen = { orientation: {} };
                 var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
                 var alert = function(){};
                 var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
-                var setInterval = function(){};
-                var setTimeout = function(){};
-                var clearTimeout = function(){};
-                var clearInterval = function(){};
                 
                 $safePlayerJs
                 
@@ -379,23 +359,18 @@ class LayarKacaProvider : MainAPI() {
                 for (var i = 0; i < inputs.length; i++) {
                     try {
                         var dec = _L(inputs[i].url);
-                        if (dec) {
-                            results.push({ server: inputs[i].server, url: dec });
-                        }
+                        if (dec) results.push({ server: inputs[i].server, url: dec });
                     } catch(e) {}
                 }
                 JSON.stringify(results);
             """.trimIndent()
 
             try {
-                // Dieksekusi 100% pada Main Thread menggunakan utilitas standar Cloudstream
                 mainWork {
                     val rhino = org.mozilla.javascript.Context.enter()
                     try {
                         rhino.optimizationLevel = -1
-                        rhino.languageVersion = 200 // Paksa Engine berjalan di ES6 mode
                         val scope = rhino.initSafeStandardObjects()
-                        
                         val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
                         if (!resultJson.isNullOrBlank()) {
                             val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
@@ -406,7 +381,7 @@ class LayarKacaProvider : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e("LayarKacaProvider", "Rhino Engine Error: ${e.message}")
+                Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
             }
         }
 
@@ -416,8 +391,6 @@ class LayarKacaProvider : MainAPI() {
             
             if (iframeUrl.contains("playeriframe.sbs")) {
                 val id = iframeUrl.substringAfterLast("/")
-                
-                // Meneruskan URL Asli ke ExtractorApi
                 val extractorUrl = when (serverName.lowercase()) {
                     "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                     "turbovip" -> "https://emturbovid.com/e/$id"
@@ -425,11 +398,9 @@ class LayarKacaProvider : MainAPI() {
                     "hydrax" -> "https://hydrax.net/watch?v=$id"
                     else -> iframeUrl
                 }
-                
                 loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
             }
         }
-        
         return true
     }
 }
