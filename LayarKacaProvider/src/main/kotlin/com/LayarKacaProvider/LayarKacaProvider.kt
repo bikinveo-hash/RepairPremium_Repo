@@ -16,11 +16,30 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class LayarKacaProvider : MainAPI() {
-    override var mainUrl = "https://tv10.lk21official.cc" // Domain Anti-Error untuk Movie
+    override var mainUrl = "https://tv10.lk21official.cc"
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    private fun decryptRC4(key: String, encryptedBase64: String): String {
+        return try {
+            val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
+            val s = IntArray(256) { it }
+            var j = 0
+            for (i in 0..255) {
+                j = (j + s[i] + key[i % key.length].code) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
+                val kStream = s[(s[i] + s[j]) % 256]
+                result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
+            }
+            String(result, Charsets.UTF_8)
+        } catch (e: Exception) {
+            "" 
+        }
+    }
 
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
@@ -179,7 +198,6 @@ class LayarKacaProvider : MainAPI() {
         var response = app.get(cleanUrl)
         var document = response.document
 
-        // BYPASS XMOVIE & SERIES REDIRECT 
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
             val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
             cleanUrl = if (path.contains("season") || path.contains("episode")) {
@@ -224,8 +242,6 @@ class LayarKacaProvider : MainAPI() {
         val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
 
         val episodes = ArrayList<Episode>()
-        
-        // PARSER EPISODE ANTI-GAGAL
         val jsonScript = document.select("script#season-data").let { it.data().ifBlank { it.html() } }
 
         if (jsonScript.isNotBlank()) {
@@ -324,7 +340,6 @@ class LayarKacaProvider : MainAPI() {
     ): Boolean {
         var currentUrl = data
         
-        // ANTI-TERSESAT: Pastikan memuat episode
         if (!currentUrl.contains("episode", ignoreCase = true) && currentUrl.contains("nontondrama")) {
             try {
                 val doc = app.get(currentUrl).document
@@ -338,9 +353,7 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
-        // 1. TANGKAP PAKAI WEBVIEWRESOLVER (DENGAN TAMBAHAN TURBOVIDHLS & TURBOVIPLAY)
         try {
-            // Regex ini otomatis akan menangkap file m3u8 langsung jika Cloudflare melepasnya!
             val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|turbovidhls\\.com/t|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php|turboviplay\\.com/.*\\.m3u8)")
             val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
             val interceptedUrl = response.url
@@ -350,7 +363,6 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
-        // 2. FALLBACK MANUAL
         if (rawSources.isEmpty()) {
             val document = app.get(currentUrl).document
             document.select("iframe").mapNotNull { it.attr("src") }.filter { 
@@ -365,7 +377,6 @@ class LayarKacaProvider : MainAPI() {
         allSources.forEach { url ->
             var finalUrl = url
             
-            // JIKA DAPAT LINK M3U8 LANGSUNG DARI TURBOVIPLAY (Berkat cURL kamu!)
             if (finalUrl.contains("turboviplay.com") && finalUrl.endsWith(".m3u8", ignoreCase = true)) {
                 callback.invoke(
                     newExtractorLink(
@@ -381,18 +392,13 @@ class LayarKacaProvider : MainAPI() {
                 return@forEach
             }
 
-            // BYPASS P2P
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
-            } 
-            // BYPASS TURBOVIP
-            else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
+            } else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
                 val id = finalUrl.substringAfter("turbovip/").substringBefore("/")
                 finalUrl = "https://turbovidhls.com/t/$id"
-            } 
-            // FALLBACK PLAYERIFRAME
-            else if (finalUrl.contains("playeriframe.sbs")) {
+            } else if (finalUrl.contains("playeriframe.sbs")) {
                 try {
                     val response = app.get(finalUrl, referer = currentUrl)
                     val iframe = response.document.selectFirst("iframe")?.attr("src")
