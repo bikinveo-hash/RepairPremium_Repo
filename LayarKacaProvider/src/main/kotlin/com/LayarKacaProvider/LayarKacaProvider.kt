@@ -22,9 +22,6 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // ==============================================
-    // ALGORITMA BYPASS ENKRIPSI RC4 (JALUR CEPAT)
-    // ==============================================
     private fun decryptRC4(key: String, encryptedBase64: String): String {
         return try {
             val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
@@ -342,7 +339,6 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
-        // 1. TANGKAP RC4 (JALUR SUPER CEPAT)
         val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
         val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
         val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
@@ -367,17 +363,17 @@ class LayarKacaProvider : MainAPI() {
             if (decoded.isNotBlank()) rawSources.add(decoded)
         }
 
-        // 2. TANGKAP IFRAME (ABAIKAN TRAILER YOUTUBE)
         document.select("iframe").mapNotNull { it.attr("src") }.filter { 
             it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
         }.forEach {
             rawSources.add(it)
         }
 
-        // 3. JIKA TETAP KOSONG, PAKAI WEBVIEWRESOLVER (JALUR LAMBAT TAPI PASTI)
+        // TANGKAP PAKAI WEBVIEWRESOLVER DENGAN REGEX SANGAT SPESIFIK (MENGHINDARI JEBAKAN <link rel="preconnect">)
         if (rawSources.isEmpty()) {
             try {
-                val interceptorRegex = Regex("(?i)playeriframe\\.sbs|emturbovid\\.com|f16px\\.com|hydrax\\.net|cloud\\.hownetwork\\.xyz")
+                // FAKTA: Regex ini hanya akan menangkap URL pemutar spesifik, mengabaikan preconnect di header HTML
+                val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch)")
                 val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = response.url
                 
