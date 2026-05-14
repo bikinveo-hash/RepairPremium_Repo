@@ -20,7 +20,7 @@ val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KH
 val magicReferer = "https://playeriframe.sbs/"
 
 // ============================================================================
-// 1. P2P EXTRACTOR
+// 1. P2P EXTRACTOR (Gaya Kode Lama - Aman)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -29,7 +29,6 @@ open class P2PExtractor : ExtractorApi() {
     
     data class HownetworkResponse(val file: String?, val link: String?, val label: String?)
 
-    // MENGGUNAKAN CALLBACK INVOKE SESUAI EXTRACTORAPI.KT LAMA
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -76,7 +75,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR
+// 2. TURBOVIP EXTRACTOR (Gaya Kode Lama + Anti Error 3001)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -105,7 +104,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                         url = m3u8Url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = "" // ANTI ERROR 3001
+                        this.referer = "" // KOSONG KAN UNTUK MENCEGAH ERROR 3001 CLOUDFLARE
                         this.quality = Qualities.Unknown.value
                         this.headers = mapOf(
                             "User-Agent" to customUserAgent,
@@ -119,7 +118,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. CAST / F16 EXTRACTOR
+// 3. CAST / F16 EXTRACTOR (Gaya Kode Lama + Anti Cloudflare JWT)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -165,7 +164,7 @@ open class F16Extractor : ExtractorApi() {
                 "Origin" to mainUrl,
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
                 "Accept" to "*/*",
-                "Content-Length" to "0"
+                "Content-Length" to "0" // Content-Length 0 sangat krusial
             )
 
             val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap<String, String>()).text
