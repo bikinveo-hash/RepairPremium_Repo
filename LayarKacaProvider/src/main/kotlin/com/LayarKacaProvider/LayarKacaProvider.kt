@@ -36,7 +36,12 @@ class LayarKacaProvider : MainAPI() {
     }
 
     data class TmdbSearchResponse(val results: List<TmdbResult>?)
-    data class TmdbResult(val backdrop_path: String?, val poster_path: String?, val release_date: String?, val first_air_date: String?)
+    data class TmdbResult(
+        val backdrop_path: String?,
+        val poster_path: String?,
+        val release_date: String?,
+        val first_air_date: String?
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(mainUrl).document
@@ -44,7 +49,9 @@ class LayarKacaProvider : MainAPI() {
 
         suspend fun addWidget(sectionTitle: String, selector: String) {
             val elements = document.select(selector).toList()
-            val list = coroutineScope { elements.map { async { toSearchResult(it) } }.awaitAll().filterNotNull() }
+            val list = coroutineScope {
+                elements.map { async { toSearchResult(it) } }.awaitAll().filterNotNull()
+            }
             if (list.isNotEmpty()) items.add(HomePageList(sectionTitle, list))
         }
 
@@ -62,7 +69,9 @@ class LayarKacaProvider : MainAPI() {
         val href = fixUrl(element.select("a").first()?.attr("href") ?: return null)
         
         val imgElement = element.select("img").first()
-        val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() } ?: imgElement?.attr("src")
+        val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } 
+            ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("src")
         val fallbackPoster = fixPosterUrl(rawPoster)
         
         val cleanTitle = getCleanTitle(rawTitle)
@@ -77,6 +86,7 @@ class LayarKacaProvider : MainAPI() {
                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                 year == null || resYear == null || resYear == year
             } ?: tmdbRes?.results?.firstOrNull()
+            
             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
         } catch(e: Exception) {}
         
@@ -85,9 +95,19 @@ class LayarKacaProvider : MainAPI() {
         val isSeries = element.select("span.episode").isNotEmpty() || element.select("span.duration").text().contains("S.")
 
         return if (isSeries) {
-            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) { this.posterUrl = posterUrl; this.quality = quality; this.year = year; this.posterHeaders = mapOf("Referer" to mainUrl) }
+            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+                this.quality = quality
+                this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl)
+            }
         } else {
-            newMovieSearchResponse(cleanTitle, href, TvType.Movie) { this.posterUrl = posterUrl; this.quality = quality; this.year = year; this.posterHeaders = mapOf("Referer" to mainUrl) }
+            newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+                this.quality = quality
+                this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl)
+            }
         }
     }
 
@@ -95,17 +115,26 @@ class LayarKacaProvider : MainAPI() {
     data class Lk21SearchItem(val title: String, val slug: String, val poster: String?, val type: String?, val year: Int?, val quality: String?)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/", "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
+        val searchUrl = "https://gudangvape.com/search.php?s=$query&page=1"
+        val headers = mapOf(
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        )
+
         try {
-            val response = app.get("https://gudangvape.com/search.php?s=$query&page=1", headers = headers).text
+            val response = app.get(searchUrl, headers = headers).text
             val json = tryParseJson<Lk21SearchResponse>(response)
+
             return coroutineScope {
                 json?.data?.map { item ->
                     async {
                         val cleanTitle = getCleanTitle(item.title)
                         val href = fixUrl(item.slug)
+                        
                         val rawPoster = if (item.poster != null) "https://poster.lk21.party/wp-content/uploads/${item.poster}" else null
                         val fallbackPoster = fixPosterUrl(rawPoster)
+                        
                         var hdPoster: String? = null
                         try {
                             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
@@ -114,6 +143,7 @@ class LayarKacaProvider : MainAPI() {
                                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                                 item.year == null || resYear == null || resYear == item.year
                             } ?: tmdbRes?.results?.firstOrNull()
+                            
                             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
                         } catch(e: Exception) {}
 
@@ -122,14 +152,26 @@ class LayarKacaProvider : MainAPI() {
                         val isSeries = item.type?.contains("series", ignoreCase = true) == true
 
                         if (isSeries) {
-                            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) { this.posterUrl = posterUrl; this.quality = quality; this.year = item.year; this.posterHeaders = mapOf("Referer" to mainUrl) }
+                            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
+                            }
                         } else {
-                            newMovieSearchResponse(cleanTitle, href, TvType.Movie) { this.posterUrl = posterUrl; this.quality = quality; this.year = item.year; this.posterHeaders = mapOf("Referer" to mainUrl) }
+                            newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
+                            }
                         }
                     }
                 }?.awaitAll()?.filterNotNull() ?: emptyList()
             }
-        } catch (e: Exception) { return emptyList() }
+        } catch (e: Exception) {
+            return emptyList()
+        }
     }
 
     data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
@@ -151,12 +193,18 @@ class LayarKacaProvider : MainAPI() {
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
+        
         val plot = document.select("div.synopsis, div.entry-content p").text().trim()
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
+        
         val ratingText = document.select("span.rating-value").text().ifEmpty { document.select("div.info-tag").text() }
         val ratingScore = Regex("(\\d\\.\\d)").find(ratingText)?.value
-        val year = document.select("span.year").text().toIntOrNull() ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull() ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
+        
+        val year = document.select("span.year").text().toIntOrNull() 
+            ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
+            ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
+
         val tags = document.select("div.tag-list a, div.genre a").map { it.text() }
         val actors = document.select("div.detail p:contains(Bintang Film) a, div.cast a").map { ActorData(Actor(it.text(), "")) }
         val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
@@ -167,12 +215,20 @@ class LayarKacaProvider : MainAPI() {
         if (jsonScript.isNotBlank()) {
             tryParseJson<Map<String, List<NontonDramaEpisode>>>(jsonScript)?.forEach { (_, epsList) ->
                 epsList.forEach { epData ->
-                    episodes.add(newEpisode(fixUrl(epData.slug ?: "")) { this.name = epData.title ?: "Episode ${epData.episode_no}"; this.season = epData.s; this.episode = epData.episode_no })
+                    episodes.add(newEpisode(fixUrl(epData.slug ?: "")) {
+                        this.name = epData.title ?: "Episode ${epData.episode_no}"
+                        this.season = epData.s
+                        this.episode = epData.episode_no
+                    })
                 }
             }
         } else {
             document.select("ul.episodes li a").forEach {
-                episodes.add(newEpisode(fixUrl(it.attr("href"))) { this.name = it.text(); this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull() })
+                episodes.add(newEpisode(fixUrl(it.attr("href"))) {
+                    this.name = it.text()
+                    val epNum = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = epNum
+                })
             }
         }
 
@@ -180,7 +236,9 @@ class LayarKacaProvider : MainAPI() {
         var tmdbBackdrop: String? = null
         try {
             val encodedTitle = URLEncoder.encode(title, "UTF-8")
-            val tmdbRes = app.get("https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle").parsedSafe<TmdbSearchResponse>()
+            val tmdbSearchUrl = "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
+            val tmdbRes = app.get(tmdbSearchUrl).parsedSafe<TmdbSearchResponse>()
+            
             val match = tmdbRes?.results?.firstOrNull { 
                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                 year == null || resYear == null || resYear == year
@@ -192,8 +250,16 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
-        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src") ?: document.select("a.btn-trailer, a:contains(Trailer)").attr("href") ?: Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        val ytId = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})").find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
+        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
+        }
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
+        }
+        
+        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
 
         return if (episodes.isNotEmpty()) {
@@ -207,7 +273,12 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                if (!finalTrailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(finalTrailerUrl, null, false))
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
+                    ))
+                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -220,12 +291,20 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                if (!finalTrailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(finalTrailerUrl, null, false))
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false
+                    ))
+                }
             }
         }
     }
 
-    data class DecryptedLink(@JsonProperty("server") val server: String, @JsonProperty("url") val url: String)
+    data class DecryptedLink(
+        @JsonProperty("server") val server: String,
+        @JsonProperty("url") val url: String
+    )
 
     override suspend fun loadLinks(
         data: String,
@@ -241,7 +320,7 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // DELAY 2.5 DETIK UNTUK SERIES MEMASTIKAN JS TER-LOAD
+        // Script ini dilengkapi proteksi Anti-Crash dan Waktu Tunggu 3 detik
         val injectionScript = """
             setTimeout(function() {
                 try {
@@ -249,10 +328,14 @@ class LayarKacaProvider : MainAPI() {
                     var res = [];
                     for(var i=0; i<btns.length; i++) {
                         var srv = btns[i].getAttribute("data-server");
-                        var url = btns[i].getAttribute("data-url");
+                        var url = btns[i].getAttribute("data-url") || btns[i].getAttribute("href");
                         if(url && typeof _L === 'function') {
-                            var dec = _L(url);
-                            if(dec) res.push({server: srv, url: dec});
+                            try {
+                                var dec = _L(url);
+                                if(dec) res.push({server: srv, url: dec});
+                            } catch(e) {
+                                res.push({server: srv, url: url});
+                            }
                         } else if (url && url.startsWith("http")) {
                             res.push({server: srv, url: url});
                         }
@@ -266,17 +349,21 @@ class LayarKacaProvider : MainAPI() {
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
                     document.body.appendChild(dummy);
                 }
-            }, 2500); 
+            }, 3000);
         """.trimIndent()
 
-        val interceptor = WebViewResolver(Regex("""lk21-all-links\/(.*)"""), script = injectionScript)
+        val interceptor = WebViewResolver(
+            interceptUrl = Regex("""lk21-all-links\/(.*)"""),
+            script = injectionScript
+        )
         
         var jsonResult: String? = null
         try {
             val (request, _) = interceptor.resolveUsingWebView(url = currentUrl, referer = currentUrl)
             val interceptedUrl = request?.url?.toString() ?: ""
             if (interceptedUrl.contains("lk21-all-links/")) {
-                jsonResult = java.net.URLDecoder.decode(interceptedUrl.substringAfter("lk21-all-links/"), "UTF-8")
+                val encodedJson = interceptedUrl.substringAfter("lk21-all-links/")
+                jsonResult = java.net.URLDecoder.decode(encodedJson, "UTF-8")
             }
         } catch (e: Exception) { Log.e("LayarKacaProvider", "WebView Error: ${e.message}") }
 
@@ -294,10 +381,12 @@ class LayarKacaProvider : MainAPI() {
                         srv.contains("p2p") -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                         srv.contains("turbo") || srv.contains("vip") -> "https://turbovidhls.com/t/$id"
                         srv.contains("cast") || srv.contains("f16") -> "https://f16px.com/e/$id"
-                        srv.contains("hydrax") -> "https://abysscdn.com/?v=$id"
-                        else -> iframeUrl
+                        else -> null
                     }
-                    loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                    
+                    if (extractorUrl != null) {
+                        loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                    }
                 }
             }
         }
