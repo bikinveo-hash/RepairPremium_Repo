@@ -203,6 +203,8 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
+
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
@@ -239,14 +241,12 @@ class LayarKacaProvider : MainAPI() {
         val episodes = ArrayList<Episode>()
         val jsonScript = document.select("script#season-data").html()
 
-        // PERBAIKAN FATAL: Ekstrak Episode menggunakan Regex murni yang anti-gagal
         if (jsonScript.isNotBlank()) {
             val slugRegex = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"")
             val titleRegex = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"")
             val epRegex = Regex("\"episode_no\"\\s*:\\s*(\\d+)")
             val sRegex = Regex("\"s\"\\s*:\\s*(\\d+)")
 
-            // Cari setiap blok JSON object {...}
             Regex("\\{([^}]+)\\}").findAll(jsonScript).forEach { match ->
                 val obj = match.value
                 val slug = slugRegex.find(obj)?.groupValues?.get(1)
@@ -265,7 +265,6 @@ class LayarKacaProvider : MainAPI() {
             }
         }
         
-        // Cadangan tambahan jika script data tidak ada
         if (episodes.isEmpty()) {
             document.select("ul.episodes li a, div.mob-list-eps a, a.btn-primary:contains(Play)").forEach {
                 val href = it.attr("href")
@@ -308,7 +307,6 @@ class LayarKacaProvider : MainAPI() {
         val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
 
-        // Karena sekarang "episodes" PASTI terisi, dia akan masuk ke blok TvSeries yang benar!
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = tmdbPoster ?: fallbackPoster
@@ -387,10 +385,10 @@ class LayarKacaProvider : MainAPI() {
             rawSources.add(it)
         }
 
-        // TANGKAP PAKAI WEBVIEWRESOLVER (REGEX KETAT AGAR TIDAK TERJEBAK PRECONNECT)
+        // PERBAIKAN: Regex diperbarui berdasarkan data request Network untuk menangkap video.php secara langsung
         if (rawSources.isEmpty()) {
             try {
-                val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch)")
+                val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
                 val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = response.url
                 
