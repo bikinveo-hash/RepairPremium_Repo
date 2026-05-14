@@ -320,15 +320,7 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // =========================================================================
-        // TRIK INJEKSI WEBVIEWRESOLVER UNTUK MENGAMBIL SEMUA SERVER SEKALIGUS
-        // =========================================================================
-        
-        // Script ini akan dijalankan di dalam WebView. Tugasnya:
-        // 1. Loop semua tombol server
-        // 2. Dekripsi URL nya menggunakan _L() bawaan mereka
-        // 3. Masukkan ke array JSON
-        // 4. Bikin request palsu (img src) yang mengarah ke lk21-all-links/...
+        // Trik Injeksi Script: Memaksa WebView mendaftar semua server dan dekripsi JS LK21
         val injectionScript = """
             setTimeout(function() {
                 var btns = document.querySelectorAll("ul#player-list li a");
@@ -347,10 +339,9 @@ class LayarKacaProvider : MainAPI() {
                 var dummy = document.createElement("img");
                 dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
                 document.body.appendChild(dummy);
-            }, 1500); // Tunggu 1.5 detik agar Cloudflare & player.js selesai loading
+            }, 1500);
         """.trimIndent()
 
-        // Kita menyuruh WebViewResolver HANYA BERHENTI jika ada request ke lk21-all-links/
         val interceptor = WebViewResolver(
             interceptUrl = Regex("""lk21-all-links\/(.*)"""),
             script = injectionScript
@@ -358,22 +349,15 @@ class LayarKacaProvider : MainAPI() {
         
         var jsonResult: String? = null
         try {
-            val (request, _) = interceptor.resolveUsingWebView(
-                url = currentUrl,
-                referer = currentUrl
-            )
-            
-            // Tangkap hasil injeksi dari URL Request palsu yang kita buat
+            val (request, _) = interceptor.resolveUsingWebView(url = currentUrl, referer = currentUrl)
             val interceptedUrl = request?.url?.toString() ?: ""
             if (interceptedUrl.contains("lk21-all-links/")) {
                 val encodedJson = interceptedUrl.substringAfter("lk21-all-links/")
                 jsonResult = java.net.URLDecoder.decode(encodedJson, "UTF-8")
             }
-        } catch (e: Exception) {
-            Log.e("LayarKacaProvider", "WebView Error: ${e.message}")
-        }
+        } catch (e: Exception) { Log.e("LayarKacaProvider", "WebView Error: ${e.message}") }
 
-        // PROSES MENGIRIM SEMUA SERVER KE EXTRACTOR MASING-MASING
+        // Membagi-bagikan link ke Extractor masing-masing
         if (!jsonResult.isNullOrBlank()) {
             val extractedLinks = tryParseJson<List<DecryptedLink>>(jsonResult)
             
@@ -387,9 +371,9 @@ class LayarKacaProvider : MainAPI() {
                     
                     val extractorUrl = when (serverName.lowercase()) {
                         "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                        "turbovip" -> "https://emturbovid.com/e/$id"
+                        "turbovip" -> "https://turbovidhls.com/t/$id"
                         "cast" -> "https://f16px.com/e/$id"
-                        "hydrax" -> "https://hydrax.net/watch?v=$id"
+                        "hydrax" -> "https://abysscdn.com/?v=$id"
                         else -> iframeUrl
                     }
                     
