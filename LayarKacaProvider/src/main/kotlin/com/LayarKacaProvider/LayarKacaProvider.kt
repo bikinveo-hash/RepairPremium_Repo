@@ -45,12 +45,11 @@ class LayarKacaProvider : MainAPI() {
                 s[i] = s[j]
                 s[j] = temp
                 val kStream = s[(s[i] + s[j]) % 256]
-                // Menggunakan 'and 0xFF' untuk mensimulasikan unsigned byte JS
                 result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
             }
             String(result, Charsets.UTF_8)
         } catch (e: Exception) {
-            "" // Jika gagal decode, return string kosong
+            "" 
         }
     }
 
@@ -341,32 +340,32 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // Ambil elemen yang mengandung data-url (enkripsi RC4)
         val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
         val iframes = document.select("iframe").mapNotNull { it.attr("src").takeIf { u -> u.isNotBlank() } }
         
         val rawSources = mutableListOf<String>()
         val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
+        val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
         
-        // Kunci dekripsi berdasarkan temuan bytecode di player.js
+        // Memaksimalkan semua kemungkinan Kunci RC4
         val possibleKeys = listOfNotNull(
-            host, 
-            host?.substringAfter("www."), 
-            "lk21official.cc", 
+            host,
+            baseDomain,
+            "lk21official.cc",
+            "nontondrama.my",
+            "tv8.lk21official.cc",
             "tv4.nontondrama.my",
-            "tv8.lk21official.cc"
-        )
+            "lk21.party"
+        ).distinct()
 
-        // LOOP DEKRIPSI OTOMATIS
         (playerLinks + iframes).forEach { encryptedString ->
             var decoded = ""
-            if (encryptedString.startsWith("http")) {
+            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
                 decoded = encryptedString
             } else {
                 for (key in possibleKeys) {
                     val attempt = decryptRC4(key, encryptedString)
-                    // Validasi: jika hasil dekripsi diawali dengan 'http', berarti kunci cocok!
-                    if (attempt.startsWith("http")) {
+                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
                         decoded = attempt
                         break
                     }
@@ -374,6 +373,8 @@ class LayarKacaProvider : MainAPI() {
             }
             
             if (decoded.isNotBlank()) {
+                if (decoded.startsWith("//")) decoded = "https:$decoded"
+                
                 // Konversi direct P2P bypass
                 if (decoded.contains("playeriframe.sbs/iframe/p2p/")) {
                     val id = decoded.substringAfterLast("/").substringBefore("?")
@@ -386,43 +387,55 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
-            val directLoaded = loadExtractor(url, currentUrl, subtitleCallback, callback)
-            if (!directLoaded) {
+            var finalUrl = url
+            
+            // Resolve iframe di playeriframe.sbs jika servernya bukan P2P
+            if (finalUrl.contains("playeriframe.sbs")) {
                 try {
-                    val response = app.get(url, referer = currentUrl)
-                    val wrapperUrl = response.url
-                    val iframePage = response.document
-
-                    iframePage.select("iframe").forEach { 
-                        loadExtractor(fixUrl(it.attr("src")), wrapperUrl, subtitleCallback, callback) 
-                    }
-                    
-                    val scriptHtml = iframePage.html().replace("\\/", "/")
-                    Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                        val streamUrl = match.value
-                        val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                        val originUrl = try { URI(wrapperUrl).let { "${it.scheme}://${it.host}" } } catch(e:Exception) { "https://playeriframe.sbs" }
-                        
-                        val headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                            "Referer" to wrapperUrl,
-                            "Origin" to originUrl
-                        )
-
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "LK21 VIP",
-                                name = "LK21 VIP",
-                                url = streamUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = wrapperUrl
-                                this.quality = Qualities.Unknown.value
-                                this.headers = headers
-                            }
-                        )
+                    val response = app.get(finalUrl, referer = currentUrl)
+                    val iframe = response.document.selectFirst("iframe")?.attr("src")
+                    if (!iframe.isNullOrBlank()) {
+                        finalUrl = fixUrl(iframe)
                     }
                 } catch (e: Exception) {}
+            }
+
+            // PERBAIKAN FINAL: Panggil Extractor SECARA MANUAL agar tidak dilewatkan oleh loadExtractor()
+            when {
+                finalUrl.contains("cloud.hownetwork.xyz") -> {
+                    P2PExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
+                }
+                finalUrl.contains("emturbovid.com") -> {
+                    EmturbovidExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
+                }
+                finalUrl.contains("f16px.com") -> {
+                    F16Extractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
+                }
+                else -> {
+                    // Fallback jika bukan salah satu dari server di atas
+                    val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
+                    if (!directLoaded) {
+                        try {
+                            val response = app.get(finalUrl, referer = currentUrl)
+                            val scriptHtml = response.document.html().replace("\\/", "/")
+                            Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
+                                val streamUrl = match.value
+                                val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = "LK21 VIP",
+                                        name = "LK21 VIP",
+                                        url = streamUrl,
+                                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = finalUrl
+                                        this.quality = Qualities.Unknown.value
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {}
+                    }
+                }
             }
         }
         return true
