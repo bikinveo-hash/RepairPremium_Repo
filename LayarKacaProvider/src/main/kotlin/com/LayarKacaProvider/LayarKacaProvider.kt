@@ -1,12 +1,17 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.WebViewResolver
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver // <--- INI KUNCI FIX ERROR COMPILE-NYA BRO!
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -177,7 +182,7 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
-        var response = app.get(cleanUrl)
+        var response = app.get(cleanUrl, timeout = 30)
         var document = response.document
 
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
@@ -185,7 +190,7 @@ class LayarKacaProvider : MainAPI() {
             val newUrl = redirectButton.attr("href")
             if (newUrl.isNotEmpty()) {
                 cleanUrl = fixUrl(newUrl)
-                response = app.get(cleanUrl)
+                response = app.get(cleanUrl, timeout = 30)
                 document = response.document
             }
         }
@@ -272,6 +277,12 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
+                    ))
+                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -284,11 +295,16 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false
+                    ))
+                }
             }
         }
     }
 
-    // --- KUNCI PENYELESAIAN MASALAH: WEBVIEW RESOLVER MURNI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -303,24 +319,24 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Kita gunakan WebView Android untuk memuat halaman, biarkan Javacript modern mereka berjalan, 
-        // lalu kita "cegat" permintaan jaringannya saat Iframe videonya dimuat!
+        // MENGGUNAKAN WEBVIEW RESOLVER
+        // Ini akan membiarkan Chrome/WebView Android merender halaman asli, 
+        // lalu kita "cegat" (intercept) link murni iframe-nya saat muncul.
         val interceptor = WebViewResolver(Regex("""playeriframe\.sbs\/iframe\/(p2p|turbovip|cast|hydrax)\/[A-Za-z0-9_-]+"""))
         
         var iframeUrl: String? = null
         try {
-            // Proses ini persis seperti JSDOM, tapi terjadi di balik layar Cloudstream
+            // Karena ini WebViewResolver, hasil dari app.get().url adalah URL yang di-intercept!
             iframeUrl = app.get(currentUrl, interceptor = interceptor, timeout = 30).url
         } catch (e: Exception) {
             Log.e("LayarKacaProvider", "WebView Intercept Error: ${e.message}")
         }
 
-        // Kalau Iframe URL berhasil ditangkap
         if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
             val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
             val id = iframeUrl.substringAfterLast("/")
             
-            // Konversi ke Extractor milikmu
+            // Redirect link murni ke Extractor kamu yang terbukti kebal CORS!
             val extractorUrl = when (serverName.lowercase()) {
                 "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                 "turbovip" -> "https://emturbovid.com/e/$id"
