@@ -68,17 +68,19 @@ open class P2PExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
-        
-        // PERBAIKAN: Dihapus header "X-Requested-With" supaya tidak terdeteksi bot oleh Cloudflare
         val headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "Referer" to url,
             "Origin" to mainUrl
+            // Sengaja tidak memakai X-Requested-With agar Stealth!
         )
         val formBody = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
         val sources = mutableListOf<ExtractorLink>()
         
         try {
+            // PANCING CLOUDFLARE: Melakukan GET request terlebih dahulu agar cookie Cloudflare tersimpan.
+            app.get(url, headers = headers)
+
             val response = app.post(apiUrl, headers = headers, data = formBody).text
             val json = tryParseJson<HownetworkResponse>(response)
             val videoUrl = json?.file ?: json?.link
@@ -95,7 +97,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 EXTRACTOR (FINAL BOSS FIX: NO REFERER & EXACT USER-AGENT)
+// 3. F16 EXTRACTOR
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -137,7 +139,6 @@ open class F16Extractor : ExtractorApi() {
             val jwtSignature = randomHex(43)
             val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
 
-            // KUNCI UTAMA: Kita patenkan 1 User-Agent untuk API & Player
             val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
             val headers = mapOf(
@@ -174,7 +175,6 @@ open class F16Extractor : ExtractorApi() {
                 if (decryptedJson != null) {
                     val result = tryParseJson<DecryptedResponse>(decryptedJson)
                     
-                    // FIX: Hanya pakai User-Agent yang sama, TANPA Referer/Origin
                     val videoHeaders = mapOf(
                         "User-Agent" to customUserAgent
                     )
@@ -182,8 +182,6 @@ open class F16Extractor : ExtractorApi() {
                     result?.sources?.forEach { source ->
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
-                            
-                            // KEMBALI KE newExtractorLink AGAR LOLOS BUILD (TIDAK DEPRECATED)
                             sources.add(
                                 newExtractorLink(
                                     source = "CAST",
@@ -191,12 +189,11 @@ open class F16Extractor : ExtractorApi() {
                                     url = streamUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.referer = "" // INI KUNCI UTAMANYA: KOSONGKAN REFERER
+                                    this.referer = "" 
                                     this.quality = getQualityFromName(source.label)
                                     this.headers = videoHeaders
                                 }
                             )
-                            
                         }
                     }
                 }
