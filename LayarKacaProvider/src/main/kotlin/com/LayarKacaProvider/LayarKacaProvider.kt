@@ -1,5 +1,6 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -300,6 +301,11 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    data class DecryptedLink(
+        @JsonProperty("server") val server: String,
+        @JsonProperty("url") val url: String
+    )
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -314,41 +320,84 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // WebViewResolver akan mencari iframe yang memuat P2P, Turbovip, Cast, atau Hydrax
+        // =========================================================================
+        // TRIK INJEKSI WEBVIEWRESOLVER UNTUK MENGAMBIL SEMUA SERVER SEKALIGUS
+        // =========================================================================
+        
+        // Script ini akan dijalankan di dalam WebView. Tugasnya:
+        // 1. Loop semua tombol server
+        // 2. Dekripsi URL nya menggunakan _L() bawaan mereka
+        // 3. Masukkan ke array JSON
+        // 4. Bikin request palsu (img src) yang mengarah ke lk21-all-links/...
+        val injectionScript = """
+            setTimeout(function() {
+                var btns = document.querySelectorAll("ul#player-list li a");
+                var res = [];
+                for(var i=0; i<btns.length; i++) {
+                    var srv = btns[i].getAttribute("data-server");
+                    var url = btns[i].getAttribute("data-url");
+                    if(url && typeof _L === 'function') {
+                        try {
+                            var dec = _L(url);
+                            if(dec) res.push({server: srv, url: dec});
+                        } catch(e) {}
+                    }
+                }
+                var resultStr = encodeURIComponent(JSON.stringify(res));
+                var dummy = document.createElement("img");
+                dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
+                document.body.appendChild(dummy);
+            }, 1500); // Tunggu 1.5 detik agar Cloudflare & player.js selesai loading
+        """.trimIndent()
+
+        // Kita menyuruh WebViewResolver HANYA BERHENTI jika ada request ke lk21-all-links/
         val interceptor = WebViewResolver(
-            interceptUrl = Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/.*""")
+            interceptUrl = Regex("""lk21-all-links\/(.*)"""),
+            script = injectionScript
         )
         
-        var iframeUrl: String? = null
+        var jsonResult: String? = null
         try {
             val (request, _) = interceptor.resolveUsingWebView(
                 url = currentUrl,
                 referer = currentUrl
             )
             
-            iframeUrl = request?.url?.toString()
+            // Tangkap hasil injeksi dari URL Request palsu yang kita buat
+            val interceptedUrl = request?.url?.toString() ?: ""
+            if (interceptedUrl.contains("lk21-all-links/")) {
+                val encodedJson = interceptedUrl.substringAfter("lk21-all-links/")
+                jsonResult = java.net.URLDecoder.decode(encodedJson, "UTF-8")
+            }
         } catch (e: Exception) {
             Log.e("LayarKacaProvider", "WebView Error: ${e.message}")
         }
 
-        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
-            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
+        // PROSES MENGIRIM SEMUA SERVER KE EXTRACTOR MASING-MASING
+        if (!jsonResult.isNullOrBlank()) {
+            val extractedLinks = tryParseJson<List<DecryptedLink>>(jsonResult)
             
-            // KUNCI PERBAIKAN: Menghapus query / parameter / "/embed" di belakang ID
-            var id = iframeUrl.substringAfter("iframe/$serverName/")
-            id = id.substringBefore("?").substringBefore("/")
-            
-            val extractorUrl = when (serverName.lowercase()) {
-                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                "turbovip" -> "https://emturbovid.com/e/$id"
-                "cast" -> "https://f16px.com/e/$id"
-                "hydrax" -> "https://hydrax.net/watch?v=$id"
-                else -> iframeUrl
+            extractedLinks?.forEach { decrypted ->
+                val iframeUrl = decrypted.url
+                val serverName = decrypted.server
+                
+                if (iframeUrl.contains("playeriframe.sbs")) {
+                    var id = iframeUrl.substringAfter("iframe/$serverName/")
+                    id = id.substringBefore("?").substringBefore("/")
+                    
+                    val extractorUrl = when (serverName.lowercase()) {
+                        "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                        "turbovip" -> "https://emturbovid.com/e/$id"
+                        "cast" -> "https://f16px.com/e/$id"
+                        "hydrax" -> "https://hydrax.net/watch?v=$id"
+                        else -> iframeUrl
+                    }
+                    
+                    loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                }
             }
-            
-            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
         } else {
-            Log.e("LayarKacaProvider", "Gagal menangkap URL Iframe lewat WebViewResolver.")
+            Log.e("LayarKacaProvider", "Gagal mendapatkan JSON dari WebViewResolver")
         }
         
         return true
