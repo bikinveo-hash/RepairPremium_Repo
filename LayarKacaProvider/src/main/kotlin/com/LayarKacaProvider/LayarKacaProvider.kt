@@ -16,8 +16,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class LayarKacaProvider : MainAPI() {
-    // 1. GANTI DOMAIN KE YANG PALING AKTIF DAN ANTI-XMOVIE
-    override var mainUrl = "https://tv4.nontondrama.my"
+    override var mainUrl = "https://tv10.lk21official.cc" // Domain Anti-Error untuk Movie
     override var name = "LayarKaca21"
     override val hasMainPage = true
     override var lang = "id"
@@ -180,6 +179,32 @@ class LayarKacaProvider : MainAPI() {
         var response = app.get(cleanUrl)
         var document = response.document
 
+        // BYPASS XMOVIE & SERIES REDIRECT 
+        if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
+            val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
+            cleanUrl = if (path.contains("season") || path.contains("episode")) {
+                "https://tv4.nontondrama.my$path"
+            } else {
+                "https://tv10.lk21official.cc$path"
+            }
+            response = app.get(cleanUrl)
+            document = response.document
+        }
+
+        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        if (redirectButton != null) {
+            var newUrl = redirectButton.attr("href")
+            if (newUrl.isNotEmpty()) {
+                cleanUrl = fixUrl(newUrl)
+                if (cleanUrl.contains("series") || cleanUrl.contains("nontondrama")) {
+                    val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
+                    cleanUrl = "https://tv4.nontondrama.my$path"
+                }
+                response = app.get(cleanUrl)
+                document = response.document
+            }
+        }
+
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
         
@@ -200,7 +225,7 @@ class LayarKacaProvider : MainAPI() {
 
         val episodes = ArrayList<Episode>()
         
-        // 2. PERBAIKAN JSOUP: Gunakan .data() agar script JSON bisa terbaca sempurna
+        // PARSER EPISODE ANTI-GAGAL
         val jsonScript = document.select("script#season-data").let { it.data().ifBlank { it.html() } }
 
         if (jsonScript.isNotBlank()) {
@@ -298,9 +323,9 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-
-        // 3. SISTEM ANTI-TERSESAT: Jika URL yang masuk adalah Halaman Utama Series (Bukan Episode), paksa ganti ke Episode 1!
-        if (!currentUrl.contains("episode", ignoreCase = true)) {
+        
+        // ANTI-TERSESAT: Pastikan memuat episode
+        if (!currentUrl.contains("episode", ignoreCase = true) && currentUrl.contains("nontondrama")) {
             try {
                 val doc = app.get(currentUrl).document
                 val jsonScript = doc.select("script#season-data").let { it.data().ifBlank { it.html() } }
@@ -313,9 +338,10 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
+        // 1. TANGKAP PAKAI WEBVIEWRESOLVER (DENGAN TAMBAHAN TURBOVIDHLS & TURBOVIPLAY)
         try {
-            // WEBVIEWRESOLVER: Regex disetel sangat presisi agar langsung menangkap video.php atau playeriframe.sbs/iframe
-            val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
+            // Regex ini otomatis akan menangkap file m3u8 langsung jika Cloudflare melepasnya!
+            val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|turbovidhls\\.com/t|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php|turboviplay\\.com/.*\\.m3u8)")
             val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
             val interceptedUrl = response.url
             
@@ -324,16 +350,49 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
+        // 2. FALLBACK MANUAL
+        if (rawSources.isEmpty()) {
+            val document = app.get(currentUrl).document
+            document.select("iframe").mapNotNull { it.attr("src") }.filter { 
+                it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
+            }.forEach {
+                rawSources.add(it)
+            }
+        }
+
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
             var finalUrl = url
             
-            // Bypass P2P Iframe ke API
+            // JIKA DAPAT LINK M3U8 LANGSUNG DARI TURBOVIPLAY (Berkat cURL kamu!)
+            if (finalUrl.contains("turboviplay.com") && finalUrl.endsWith(".m3u8", ignoreCase = true)) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "TurboVIP",
+                        name = "TurboVIP HD",
+                        url = finalUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "https://turbovidhls.com/"
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+                return@forEach
+            }
+
+            // BYPASS P2P
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
-            } else if (finalUrl.contains("playeriframe.sbs")) {
+            } 
+            // BYPASS TURBOVIP
+            else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
+                val id = finalUrl.substringAfter("turbovip/").substringBefore("/")
+                finalUrl = "https://turbovidhls.com/t/$id"
+            } 
+            // FALLBACK PLAYERIFRAME
+            else if (finalUrl.contains("playeriframe.sbs")) {
                 try {
                     val response = app.get(finalUrl, referer = currentUrl)
                     val iframe = response.document.selectFirst("iframe")?.attr("src")
@@ -347,7 +406,7 @@ class LayarKacaProvider : MainAPI() {
                 finalUrl.contains("cloud.hownetwork.xyz") -> {
                     P2PExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
                 }
-                finalUrl.contains("emturbovid.com") -> {
+                finalUrl.contains("emturbovid.com") || finalUrl.contains("turbovidhls.com") -> {
                     EmturbovidExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
                 }
                 finalUrl.contains("f16px.com") -> {
