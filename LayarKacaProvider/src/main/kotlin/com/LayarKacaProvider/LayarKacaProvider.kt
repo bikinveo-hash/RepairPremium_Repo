@@ -320,37 +320,34 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Script Anti-Hang: Klik Tombol dan Tunggu Iframe Berubah (Max 2000ms)
+        // Script Elegan: Hanya menggunakan _L() murni tanpa perlu robot klik. Super Cepat!
         val injectionScript = """
-            setTimeout(async function() {
+            setTimeout(function() {
                 try {
                     var btns = document.querySelectorAll("ul#player-list li a");
-                    var iframe = document.getElementById("main-player") || document.querySelector("iframe");
                     var res = [];
-                    
-                    if (btns.length === 0 && iframe && iframe.src.includes("playeriframe.sbs")) {
-                         var srv = "p2p";
-                         if (iframe.src.includes("turbo") || iframe.src.includes("vip")) srv = "turbovip";
-                         if (iframe.src.includes("cast") || iframe.src.includes("f16")) srv = "cast";
-                         res.push({server: srv, url: iframe.src});
-                    } else if (btns.length > 0) {
-                        for(var i=0; i<btns.length; i++) {
-                            var srv = btns[i].getAttribute("data-server");
-                            btns[i].click();
-                            
-                            var waitCount = 0;
-                            var lastSrc = iframe ? iframe.src : "";
-                            while(waitCount < 20) { 
-                                await new Promise(r => setTimeout(r, 100));
-                                iframe = document.getElementById("main-player") || document.querySelector("iframe");
-                                if(iframe && iframe.src && iframe.src !== lastSrc && iframe.src.includes("playeriframe.sbs")) {
-                                    res.push({server: srv, url: iframe.src});
-                                    break;
-                                }
-                                waitCount++;
-                            }
+                    for(var i=0; i<btns.length; i++) {
+                        var srv = btns[i].getAttribute("data-server");
+                        var url = btns[i].getAttribute("data-url");
+                        if(url && typeof _L === 'function') {
+                            try {
+                                var dec = _L(url);
+                                if(dec) res.push({server: srv, url: dec});
+                            } catch(e) {}
                         }
                     }
+                    
+                    // Fallback jika tombol tidak ada (Mode Movie Langsung)
+                    if (btns.length === 0) {
+                        var iframe = document.getElementById("main-player") || document.querySelector("iframe");
+                        if (iframe && iframe.src && iframe.src.includes("playeriframe.sbs")) {
+                             var srv = "p2p";
+                             if (iframe.src.includes("turbo") || iframe.src.includes("vip")) srv = "turbovip";
+                             if (iframe.src.includes("cast") || iframe.src.includes("f16")) srv = "cast";
+                             res.push({server: srv, url: iframe.src});
+                        }
+                    }
+                    
                     var resultStr = encodeURIComponent(JSON.stringify(res));
                     var dummy = document.createElement("img");
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
@@ -360,7 +357,7 @@ class LayarKacaProvider : MainAPI() {
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
                     document.body.appendChild(dummy);
                 }
-            }, 2000); 
+            }, 2500); 
         """.trimIndent()
 
         val interceptor = WebViewResolver(
@@ -381,7 +378,9 @@ class LayarKacaProvider : MainAPI() {
                     val srv = decrypted.server.lowercase()
                     
                     if (iframeUrl.contains("playeriframe.sbs")) {
-                        val id = iframeUrl.substringBefore("?").trimEnd('/').substringAfterLast("/")
+                        // BUG EMBED TERBONGKAR: Menghapus teks "/embed" dari URL agar ID bersih 100%!
+                        val cleanIframeUrl = iframeUrl.substringBefore("?").replace("/embed", "").trimEnd('/')
+                        val id = cleanIframeUrl.substringAfterLast("/")
                         
                         val extractorUrl = when {
                             srv.contains("p2p") -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
