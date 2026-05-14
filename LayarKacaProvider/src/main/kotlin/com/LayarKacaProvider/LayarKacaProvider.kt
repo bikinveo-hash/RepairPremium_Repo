@@ -176,7 +176,9 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
-        var response = app.get(cleanUrl, timeout = 30) // PENAMBAHAN TIMEOUT LEBIH LAMA AGAR TIDAK GAGAL
+        
+        // Timeout disetel sedikit panjang agar halaman web sempat merender iframe-nya
+        var response = app.get(cleanUrl, timeout = 30)
         var document = response.document
 
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
@@ -248,6 +250,18 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
+        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
+        }
+        if (trailerUrl.isNullOrEmpty()) {
+            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
+        }
+        
+        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
+        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
+
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = tmdbPoster ?: fallbackPoster
@@ -259,6 +273,12 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
+                    ))
+                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -271,11 +291,17 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
+                
+                if (!finalTrailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(
+                        extractorUrl = finalTrailerUrl, referer = null, raw = false
+                    ))
+                }
             }
         }
     }
 
-    // --- CARA PALING GAMPANG: MENGAMBIL ID ASLI TANPA JS! ---
+    // --- CARA FINAL: MEMETAKAN LANGSUNG DOMAIN EXTRACTOR ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -291,41 +317,38 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // Trik Ninja: Di script HTML, ID asli selalu diletakkan tersembunyi
-        // di dalam kode-kode sebelum ia di-enkripsi!
         val htmlContent = document.html()
         
-        // Kita gunakan REGEX untuk menangkap "ID Rahasia" (contoh: Iw4oOiQLWicrIxJhIkM-dXBIe3toLjIDBh0oFBwEYj0hHH56dg)
+        // Kita tangkap semua ID tersembunyi dengan pintar, lalu bungkus dengan domain 
+        // yang secara otomatis akan memanggil file Extractor.kt mu!
         val p2pIdRegex = Regex("""cloud\.hownetwork\.xyz\/video\.php\?id=([A-Za-z0-9_-]+)""")
         val turbovipIdRegex = Regex("""emturbovid\.com\/e\/([A-Za-z0-9_-]+)""")
         val castIdRegex = Regex("""f16px\.com\/e\/([A-Za-z0-9_-]+)""")
         
-        // Cek P2P
-        val p2pMatch = p2pIdRegex.find(htmlContent)
-        if (p2pMatch != null) {
-            val id = p2pMatch.groupValues[1]
+        // Panggil P2P Extractor
+        p2pIdRegex.findAll(htmlContent).forEach { match ->
+            val id = match.groupValues[1]
+            // API Cloudstream membutuhkan prefix url yang sama dengan mainUrl milik P2PExtractor
             loadExtractor("https://cloud.hownetwork.xyz/api2.php?id=$id", currentUrl, subtitleCallback, callback)
         }
         
-        // Cek Turbovip
-        val turbovipMatch = turbovipIdRegex.find(htmlContent)
-        if (turbovipMatch != null) {
-            val id = turbovipMatch.groupValues[1]
+        // Panggil Turbovip Extractor
+        turbovipIdRegex.findAll(htmlContent).forEach { match ->
+            val id = match.groupValues[1]
             loadExtractor("https://emturbovid.com/e/$id", currentUrl, subtitleCallback, callback)
         }
 
-        // Cek Cast
-        val castMatch = castIdRegex.find(htmlContent)
-        if (castMatch != null) {
-            val id = castMatch.groupValues[1]
+        // Panggil CAST (F16) Extractor
+        castIdRegex.findAll(htmlContent).forEach { match ->
+            val id = match.groupValues[1]
             loadExtractor("https://f16px.com/e/$id", currentUrl, subtitleCallback, callback)
         }
         
-        // Ekstraksi umum (jika menemukan Iframe langsung)
+        // Cadangan: Tarik secara manual jika ada Iframe yang lolos langsung
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
-            if (src.startsWith("http")) {
-                loadExtractor(src, currentUrl, subtitleCallback, callback)
+            if (src.contains("hownetwork.xyz") || src.contains("emturbovid.com") || src.contains("f16px.com")) {
+                 loadExtractor(src, currentUrl, subtitleCallback, callback)
             }
         }
 
