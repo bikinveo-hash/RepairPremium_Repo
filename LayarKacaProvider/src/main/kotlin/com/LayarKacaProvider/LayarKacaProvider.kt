@@ -1,17 +1,12 @@
 package com.LayarKacaProvider
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver // <--- INI KUNCI FIX ERROR COMPILE-NYA BRO!
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -305,6 +300,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    // --- EKSEKUSI MENGGUNAKAN WEBVIEW RESOLVER MURNI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -319,24 +315,35 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // MENGGUNAKAN WEBVIEW RESOLVER
-        // Ini akan membiarkan Chrome/WebView Android merender halaman asli, 
-        // lalu kita "cegat" (intercept) link murni iframe-nya saat muncul.
-        val interceptor = WebViewResolver(Regex("""playeriframe\.sbs\/iframe\/(p2p|turbovip|cast|hydrax)\/[A-Za-z0-9_-]+"""))
+        // 1. Inisialisasi WebViewResolver.
+        // Regex ini akan membuat WebView berhenti dan memberikan Request-nya saat dia 
+        // mencoba memuat URL iframe dari salah satu server ini.
+        val interceptor = WebViewResolver(
+            interceptUrl = Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/[A-Za-z0-9_-]+""")
+        )
         
         var iframeUrl: String? = null
         try {
-            // Karena ini WebViewResolver, hasil dari app.get().url adalah URL yang di-intercept!
-            iframeUrl = app.get(currentUrl, interceptor = interceptor, timeout = 30).url
+            // 2. Memanggil fungsi bawaan resolveUsingWebView dari file WebViewResolver.android.kt
+            // Ini akan memuat halaman LK21 di WebView, membiarkan JS mereka bekerja secara normal,
+            // dan langsung mengembalikan request yang cocok dengan regex di atas.
+            val (request, _) = interceptor.resolveUsingWebView(
+                url = currentUrl,
+                referer = currentUrl
+            )
+            
+            // 3. Tangkap URL dari hasil request
+            iframeUrl = request?.url?.toString()
         } catch (e: Exception) {
-            Log.e("LayarKacaProvider", "WebView Intercept Error: ${e.message}")
+            Log.e("LayarKacaProvider", "WebView Error: ${e.message}")
         }
 
+        // 4. Jika kita berhasil menangkap Iframe URL-nya
         if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
             val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
             val id = iframeUrl.substringAfterLast("/")
             
-            // Redirect link murni ke Extractor kamu yang terbukti kebal CORS!
+            // Memetakan ke ExtractorApi kamu yang terbukti jalan dan bebas CORS!
             val extractorUrl = when (serverName.lowercase()) {
                 "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                 "turbovip" -> "https://emturbovid.com/e/$id"
