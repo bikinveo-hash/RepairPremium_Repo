@@ -314,14 +314,13 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Regex yang jauh lebih santai untuk mencegat SEMUA jenis format url dari Iframe LK21
+        // WebViewResolver akan mencari iframe yang memuat P2P, Turbovip, Cast, atau Hydrax
         val interceptor = WebViewResolver(
-            interceptUrl = Regex("""playeriframe\.sbs\/iframe\/(p2p|turbovip|cast|hydrax)\/.*""")
+            interceptUrl = Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/.*""")
         )
         
         var iframeUrl: String? = null
         try {
-            // Biarkan WebView Android mengeksekusi Javascript-nya...
             val (request, _) = interceptor.resolveUsingWebView(
                 url = currentUrl,
                 referer = currentUrl
@@ -332,17 +331,13 @@ class LayarKacaProvider : MainAPI() {
             Log.e("LayarKacaProvider", "WebView Error: ${e.message}")
         }
 
-        // Jika berhasil dicegat, bersihkan URL-nya dari parameter aneh seperti /embed
         if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
             val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
             
-            // Kita ambil ID video dengan menghapus /embed jika ada
+            // KUNCI PERBAIKAN: Menghapus query / parameter / "/embed" di belakang ID
             var id = iframeUrl.substringAfter("iframe/$serverName/")
-            if (id.contains("/")) {
-                id = id.substringBefore("/")
-            }
+            id = id.substringBefore("?").substringBefore("/")
             
-            // Teruskan ke Extractor yang sesuai dengan nama domain
             val extractorUrl = when (serverName.lowercase()) {
                 "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                 "turbovip" -> "https://emturbovid.com/e/$id"
