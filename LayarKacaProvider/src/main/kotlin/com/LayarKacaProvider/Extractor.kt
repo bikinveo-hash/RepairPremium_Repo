@@ -10,7 +10,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.network.WebViewResolver
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -51,9 +50,12 @@ open class P2PExtractor : ExtractorApi() {
                 sources.add(newExtractorLink(name, "P2P HD", videoUrl, ExtractorLinkType.M3U8) {
                     this.referer = magicReferer
                     this.quality = Qualities.Unknown.value
+                    // Header sakti untuk bypass Error 2004 di ExoPlayer
                     this.headers = mapOf(
                         "User-Agent" to customUserAgent,
-                        "Referer" to magicReferer
+                        "Referer" to magicReferer,
+                        "Origin" to mainUrl,
+                        "Accept" to "*/*"
                     )
                 })
             }
@@ -63,7 +65,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR 
+// 2. TURBOVIP EXTRACTOR
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -84,9 +86,12 @@ open class EmturbovidExtractor : ExtractorApi() {
                 sources.add(newExtractorLink(name, "Turbovip HD", m3u8Url, ExtractorLinkType.M3U8) {
                     this.referer = magicReferer
                     this.quality = Qualities.Unknown.value
+                    // Header sakti untuk bypass Error 3001 di ExoPlayer
                     this.headers = mapOf(
                         "User-Agent" to customUserAgent,
-                        "Referer" to magicReferer
+                        "Referer" to magicReferer,
+                        "Origin" to mainUrl,
+                        "Accept" to "*/*"
                     )
                 })
             }
@@ -139,6 +144,7 @@ open class F16Extractor : ExtractorApi() {
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId"
             )
 
+            // Mengirim request kosong agar body terbaca "Content-Length: 0"
             val challengeRes = app.post(challengeUrl, headers = headersBase, text = "").text
             val challengeJson = tryParseJson<F16Challenge>(challengeRes)
             
@@ -159,6 +165,7 @@ open class F16Extractor : ExtractorApi() {
                 this["x-embed-parent"] = pageUrl
                 this["x-embed-referer"] = magicReferer
             }
+            
             val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.91))
             val responseText = app.post(apiUrl, headers = headersPlayback, json = jsonPayload).text
             
@@ -182,7 +189,8 @@ open class F16Extractor : ExtractorApi() {
                                 this.headers = mapOf(
                                     "User-Agent" to customUserAgent,
                                     "Origin" to mainUrl, 
-                                    "Referer" to magicReferer
+                                    "Referer" to magicReferer,
+                                    "Accept" to "*/*"
                                 )
                             })
                         }
@@ -203,44 +211,5 @@ open class F16Extractor : ExtractorApi() {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, spec)
             String(cipher.doFinal(cipherText), Charsets.UTF_8)
         } catch (e: Exception) { null }
-    }
-}
-
-// ============================================================================
-// 4. HYDRAX EXTRACTOR (VIA WEBVIEW RESOLVER)
-// ============================================================================
-open class HydraxExtractor : ExtractorApi() {
-    override var name = "Hydrax"
-    override var mainUrl = "https://abysscdn.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
-        try {
-            val id = url.substringAfterLast("v=").substringBefore("&").substringAfterLast("/")
-            val targetUrl = "$mainUrl/?v=$id"
-            
-            val interceptor = WebViewResolver(Regex(""".*\.m3u8.*"""))
-            val (request, _) = interceptor.resolveUsingWebView(
-                url = targetUrl,
-                headers = mapOf("User-Agent" to customUserAgent, "Referer" to magicReferer),
-                referer = magicReferer
-            )
-            
-            val m3u8Url = request?.url?.toString()
-            
-            if (m3u8Url != null && m3u8Url.contains(".m3u8")) {
-                sources.add(newExtractorLink(name, "Hydrax HD", m3u8Url, ExtractorLinkType.M3U8) {
-                    this.referer = magicReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "User-Agent" to customUserAgent,
-                        "Origin" to mainUrl,
-                        "Referer" to magicReferer
-                    )
-                })
-            }
-        } catch (e: Exception) { Log.e("Hydrax", e.message.toString()) }
-        return sources
     }
 }
