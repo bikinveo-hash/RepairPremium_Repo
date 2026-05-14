@@ -300,7 +300,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- EKSEKUSI MENGGUNAKAN WEBVIEW RESOLVER MURNI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -315,35 +314,35 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // 1. Inisialisasi WebViewResolver.
-        // Regex ini akan membuat WebView berhenti dan memberikan Request-nya saat dia 
-        // mencoba memuat URL iframe dari salah satu server ini.
+        // Regex yang jauh lebih santai untuk mencegat SEMUA jenis format url dari Iframe LK21
         val interceptor = WebViewResolver(
-            interceptUrl = Regex("""playeriframe\.sbs/iframe/(p2p|turbovip|cast|hydrax)/[A-Za-z0-9_-]+""")
+            interceptUrl = Regex("""playeriframe\.sbs\/iframe\/(p2p|turbovip|cast|hydrax)\/.*""")
         )
         
         var iframeUrl: String? = null
         try {
-            // 2. Memanggil fungsi bawaan resolveUsingWebView dari file WebViewResolver.android.kt
-            // Ini akan memuat halaman LK21 di WebView, membiarkan JS mereka bekerja secara normal,
-            // dan langsung mengembalikan request yang cocok dengan regex di atas.
+            // Biarkan WebView Android mengeksekusi Javascript-nya...
             val (request, _) = interceptor.resolveUsingWebView(
                 url = currentUrl,
                 referer = currentUrl
             )
             
-            // 3. Tangkap URL dari hasil request
             iframeUrl = request?.url?.toString()
         } catch (e: Exception) {
             Log.e("LayarKacaProvider", "WebView Error: ${e.message}")
         }
 
-        // 4. Jika kita berhasil menangkap Iframe URL-nya
+        // Jika berhasil dicegat, bersihkan URL-nya dari parameter aneh seperti /embed
         if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
             val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
-            val id = iframeUrl.substringAfterLast("/")
             
-            // Memetakan ke ExtractorApi kamu yang terbukti jalan dan bebas CORS!
+            // Kita ambil ID video dengan menghapus /embed jika ada
+            var id = iframeUrl.substringAfter("iframe/$serverName/")
+            if (id.contains("/")) {
+                id = id.substringBefore("/")
+            }
+            
+            // Teruskan ke Extractor yang sesuai dengan nama domain
             val extractorUrl = when (serverName.lowercase()) {
                 "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
                 "turbovip" -> "https://emturbovid.com/e/$id"
