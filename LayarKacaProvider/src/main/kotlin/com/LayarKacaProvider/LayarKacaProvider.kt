@@ -22,6 +22,7 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    // MESIN DEKRIPSI RC4 LOKAL (BYPASS WEBVIEW) 🔥
     private fun decryptRC4(key: String, encryptedBase64: String): String {
         return try {
             val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
@@ -131,12 +132,14 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl)
             }
         } else {
             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                 this.posterUrl = posterUrl
                 this.quality = quality
                 this.year = year
+                this.posterHeaders = mapOf("Referer" to mainUrl)
             }
         }
     }
@@ -187,12 +190,14 @@ class LayarKacaProvider : MainAPI() {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                                 this.posterUrl = posterUrl
                                 this.quality = quality
                                 this.year = item.year
+                                this.posterHeaders = mapOf("Referer" to mainUrl)
                             }
                         }
                     }
@@ -203,9 +208,11 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
+
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
-        var response = app.get(cleanUrl)
+        var response = app.get(cleanUrl, timeout = 30)
         var document = response.document
 
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
@@ -215,7 +222,7 @@ class LayarKacaProvider : MainAPI() {
             } else {
                 "https://tv10.lk21official.cc$path"
             }
-            response = app.get(cleanUrl)
+            response = app.get(cleanUrl, timeout = 30)
             document = response.document
         }
 
@@ -228,7 +235,7 @@ class LayarKacaProvider : MainAPI() {
                     val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
                     cleanUrl = "https://series.lk21.de$path"
                 }
-                response = app.get(cleanUrl)
+                response = app.get(cleanUrl, timeout = 30)
                 document = response.document
             }
         }
@@ -259,22 +266,12 @@ class LayarKacaProvider : MainAPI() {
             val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val epNos = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
             val sNos = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-            
-            // Ekstraksi tambahan untuk UI yang lebih detail (opsional, jika web menyediakan di JSON)
-            val posters = Regex("\"poster\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val plots = Regex("\"description\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val dates = Regex("\"release_date\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
 
             for (i in slugs.indices) {
                 episodes.add(newEpisode(fixUrl(slugs[i])) {
                     this.name = titles.getOrNull(i) ?: "Episode ${i + 1}"
                     this.season = sNos.getOrNull(i)
                     this.episode = epNos.getOrNull(i)
-                    
-                    // --- SETTING UI TAMPILAN DETAIL ---
-                    this.posterUrl = posters.getOrNull(i)?.takeIf { it.isNotBlank() } ?: fallbackPoster
-                    this.description = plots.getOrNull(i)
-                    addDate(dates.getOrNull(i), format = "yyyy-MM-dd")
                 })
             }
         }
@@ -286,9 +283,6 @@ class LayarKacaProvider : MainAPI() {
                     episodes.add(newEpisode(fixUrl(href)) {
                         this.name = it.text().trim().ifEmpty { "Play Episode" }
                         this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
-                        
-                        // --- SETTING UI TAMPILAN DETAIL ---
-                        this.posterUrl = fallbackPoster 
                     })
                 }
             }
@@ -334,6 +328,7 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
+                this.posterHeaders = mapOf("Referer" to mainUrl)
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
@@ -348,6 +343,7 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
+                this.posterHeaders = mapOf("Referer" to mainUrl)
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
@@ -416,7 +412,6 @@ class LayarKacaProvider : MainAPI() {
         // 2. TANGKAP PAKAI WEBVIEWRESOLVER SEBAGAI BACKUP
         if (rawSources.isEmpty()) {
             try {
-                // Berkat cURL-mu, kita tahu semua bermuara ke playeriframe.sbs/iframe!
                 val interceptorRegex = Regex("(?i)playeriframe\\.sbs/iframe")
                 val webResponse = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = webResponse.url
@@ -430,20 +425,20 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
-            var finalUrl = url
+            val finalUrl = url
             
             // 3. BYPASS SEMUA SERVER (P2P, TurboVIP, Cast)
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
-                P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
+                loadExtractor("https://cloud.hownetwork.xyz/api2.php?id=$id", currentUrl, subtitleCallback, callback)
             } 
             else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
                 val id = finalUrl.substringAfter("turbovip/").substringBefore("/")
-                EmturbovidExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
+                loadExtractor("https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, callback)
             } 
             else if (finalUrl.contains("playeriframe.sbs/iframe/cast/")) {
                 val id = finalUrl.substringAfter("cast/").substringBefore("/")
-                F16Extractor().getUrl("https://f16px.com/e/$id", currentUrl)?.forEach { callback.invoke(it) }
+                loadExtractor("https://f16px.com/e/$id", currentUrl, subtitleCallback, callback)
             } 
             else {
                 val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
@@ -454,6 +449,14 @@ class LayarKacaProvider : MainAPI() {
                         Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                             val streamUrl = match.value
                             val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                            val originUrl = try { URI(finalUrl).let { "${it.scheme}://${it.host}" } } catch(e:Exception) { "https://playeriframe.sbs" }
+                            
+                            val headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                                "Referer" to finalUrl,
+                                "Origin" to originUrl
+                            )
+
                             callback.invoke(
                                 newExtractorLink(
                                     source = "LK21 VIP",
@@ -463,6 +466,7 @@ class LayarKacaProvider : MainAPI() {
                                 ) {
                                     this.referer = finalUrl
                                     this.quality = Qualities.Unknown.value
+                                    this.headers = headers
                                 }
                             )
                         }
