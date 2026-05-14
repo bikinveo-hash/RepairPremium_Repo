@@ -17,7 +17,7 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
 // ============================================================================
-// 1. EMTURBOVID / TURBOVIP EXTRACTOR (UPDATED)
+// 1. EMTURBOVID / TURBOVIP EXTRACTOR
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -30,7 +30,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         
         try {
             val response = app.get(url, referer = finalReferer).text
-            
             val m3u8Url = Regex("(?i)var\\s+urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]").find(response)?.groupValues?.get(1)
             
             if (!m3u8Url.isNullOrBlank()) {
@@ -95,7 +94,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 EXTRACTOR
+// 3. F16 / CAST EXTRACTOR
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
