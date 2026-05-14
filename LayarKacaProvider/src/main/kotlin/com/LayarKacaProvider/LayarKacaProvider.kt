@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver // IMPORT BARU: Senjata Pamungkas
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -20,38 +21,6 @@ class LayarKacaProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-
-    // ==============================================
-    // ALGORITMA BYPASS ENKRIPSI RC4 (LK21 SECURITY)
-    // ==============================================
-    private fun decryptRC4(key: String, encryptedBase64: String): String {
-        return try {
-            val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
-            val s = IntArray(256) { it }
-            var j = 0
-            for (i in 0..255) {
-                j = (j + s[i] + key[i % key.length].code) % 256
-                val temp = s[i]
-                s[i] = s[j]
-                s[j] = temp
-            }
-            var i = 0
-            j = 0
-            val result = ByteArray(cipher.size)
-            for (k in cipher.indices) {
-                i = (i + 1) % 256
-                j = (j + s[i]) % 256
-                val temp = s[i]
-                s[i] = s[j]
-                s[j] = temp
-                val kStream = s[(s[i] + s[j]) % 256]
-                result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
-            }
-            String(result, Charsets.UTF_8)
-        } catch (e: Exception) {
-            "" 
-        }
-    }
 
     // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
@@ -340,47 +309,27 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
-        val iframes = document.select("iframe").mapNotNull { it.attr("src").takeIf { u -> u.isNotBlank() } }
-        
         val rawSources = mutableListOf<String>()
-        val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
-        val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
-        
-        // Memaksimalkan semua kemungkinan Kunci RC4
-        val possibleKeys = listOfNotNull(
-            host,
-            baseDomain,
-            "lk21official.cc",
-            "nontondrama.my",
-            "tv8.lk21official.cc",
-            "tv4.nontondrama.my",
-            "lk21.party"
-        ).distinct()
 
-        (playerLinks + iframes).forEach { encryptedString ->
-            var decoded = ""
-            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
-                decoded = encryptedString
-            } else {
-                for (key in possibleKeys) {
-                    val attempt = decryptRC4(key, encryptedString)
-                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
-                        decoded = attempt
-                        break
-                    }
-                }
-            }
-            
-            if (decoded.isNotBlank()) {
-                if (decoded.startsWith("//")) decoded = "https:$decoded"
+        // 1. Coba tangkap iframe yang mungkin sengaja dibiarkan (jaga-jaga)
+        document.select("iframe").mapNotNull { it.attr("src") }.filter { it.isNotBlank() }.forEach {
+            rawSources.add(it)
+        }
+
+        // 2. SENJATA PAMUNGKAS: WebViewResolver! 
+        // Biarkan WebView yang menjalankan JS-nya, lalu kita cegat saat dia memuat link iframe player.
+        if (rawSources.isEmpty()) {
+            try {
+                val interceptorRegex = Regex("(?i)playeriframe\\.sbs|emturbovid\\.com|f16px\\.com|hydrax\\.net")
+                val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
+                val interceptedUrl = response.url
                 
-                // Konversi direct P2P bypass
-                if (decoded.contains("playeriframe.sbs/iframe/p2p/")) {
-                    val id = decoded.substringAfterLast("/").substringBefore("?")
-                    decoded = "https://cloud.hownetwork.xyz/video.php?id=$id"
+                // Jika berhasil ditangkap, tambahkan ke rawSources
+                if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
+                    rawSources.add(interceptedUrl)
                 }
-                rawSources.add(decoded)
+            } catch (e: Exception) {
+                // Log jika WebView gagal/timeout
             }
         }
 
@@ -389,18 +338,13 @@ class LayarKacaProvider : MainAPI() {
         allSources.forEach { url ->
             var finalUrl = url
             
-            // Resolve iframe di playeriframe.sbs jika servernya bukan P2P
-            if (finalUrl.contains("playeriframe.sbs")) {
-                try {
-                    val response = app.get(finalUrl, referer = currentUrl)
-                    val iframe = response.document.selectFirst("iframe")?.attr("src")
-                    if (!iframe.isNullOrBlank()) {
-                        finalUrl = fixUrl(iframe)
-                    }
-                } catch (e: Exception) {}
+            // Konversi direct P2P bypass agar lebih ringan dieksekusi
+            if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
+                val id = finalUrl.substringAfterLast("/").substringBefore("?")
+                finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
             }
 
-            // PERBAIKAN FINAL: Panggil Extractor SECARA MANUAL agar tidak dilewatkan oleh loadExtractor()
+            // Eksekusi Extractor secara manual
             when {
                 finalUrl.contains("cloud.hownetwork.xyz") -> {
                     P2PExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
@@ -412,7 +356,7 @@ class LayarKacaProvider : MainAPI() {
                     F16Extractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
                 }
                 else -> {
-                    // Fallback jika bukan salah satu dari server di atas
+                    // Fallback untuk server lain (Hydrax, dsb)
                     val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
                     if (!directLoaded) {
                         try {
