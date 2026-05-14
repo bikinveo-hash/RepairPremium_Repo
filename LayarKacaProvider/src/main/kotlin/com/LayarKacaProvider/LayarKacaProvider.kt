@@ -21,16 +21,47 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR PREMIUM 1: Pembersih Judul Ultra (Hapus "Nonton", "Sub Indo", "di Lk21", dll)
+    // ==============================================
+    // ALGORITMA BYPASS ENKRIPSI RC4 (LK21 SECURITY)
+    // ==============================================
+    private fun decryptRC4(key: String, encryptedBase64: String): String {
+        return try {
+            val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
+            val s = IntArray(256) { it }
+            var j = 0
+            for (i in 0..255) {
+                j = (j + s[i] + key[i % key.length].code) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
+            }
+            var i = 0
+            j = 0
+            val result = ByteArray(cipher.size)
+            for (k in cipher.indices) {
+                i = (i + 1) % 256
+                j = (j + s[i]) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
+                val kStream = s[(s[i] + s[j]) % 256]
+                // Menggunakan 'and 0xFF' untuk mensimulasikan unsigned byte JS
+                result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
+            }
+            String(result, Charsets.UTF_8)
+        } catch (e: Exception) {
+            "" // Jika gagal decode, return string kosong
+        }
+    }
+
+    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
-        // PERBAIKAN: Menambahkan "di lk21", "lk21", dan "layarkaca21" ke dalam daftar yang dihapus
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
-        clean = clean.replace(Regex("\\(\\d{4}\\)"), "") // Hapus tahun di dalam kurung
+        clean = clean.replace(Regex("\\(\\d{4}\\)"), "") 
         return clean.trim()
     }
 
-    // FITUR: Fallback URL Poster
     private fun fixPosterUrl(url: String?): String? {
         if (url.isNullOrBlank()) return null
         var cleanUrl = url
@@ -39,7 +70,6 @@ class LayarKacaProvider : MainAPI() {
         return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}"), "")
     }
 
-    // --- DATA CLASS UNTUK TMDB ---
     data class TmdbSearchResponse(val results: List<TmdbResult>?)
     data class TmdbResult(
         val backdrop_path: String?,
@@ -48,7 +78,6 @@ class LayarKacaProvider : MainAPI() {
         val first_air_date: String?
     )
 
-    // --- MAIN PAGE ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(mainUrl).document
         val items = ArrayList<HomePageList>()
@@ -84,7 +113,6 @@ class LayarKacaProvider : MainAPI() {
         val yearText = element.select("div.year, span.year").text()
         val year = yearText.toIntOrNull() ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull()
 
-        // FITUR PREMIUM 2: Injeksi Poster HD dari TMDB untuk Halaman Depan
         var hdPoster: String? = null
         try {
             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
@@ -117,7 +145,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- SEARCH ---
     data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
     data class Lk21SearchItem(val title: String, val slug: String, val poster: String?, val type: String?, val year: Int?, val quality: String?)
 
@@ -180,7 +207,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- LOAD DETAIL ---
     data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
 
     override suspend fun load(url: String): LoadResponse {
@@ -239,9 +265,6 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
-        // ==============================================
-        // FITUR TMDB BACKDROP & POSTER HD 
-        // ==============================================
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         try {
@@ -259,11 +282,7 @@ class LayarKacaProvider : MainAPI() {
                 tmdbBackdrop = match.backdrop_path?.let { "https://image.tmdb.org/t/p/original$it" }
             }
         } catch (e: Exception) {}
-        // ==============================================
 
-        // ==============================================
-        // FITUR TRAILER EXTRACTION
-        // ==============================================
         var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
         if (trailerUrl.isNullOrEmpty()) {
             trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
@@ -275,7 +294,6 @@ class LayarKacaProvider : MainAPI() {
         val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
         val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
-        // ==============================================
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
@@ -287,11 +305,8 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
-                
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         } else {
@@ -304,17 +319,13 @@ class LayarKacaProvider : MainAPI() {
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
-                
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         }
     }
 
-    // --- LOAD LINKS (CLEAN UI & FIX 3001) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -330,20 +341,49 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // PERBAIKAN: Tangkap semua iframe & link player tanpa terpaku pada 1 ID
-        val playerLinks = document.select("ul#player-list li a").map { it.attr("data-url").ifEmpty { it.attr("href") } }
-        val iframes = document.select("iframe").map { it.attr("src") }
+        // Ambil elemen yang mengandung data-url (enkripsi RC4)
+        val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
+        val iframes = document.select("iframe").mapNotNull { it.attr("src").takeIf { u -> u.isNotBlank() } }
         
-        val rawSources = (playerLinks + iframes).filter { it.isNotBlank() }.map { fixUrl(it) }.toMutableList()
+        val rawSources = mutableListOf<String>()
+        val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
+        
+        // Kunci dekripsi berdasarkan temuan bytecode di player.js
+        val possibleKeys = listOfNotNull(
+            host, 
+            host?.substringAfter("www."), 
+            "lk21official.cc", 
+            "tv4.nontondrama.my",
+            "tv8.lk21official.cc"
+        )
 
-        // PERBAIKAN: Regex Bypass! Langsung comot ID dari playeriframe.sbs dan jadikan format cloud.hownetwork.xyz
-        val html = document.html()
-        Regex("playeriframe\\.sbs/iframe/p2p/([^/\"']+)").findAll(html).forEach { match ->
-            val id = match.groupValues[1]
-            rawSources.add("https://cloud.hownetwork.xyz/video.php?id=$id")
+        // LOOP DEKRIPSI OTOMATIS
+        (playerLinks + iframes).forEach { encryptedString ->
+            var decoded = ""
+            if (encryptedString.startsWith("http")) {
+                decoded = encryptedString
+            } else {
+                for (key in possibleKeys) {
+                    val attempt = decryptRC4(key, encryptedString)
+                    // Validasi: jika hasil dekripsi diawali dengan 'http', berarti kunci cocok!
+                    if (attempt.startsWith("http")) {
+                        decoded = attempt
+                        break
+                    }
+                }
+            }
+            
+            if (decoded.isNotBlank()) {
+                // Konversi direct P2P bypass
+                if (decoded.contains("playeriframe.sbs/iframe/p2p/")) {
+                    val id = decoded.substringAfterLast("/").substringBefore("?")
+                    decoded = "https://cloud.hownetwork.xyz/video.php?id=$id"
+                }
+                rawSources.add(decoded)
+            }
         }
 
-        val allSources = rawSources.distinct()
+        val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
             val directLoaded = loadExtractor(url, currentUrl, subtitleCallback, callback)
@@ -353,12 +393,10 @@ class LayarKacaProvider : MainAPI() {
                     val wrapperUrl = response.url
                     val iframePage = response.document
 
-                    // Nested Iframes
                     iframePage.select("iframe").forEach { 
                         loadExtractor(fixUrl(it.attr("src")), wrapperUrl, subtitleCallback, callback) 
                     }
                     
-                    // Manual Unwrap
                     val scriptHtml = iframePage.html().replace("\\/", "/")
                     Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                         val streamUrl = match.value
@@ -366,7 +404,7 @@ class LayarKacaProvider : MainAPI() {
                         val originUrl = try { URI(wrapperUrl).let { "${it.scheme}://${it.host}" } } catch(e:Exception) { "https://playeriframe.sbs" }
                         
                         val headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
                             "Referer" to wrapperUrl,
                             "Origin" to originUrl
                         )
