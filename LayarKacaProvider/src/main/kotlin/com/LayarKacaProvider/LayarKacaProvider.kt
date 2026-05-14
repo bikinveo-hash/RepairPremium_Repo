@@ -175,19 +175,9 @@ class LayarKacaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        var cleanUrl = fixUrl(url)
-        var response = app.get(cleanUrl)
-        var document = response.document
-
-        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
-        if (redirectButton != null) {
-            val newUrl = redirectButton.attr("href")
-            if (newUrl.isNotEmpty()) {
-                cleanUrl = fixUrl(newUrl)
-                response = app.get(cleanUrl)
-                document = response.document
-            }
-        }
+        val cleanUrl = fixUrl(url)
+        val response = app.get(cleanUrl)
+        val document = response.document
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
@@ -210,7 +200,6 @@ class LayarKacaProvider : MainAPI() {
         val episodes = ArrayList<Episode>()
         val jsonScript = document.select("script#season-data").html()
 
-        // PERBAIKAN FATAL: Ekstraksi Regex Murni, dijamin TIDAK AKAN KOSONG untuk Series!
         if (jsonScript.isNotBlank()) {
             val slugs = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
@@ -226,7 +215,6 @@ class LayarKacaProvider : MainAPI() {
             }
         }
         
-        // Pengecekan Ekstra Brutal (Jaga-jaga web ganti format)
         if (episodes.isEmpty()) {
             document.select("ul.episodes li a, div.mob-list-eps a, .movie-action a[href*='episode']").forEach {
                 val href = it.attr("href")
@@ -306,34 +294,28 @@ class LayarKacaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        var currentUrl = data
-        var document = app.get(currentUrl).document
-
-        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
-        if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
-            currentUrl = fixUrl(redirectButton.attr("href"))
-            document = app.get(currentUrl).document
-        }
-
+        val currentUrl = data // FIXED: Tidak ada lagi modifikasi/override currentUrl!
         val rawSources = mutableListOf<String>()
 
-        document.select("iframe").mapNotNull { it.attr("src") }.filter { 
-            it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
-        }.forEach {
-            rawSources.add(it)
-        }
+        // 1. TANGKAP PAKAI WEBVIEWRESOLVER (SENJATA UTAMA)
+        try {
+            val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
+            val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
+            val interceptedUrl = response.url
+            
+            if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
+                rawSources.add(interceptedUrl)
+            }
+        } catch (e: Exception) {}
 
-        // TANGKAP PAKAI WEBVIEWRESOLVER (REGEX KETAT TERMASUK cloud.hownetwork.xyz)
+        // 2. FALLBACK MANUAL JIKA WEBVIEW GAGAL
         if (rawSources.isEmpty()) {
-            try {
-                val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
-                val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
-                val interceptedUrl = response.url
-                
-                if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
-                    rawSources.add(interceptedUrl)
-                }
-            } catch (e: Exception) {}
+            val document = app.get(currentUrl).document
+            document.select("iframe").mapNotNull { it.attr("src") }.filter { 
+                it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
+            }.forEach {
+                rawSources.add(it)
+            }
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
