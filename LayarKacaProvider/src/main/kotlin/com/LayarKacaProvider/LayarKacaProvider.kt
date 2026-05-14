@@ -320,7 +320,7 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Script Elegan: Hanya menggunakan _L() murni tanpa perlu robot klik. Super Cepat!
+        // Script Elegan: Menggunakan _L() murni persis seperti kodemu yang lama!
         val injectionScript = """
             setTimeout(function() {
                 try {
@@ -337,7 +337,7 @@ class LayarKacaProvider : MainAPI() {
                         }
                     }
                     
-                    // Fallback jika tombol tidak ada (Mode Movie Langsung)
+                    // Jika tidak ada tombol (Mode Movie Langsung di Iframe)
                     if (btns.length === 0) {
                         var iframe = document.getElementById("main-player") || document.querySelector("iframe");
                         if (iframe && iframe.src && iframe.src.includes("playeriframe.sbs")) {
@@ -357,7 +357,7 @@ class LayarKacaProvider : MainAPI() {
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
                     document.body.appendChild(dummy);
                 }
-            }, 2500); 
+            }, 3000); 
         """.trimIndent()
 
         val interceptor = WebViewResolver(
@@ -378,7 +378,7 @@ class LayarKacaProvider : MainAPI() {
                     val srv = decrypted.server.lowercase()
                     
                     if (iframeUrl.contains("playeriframe.sbs")) {
-                        // BUG EMBED TERBONGKAR: Menghapus teks "/embed" dari URL agar ID bersih 100%!
+                        // KUNCI UTAMA FIX SERIES: MENGHAPUS STRING "/embed" SEBELUM MEMOTONG ID!
                         val cleanIframeUrl = iframeUrl.substringBefore("?").replace("/embed", "").trimEnd('/')
                         val id = cleanIframeUrl.substringAfterLast("/")
                         
