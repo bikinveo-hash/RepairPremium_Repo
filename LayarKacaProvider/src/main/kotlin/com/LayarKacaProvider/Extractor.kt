@@ -10,53 +10,17 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.network.WebViewResolver
 import java.net.URI
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
-// ============================================================================
-// 1. EMTURBOVID EXTRACTOR (TURBOVIP)
-// ============================================================================
-open class EmturbovidExtractor : ExtractorApi() {
-    override var name = "Emturbovid"
-    override var mainUrl = "https://emturbovid.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val finalReferer = referer ?: "$mainUrl/"
-        val sources = mutableListOf<ExtractorLink>()
-        
-        try {
-            val response = app.get(url, referer = finalReferer)
-            val playerScript = response.document.selectXpath("//script[contains(text(),'var urlPlay')]").html()
-            
-            if (playerScript.isNotBlank()) {
-                val m3u8Url = playerScript.substringAfter("var urlPlay = '").substringBefore("'")
-                
-                sources.add(
-                    newExtractorLink(
-                        source = name,
-                        name = "Turbovip HD",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return sources
-    }
-}
+val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+val magicReferer = "https://playeriframe.sbs/"
 
 // ============================================================================
-// 2. P2P EXTRACTOR
+// 1. P2P EXTRACTOR (VIA API POST)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -68,13 +32,14 @@ open class P2PExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
+        
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer" to url,
+            "User-Agent" to customUserAgent,
+            "Referer" to magicReferer,
             "Origin" to mainUrl,
             "X-Requested-With" to "XMLHttpRequest"
         )
-        val formBody = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
+        val formBody = mapOf("r" to magicReferer, "d" to "cloud.hownetwork.xyz")
         val sources = mutableListOf<ExtractorLink>()
         
         try {
@@ -90,18 +55,66 @@ open class P2PExtractor : ExtractorApi() {
                         url = videoUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
+                        this.referer = magicReferer
                         this.quality = Qualities.Unknown.value
+                        
+                        // FIX 403: ExoPlayer WAJIB pakai Origin dan Referer yang benar
+                        this.headers = mapOf(
+                            "User-Agent" to customUserAgent,
+                            "Origin" to mainUrl,
+                            "Referer" to magicReferer
+                        )
                     }
                 )
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { Log.e("P2P", e.message.toString()) }
         return sources
     }
 }
 
 // ============================================================================
-// 3. F16 EXTRACTOR (CAST)
+// 2. TURBOVIP EXTRACTOR (VIA REGEX HTML DARI DATA CURL MU!)
+// ============================================================================
+open class EmturbovidExtractor : ExtractorApi() {
+    override var name = "Emturbovid"
+    override var mainUrl = "https://turbovidhls.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        try {
+            // Kita GET halaman aslinya persis seperti cURL yang kamu temukan
+            val id = url.substringAfterLast("/")
+            val targetUrl = "$mainUrl/t/$id"
+            
+            val response = app.get(targetUrl, headers = mapOf(
+                "User-Agent" to customUserAgent,
+                "Referer" to magicReferer
+            )).text
+            
+            // Tangkap URL m3u8 yang bocor di HTML
+            val m3u8Regex = Regex("""(https?://[^"'\s]*?\.m3u8[^"'\s]*)""")
+            val m3u8Url = m3u8Regex.find(response)?.groupValues?.get(1)
+            
+            if (!m3u8Url.isNullOrBlank()) {
+                sources.add(newExtractorLink(name, "Turbovip HD", m3u8Url, ExtractorLinkType.M3U8) {
+                    this.referer = "" // Turbovid tidak pakai referer
+                    this.quality = Qualities.Unknown.value
+                    
+                    // KUNCI DARI CURL KAMU: Wajib pakai Origin!
+                    this.headers = mapOf(
+                        "User-Agent" to customUserAgent,
+                        "Origin" to mainUrl
+                    )
+                })
+            }
+        } catch (e: Exception) { Log.e("Turbovid", e.message.toString()) }
+        return sources
+    }
+}
+
+// ============================================================================
+// 3. CAST / F16 EXTRACTOR (VIA API JWT)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -110,12 +123,11 @@ open class F16Extractor : ExtractorApi() {
 
     data class F16Playback(val playback: PlaybackData?)
     data class PlaybackData(val iv: String?, val payload: String?, val key_parts: List<String>?)
-  
     data class DecryptedSource(val url: String?, val label: String?)
     data class DecryptedResponse(val sources: List<DecryptedSource>?)
 
     private fun String.fixBase64(): String {
-        var s = this
+        var s = this.replace("-", "+").replace("_", "/")
         while (s.length % 4 != 0) s += "="
         return s
     }
@@ -127,7 +139,6 @@ open class F16Extractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
-        
         try {
             val videoId = url.substringAfter("/e/").substringBefore("?")
             val apiUrl = "$mainUrl/api/videos/$videoId/embed/playback"
@@ -135,15 +146,13 @@ open class F16Extractor : ExtractorApi() {
             
             val viewerId = randomHex(32) 
             val deviceId = randomHex(32)
+            val timestamp = System.currentTimeMillis() / 1000
             
             val jwtHeader = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" 
-            val timestamp = System.currentTimeMillis() / 1000
             val jwtPayload = """{"viewer_id":"$viewerId","device_id":"$deviceId","confidence":0.91,"iat":$timestamp,"exp":${timestamp + 600}}"""
             val jwtPayloadEncoded = Base64.encodeToString(jwtPayload.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
             val jwtSignature = randomHex(43)
             val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
-
-            val customUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
             val headers = mapOf(
                 "User-Agent" to customUserAgent,
@@ -153,18 +162,10 @@ open class F16Extractor : ExtractorApi() {
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
                 "x-embed-origin" to "playeriframe.sbs",
                 "x-embed-parent" to pageUrl,
-                "x-embed-referer" to "https://playeriframe.sbs/"
+                "x-embed-referer" to magicReferer
             )
 
-            val jsonPayload = mapOf(
-                "fingerprint" to mapOf(
-                    "token" to token,
-                    "viewer_id" to viewerId,
-                    "device_id" to deviceId,
-                    "confidence" to 0.91
-                )
-            )
-          
+            val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.91))
             val responseText = app.post(apiUrl, headers = headers, json = jsonPayload).text
             val json = tryParseJson<F16Playback>(responseText)
             val pb = json?.playback
@@ -175,34 +176,21 @@ open class F16Extractor : ExtractorApi() {
                 val combinedKey = part1 + part2 
 
                 val decryptedJson = decryptAesGcm(pb.payload, combinedKey, pb.iv)
-
                 if (decryptedJson != null) {
                     val result = tryParseJson<DecryptedResponse>(decryptedJson)
-
                     result?.sources?.forEach { source ->
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
-                            sources.add(
-                                newExtractorLink(
-                                    source = "CAST",
-                                    name = "CAST ${source.label ?: "Auto"}",
-                                    url = streamUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
-                                    this.quality = getQualityFromName(source.label)
-                                }
-                            )
+                            sources.add(newExtractorLink("CAST", "CAST HD", streamUrl, ExtractorLinkType.M3U8) {
+                                this.referer = "" 
+                                this.quality = getQualityFromName(source.label)
+                                this.headers = mapOf("User-Agent" to customUserAgent, "Origin" to mainUrl)
+                            })
                         }
                     }
                 }
-            } else {
-                Log.e("F16Extractor", "Gagal mendapatkan payload.")
             }
-        } catch (e: Exception) {
-            Log.e("F16Extractor", "Error: ${e.message}")
-        }
-        
+        } catch (e: Exception) { Log.e("F16Extractor", "Error: ${e.message}") }
         return sources
     }
 
@@ -210,23 +198,17 @@ open class F16Extractor : ExtractorApi() {
         return try {
             val iv = Base64.decode(ivBase64.fixBase64(), Base64.URL_SAFE)
             val cipherText = Base64.decode(encryptedBase64.fixBase64(), Base64.URL_SAFE)
-
             val spec = GCMParameterSpec(128, iv)
             val keySpec = SecretKeySpec(keyBytes, "AES")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, keySpec, spec)
-            
-            val decryptedBytes = cipher.doFinal(cipherText)
-            String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.e("F16Extractor", "Decrypt Failed: ${e.message}")
-            null
-        }
+            String(cipher.doFinal(cipherText), Charsets.UTF_8)
+        } catch (e: Exception) { null }
     }
 }
 
 // ============================================================================
-// 4. HYDRAX EXTRACTOR
+// 4. HYDRAX EXTRACTOR (VIA REGEX HTML)
 // ============================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -235,39 +217,27 @@ open class HydraxExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
-        
         try {
-            // Memanfaatkan kemampuan super WebViewResolver untuk mengambil m3u8 asli
-            val interceptor = WebViewResolver(
-                interceptUrl = Regex(""".*\.m3u8.*""")
-            )
+            val response = app.get(url, headers = mapOf(
+                "User-Agent" to customUserAgent,
+                "Referer" to magicReferer
+            )).text
             
-            val (request, _) = interceptor.resolveUsingWebView(
-                url = url,
-                referer = referer ?: mainUrl
-            )
+            // Tangkap URL m3u8 yang bocor di HTML
+            val m3u8Regex = Regex("""(https?://[^"'\s]*?\.m3u8[^"'\s]*)""")
+            val m3u8Url = m3u8Regex.find(response)?.groupValues?.get(1)
             
-            val m3u8Url = request?.url?.toString()
-            
-            if (m3u8Url != null && m3u8Url.contains(".m3u8")) {
-                sources.add(
-                    newExtractorLink(
-                        source = name,
-                        name = "Hydrax HD",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            } else {
-                Log.e("HydraxExtractor", "Gagal menangkap m3u8 dari Hydrax")
+            if (!m3u8Url.isNullOrBlank()) {
+                sources.add(newExtractorLink(name, "Hydrax HD", m3u8Url, ExtractorLinkType.M3U8) {
+                    this.referer = ""
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf(
+                        "User-Agent" to customUserAgent,
+                        "Origin" to mainUrl
+                    )
+                })
             }
-        } catch (e: Exception) {
-            Log.e("HydraxExtractor", "Error: ${e.message}")
-        }
-        
+        } catch (e: Exception) { Log.e("Hydrax", e.message.toString()) }
         return sources
     }
 }
