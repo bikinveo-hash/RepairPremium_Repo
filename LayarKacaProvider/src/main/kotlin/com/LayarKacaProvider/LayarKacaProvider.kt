@@ -1,17 +1,12 @@
 package com.LayarKacaProvider
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.Coroutines.mainWork
+import com.lagradost.cloudstream3.utils.WebViewResolver
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -277,12 +272,6 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
-                    ))
-                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -295,21 +284,11 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false
-                    ))
-                }
             }
         }
     }
 
-    data class DecryptedLink(
-        @JsonProperty("server") val server: String,
-        @JsonProperty("url") val url: String
-    )
-
+    // --- KUNCI PENYELESAIAN MASALAH: WEBVIEW RESOLVER MURNI ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -317,129 +296,42 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-        var document = app.get(currentUrl).document
+        val document = app.get(currentUrl).document
 
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
             currentUrl = fixUrl(redirectButton.attr("href"))
-            document = app.get(currentUrl).document
         }
 
-        val playerList = document.select("ul#player-list li a")
-        if (playerList.isEmpty()) return false
-
-        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
-        val playerJs = if (playerJsUrl.isNotBlank()) {
-            app.get(fixUrl(playerJsUrl), referer = currentUrl).text
-        } else ""
-
-        val extractedLinks = mutableListOf<DecryptedLink>()
-
-        // 1. Coba memecahkan enkripsi lewat Rhino Javascript (Method Pertama)
-        if (playerJs.isNotBlank()) {
-            val serversJsonArray = playerList.map { 
-                "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
-            }.joinToString(",", "[", "]")
-
-            val safePlayerJs = playerJs
-                .replace(Regex("""\blet\s+"""), "var ")
-                .replace(Regex("""\bconst\s+"""), "var ")
-                .replace(Regex("""\basync\s+function"""), "function")
-                .replace(Regex("""\bawait\s+"""), "")
-                .replace(Regex("""function\s*\*\s*([a-zA-Z0-9_]*)"""), "function $1")
-                .replace(Regex("""yield\s+S"""), "S")
-                .replace(Regex("""yield\s+"""), "")
-
-            val script = """
-                var window = this; var globalThis = this;
-                var document = { 
-                    addEventListener: function(){}, 
-                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
-                    querySelectorAll: function(){ return []; },
-                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
-                    body: { dataset: {} },
-                    createElement: function() { return { style: {}, setAttribute: function(){} }; }
-                };
-                var navigator = { userAgent: "Mozilla/5.0" };
-                var location = { href: "$currentUrl" };
-                var screen = { orientation: {} };
-                var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
-                var alert = function(){};
-                var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
-                
-                $safePlayerJs
-                
-                var inputs = $serversJsonArray;
-                var results = [];
-                for (var i = 0; i < inputs.length; i++) {
-                    try {
-                        var dec = _L(inputs[i].url);
-                        if (dec) results.push({ server: inputs[i].server, url: dec });
-                    } catch(e) {}
-                }
-                JSON.stringify(results);
-            """.trimIndent()
-
-            try {
-                mainWork {
-                    val rhino = org.mozilla.javascript.Context.enter()
-                    try {
-                        rhino.optimizationLevel = -1
-                        val scope = rhino.initSafeStandardObjects()
-                        val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
-                        if (!resultJson.isNullOrBlank()) {
-                            val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
-                            if (parsed != null) extractedLinks.addAll(parsed)
-                        }
-                    } finally {
-                        org.mozilla.javascript.Context.exit()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
-            }
+        // Kita gunakan WebView Android untuk memuat halaman, biarkan Javacript modern mereka berjalan, 
+        // lalu kita "cegat" permintaan jaringannya saat Iframe videonya dimuat!
+        val interceptor = WebViewResolver(Regex("""playeriframe\.sbs\/iframe\/(p2p|turbovip|cast|hydrax)\/[A-Za-z0-9_-]+"""))
+        
+        var iframeUrl: String? = null
+        try {
+            // Proses ini persis seperti JSDOM, tapi terjadi di balik layar Cloudstream
+            iframeUrl = app.get(currentUrl, interceptor = interceptor, timeout = 30).url
+        } catch (e: Exception) {
+            Log.e("LayarKacaProvider", "WebView Intercept Error: ${e.message}")
         }
 
-        // 2. Jika Rhino gagal, gunakan Fallback Regex (Method Cadangan)
-        if (extractedLinks.isEmpty()) {
-            val htmlContent = document.html()
+        // Kalau Iframe URL berhasil ditangkap
+        if (iframeUrl != null && iframeUrl.contains("playeriframe.sbs")) {
+            val serverName = iframeUrl.substringAfter("iframe/").substringBefore("/")
+            val id = iframeUrl.substringAfterLast("/")
             
-            // Tangkap ID yang bocor dari HTML
-            val p2pIdRegex = Regex("""cloud\.hownetwork\.xyz\/video\.php\?id=([A-Za-z0-9_-]+)""")
-            p2pIdRegex.findAll(htmlContent).forEach { match ->
-                extractedLinks.add(DecryptedLink("p2p", "https://cloud.hownetwork.xyz/api2.php?id=${match.groupValues[1]}"))
+            // Konversi ke Extractor milikmu
+            val extractorUrl = when (serverName.lowercase()) {
+                "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                "turbovip" -> "https://emturbovid.com/e/$id"
+                "cast" -> "https://f16px.com/e/$id"
+                "hydrax" -> "https://hydrax.net/watch?v=$id"
+                else -> iframeUrl
             }
             
-            val turbovipIdRegex = Regex("""emturbovid\.com\/e\/([A-Za-z0-9_-]+)""")
-            turbovipIdRegex.findAll(htmlContent).forEach { match ->
-                extractedLinks.add(DecryptedLink("turbovip", "https://emturbovid.com/e/${match.groupValues[1]}"))
-            }
-
-            val castIdRegex = Regex("""f16px\.com\/e\/([A-Za-z0-9_-]+)""")
-            castIdRegex.findAll(htmlContent).forEach { match ->
-                extractedLinks.add(DecryptedLink("cast", "https://f16px.com/e/${match.groupValues[1]}"))
-            }
-        }
-
-        // --- MENGIRIM HASIL KE EXTRACTOR ---
-        extractedLinks.forEach { decrypted ->
-            val iframeUrl = decrypted.url
-            val serverName = decrypted.server
-            
-            if (iframeUrl.contains("playeriframe.sbs")) {
-                val id = iframeUrl.substringAfterLast("/")
-                val extractorUrl = when (serverName.lowercase()) {
-                    "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                    "turbovip" -> "https://emturbovid.com/e/$id"
-                    "cast" -> "https://f16px.com/e/$id"
-                    "hydrax" -> "https://hydrax.net/watch?v=$id"
-                    else -> iframeUrl
-                }
-                loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
-            } else {
-                // Untuk format URL yang tertangkap oleh regex cadangan
-                loadExtractor(iframeUrl, currentUrl, subtitleCallback, callback)
-            }
+            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+        } else {
+            Log.e("LayarKacaProvider", "Gagal menangkap URL Iframe lewat WebViewResolver.")
         }
         
         return true
