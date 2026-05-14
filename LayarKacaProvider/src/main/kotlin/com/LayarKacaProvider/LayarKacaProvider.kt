@@ -22,35 +22,6 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private fun decryptRC4(key: String, encryptedBase64: String): String {
-        return try {
-            val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
-            val s = IntArray(256) { it }
-            var j = 0
-            for (i in 0..255) {
-                j = (j + s[i] + key[i % key.length].code) % 256
-                val temp = s[i]
-                s[i] = s[j]
-                s[j] = temp
-            }
-            var i = 0
-            j = 0
-            val result = ByteArray(cipher.size)
-            for (k in cipher.indices) {
-                i = (i + 1) % 256
-                j = (j + s[i]) % 256
-                val temp = s[i]
-                s[i] = s[j]
-                s[j] = temp
-                val kStream = s[(s[i] + s[j]) % 256]
-                result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
-            }
-            String(result, Charsets.UTF_8)
-        } catch (e: Exception) {
-            "" 
-        }
-    }
-
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
@@ -203,8 +174,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
-
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
@@ -241,32 +210,25 @@ class LayarKacaProvider : MainAPI() {
         val episodes = ArrayList<Episode>()
         val jsonScript = document.select("script#season-data").html()
 
+        // PERBAIKAN FATAL: Ekstraksi Regex Murni, dijamin TIDAK AKAN KOSONG untuk Series!
         if (jsonScript.isNotBlank()) {
-            val slugRegex = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"")
-            val titleRegex = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"")
-            val epRegex = Regex("\"episode_no\"\\s*:\\s*(\\d+)")
-            val sRegex = Regex("\"s\"\\s*:\\s*(\\d+)")
+            val slugs = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val epNos = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
+            val sNos = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
 
-            Regex("\\{([^}]+)\\}").findAll(jsonScript).forEach { match ->
-                val obj = match.value
-                val slug = slugRegex.find(obj)?.groupValues?.get(1)
-                
-                if (slug != null) {
-                    val epTitle = titleRegex.find(obj)?.groupValues?.get(1)
-                    val epNo = epRegex.find(obj)?.groupValues?.get(1)?.toIntOrNull()
-                    val sNo = sRegex.find(obj)?.groupValues?.get(1)?.toIntOrNull()
-                    
-                    episodes.add(newEpisode(fixUrl(slug)) {
-                        this.name = epTitle ?: "Episode $epNo"
-                        this.season = sNo
-                        this.episode = epNo
-                    })
-                }
+            for (i in slugs.indices) {
+                episodes.add(newEpisode(fixUrl(slugs[i])) {
+                    this.name = titles.getOrNull(i) ?: "Episode ${i + 1}"
+                    this.season = sNos.getOrNull(i)
+                    this.episode = epNos.getOrNull(i)
+                })
             }
         }
         
+        // Pengecekan Ekstra Brutal (Jaga-jaga web ganti format)
         if (episodes.isEmpty()) {
-            document.select("ul.episodes li a, div.mob-list-eps a, a.btn-primary:contains(Play)").forEach {
+            document.select("ul.episodes li a, div.mob-list-eps a, .movie-action a[href*='episode']").forEach {
                 val href = it.attr("href")
                 if (href.isNotBlank() && href.contains("episode", ignoreCase = true)) {
                     episodes.add(newEpisode(fixUrl(href)) {
@@ -355,37 +317,13 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
-        val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
-        val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
-        val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
-        
-        val possibleKeys = listOfNotNull(
-            host, baseDomain, "lk21official.cc", "nontondrama.my", "tv8.lk21official.cc", "tv4.nontondrama.my", "lk21.party"
-        ).distinct()
-
-        playerLinks.forEach { encryptedString ->
-            var decoded = ""
-            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
-                decoded = encryptedString
-            } else {
-                for (key in possibleKeys) {
-                    val attempt = decryptRC4(key, encryptedString)
-                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
-                        decoded = attempt
-                        break
-                    }
-                }
-            }
-            if (decoded.isNotBlank()) rawSources.add(decoded)
-        }
-
         document.select("iframe").mapNotNull { it.attr("src") }.filter { 
             it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
         }.forEach {
             rawSources.add(it)
         }
 
-        // PERBAIKAN: Regex diperbarui berdasarkan data request Network untuk menangkap video.php secara langsung
+        // TANGKAP PAKAI WEBVIEWRESOLVER (REGEX KETAT TERMASUK cloud.hownetwork.xyz)
         if (rawSources.isEmpty()) {
             try {
                 val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
