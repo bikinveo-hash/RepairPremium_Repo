@@ -19,7 +19,7 @@ val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KH
 val magicReferer = "https://playeriframe.sbs/"
 
 // ============================================================================
-// 1. P2P EXTRACTOR (Aman)
+// 1. P2P EXTRACTOR
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -64,7 +64,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR (Fix Error 3001 Container Malformed)
+// 2. TURBOVIP EXTRACTOR (Aman dari Error 3001)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -83,7 +83,7 @@ open class EmturbovidExtractor : ExtractorApi() {
             
             if (!m3u8Url.isNullOrBlank()) {
                 sources.add(newExtractorLink(name, "Turbovip HD", m3u8Url, ExtractorLinkType.M3U8) {
-                    this.referer = "" // WAJIB KOSONG AGAR CDN CLOUDFLARE TIDAK MENOLAK REQUEST!
+                    this.referer = "" // Dikosongkan agar bebas blokir CDN
                     this.quality = Qualities.Unknown.value
                     this.headers = mapOf(
                         "User-Agent" to customUserAgent,
@@ -97,7 +97,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. CAST / F16 EXTRACTOR (Fix Payload Content-Length 0 & Header M3U8)
+// 3. CAST / F16 EXTRACTOR (Aman dari JWT Cloudflare Challenge)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -141,8 +141,8 @@ open class F16Extractor : ExtractorApi() {
                 "Accept" to "*/*"
             )
 
-            // Fix POST kosong dengan mengirimkan Map Kosong (memicu Content-Length: 0)
-            val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap()).text
+            // POST dengan map kosong untuk Challenge ID
+            val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap<String, String>()).text
             val challengeJson = tryParseJson<F16Challenge>(challengeRes)
             
             if (challengeJson?.challenge_id == null || challengeJson.nonce == null) {
@@ -181,7 +181,7 @@ open class F16Extractor : ExtractorApi() {
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
                             sources.add(newExtractorLink("CAST", "CAST HD", streamUrl, ExtractorLinkType.M3U8) {
-                                this.referer = "$mainUrl/" // SESUAI CURL: M3U8 MEREKA WAJIB PAKAI REFERER F16PX.COM!
+                                this.referer = "$mainUrl/" 
                                 this.quality = getQualityFromName(source.label)
                                 this.headers = mapOf(
                                     "User-Agent" to customUserAgent,
