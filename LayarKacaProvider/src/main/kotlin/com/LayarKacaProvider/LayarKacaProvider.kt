@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver // IMPORT BARU: Senjata Pamungkas
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -22,7 +22,6 @@ class LayarKacaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // FITUR PREMIUM 1: Pembersih Judul Ultra
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
@@ -301,36 +300,26 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-        var document = app.get(currentUrl).document
-
-        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
-        if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
-            currentUrl = fixUrl(redirectButton.attr("href"))
-            document = app.get(currentUrl).document
-        }
 
         val rawSources = mutableListOf<String>()
 
         // 1. Coba tangkap iframe yang mungkin sengaja dibiarkan (jaga-jaga)
+        val document = app.get(currentUrl).document
         document.select("iframe").mapNotNull { it.attr("src") }.filter { it.isNotBlank() }.forEach {
             rawSources.add(it)
         }
 
         // 2. SENJATA PAMUNGKAS: WebViewResolver! 
-        // Biarkan WebView yang menjalankan JS-nya, lalu kita cegat saat dia memuat link iframe player.
         if (rawSources.isEmpty()) {
             try {
                 val interceptorRegex = Regex("(?i)playeriframe\\.sbs|emturbovid\\.com|f16px\\.com|hydrax\\.net")
                 val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = response.url
                 
-                // Jika berhasil ditangkap, tambahkan ke rawSources
                 if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
                     rawSources.add(interceptedUrl)
                 }
-            } catch (e: Exception) {
-                // Log jika WebView gagal/timeout
-            }
+            } catch (e: Exception) {}
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
@@ -338,9 +327,9 @@ class LayarKacaProvider : MainAPI() {
         allSources.forEach { url ->
             var finalUrl = url
             
-            // Konversi direct P2P bypass agar lebih ringan dieksekusi
+            // PERBAIKAN FATAL: Ekstrak ID yang benar, jangan sampai kepotong kata 'embed'
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
-                val id = finalUrl.substringAfterLast("/").substringBefore("?")
+                val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
             }
 
@@ -356,7 +345,7 @@ class LayarKacaProvider : MainAPI() {
                     F16Extractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
                 }
                 else -> {
-                    // Fallback untuk server lain (Hydrax, dsb)
+                    // Fallback
                     val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
                     if (!directLoaded) {
                         try {
