@@ -19,7 +19,7 @@ val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KH
 val magicReferer = "https://playeriframe.sbs/"
 
 // ============================================================================
-// 1. P2P EXTRACTOR
+// 1. P2P EXTRACTOR (Aman)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -50,7 +50,6 @@ open class P2PExtractor : ExtractorApi() {
                 sources.add(newExtractorLink(name, "P2P HD", videoUrl, ExtractorLinkType.M3U8) {
                     this.referer = magicReferer
                     this.quality = Qualities.Unknown.value
-                    // Header sakti untuk bypass Error 2004 di ExoPlayer
                     this.headers = mapOf(
                         "User-Agent" to customUserAgent,
                         "Referer" to magicReferer,
@@ -65,7 +64,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR
+// 2. TURBOVIP EXTRACTOR (Fix Error 3001 Container Malformed)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -84,13 +83,10 @@ open class EmturbovidExtractor : ExtractorApi() {
             
             if (!m3u8Url.isNullOrBlank()) {
                 sources.add(newExtractorLink(name, "Turbovip HD", m3u8Url, ExtractorLinkType.M3U8) {
-                    this.referer = magicReferer
+                    this.referer = "" // WAJIB KOSONG AGAR CDN CLOUDFLARE TIDAK MENOLAK REQUEST!
                     this.quality = Qualities.Unknown.value
-                    // Header sakti untuk bypass Error 3001 di ExoPlayer
                     this.headers = mapOf(
                         "User-Agent" to customUserAgent,
-                        "Referer" to magicReferer,
-                        "Origin" to mainUrl,
                         "Accept" to "*/*"
                     )
                 })
@@ -101,7 +97,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. CAST / F16 EXTRACTOR
+// 3. CAST / F16 EXTRACTOR (Fix Payload Content-Length 0 & Header M3U8)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -141,11 +137,12 @@ open class F16Extractor : ExtractorApi() {
                 "User-Agent" to customUserAgent,
                 "Referer" to pageUrl,
                 "Origin" to mainUrl,
-                "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId"
+                "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
+                "Accept" to "*/*"
             )
 
-            // PERBAIKAN: Memanggil POST murni tanpa parameter `text` untuk mendapatkan Challenge ID
-            val challengeRes = app.post(challengeUrl, headers = headersBase).text
+            // Fix POST kosong dengan mengirimkan Map Kosong (memicu Content-Length: 0)
+            val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap()).text
             val challengeJson = tryParseJson<F16Challenge>(challengeRes)
             
             if (challengeJson?.challenge_id == null || challengeJson.nonce == null) {
@@ -154,7 +151,7 @@ open class F16Extractor : ExtractorApi() {
             }
 
             val jwtHeader = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" 
-            val jwtPayload = """{"viewer_id":"$viewerId","device_id":"$deviceId","confidence":0.91,"iat":$timestamp,"exp":${timestamp + 600},"challenge_id":"${challengeJson.challenge_id}","nonce":"${challengeJson.nonce}"}"""
+            val jwtPayload = """{"viewer_id":"$viewerId","device_id":"$deviceId","confidence":0.93,"iat":$timestamp,"exp":${timestamp + 600},"challenge_id":"${challengeJson.challenge_id}","nonce":"${challengeJson.nonce}"}"""
             val jwtPayloadEncoded = Base64.encodeToString(jwtPayload.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
             val jwtSignature = randomHex(43)
             val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
@@ -166,7 +163,7 @@ open class F16Extractor : ExtractorApi() {
                 this["x-embed-referer"] = magicReferer
             }
             
-            val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.91))
+            val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.93))
             val responseText = app.post(apiUrl, headers = headersPlayback, json = jsonPayload).text
             
             val json = tryParseJson<F16Playback>(responseText)
@@ -184,12 +181,12 @@ open class F16Extractor : ExtractorApi() {
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
                             sources.add(newExtractorLink("CAST", "CAST HD", streamUrl, ExtractorLinkType.M3U8) {
-                                this.referer = magicReferer
+                                this.referer = "$mainUrl/" // SESUAI CURL: M3U8 MEREKA WAJIB PAKAI REFERER F16PX.COM!
                                 this.quality = getQualityFromName(source.label)
                                 this.headers = mapOf(
                                     "User-Agent" to customUserAgent,
                                     "Origin" to mainUrl, 
-                                    "Referer" to magicReferer,
+                                    "Referer" to "$mainUrl/",
                                     "Accept" to "*/*"
                                 )
                             })
