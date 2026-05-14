@@ -320,36 +320,41 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Script ini dilengkapi proteksi Anti-Crash dan Waktu Tunggu 3 detik
+        // TANGKAP CEPAT (Untuk Movie): Ambil dari Main Player
+        val mainIframe = document.select("iframe#main-player").attr("src")
+        if (mainIframe.isNotBlank() && mainIframe.contains("playeriframe.sbs")) {
+            val id = mainIframe.substringBefore("?").trimEnd('/').substringAfterLast("/")
+            val extractorUrl = "https://cloud.hownetwork.xyz/api2.php?id=$id"
+            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+        }
+
+        // POLLING INTERVAL: Terus-menerus mengecek apakah JS sudah jalan (Solusi Series Kosong)
         val injectionScript = """
-            setTimeout(function() {
+            var checkInterval = setInterval(function() {
                 try {
+                    window.matchMedia = window.matchMedia || function() { return { matches: false, addListener: function() {}, removeListener: function() {} }; };
                     var btns = document.querySelectorAll("ul#player-list li a");
-                    var res = [];
-                    for(var i=0; i<btns.length; i++) {
-                        var srv = btns[i].getAttribute("data-server");
-                        var url = btns[i].getAttribute("data-url") || btns[i].getAttribute("href");
-                        if(url && typeof _L === 'function') {
+                    if (btns.length > 0 && typeof _L === 'function') {
+                        clearInterval(checkInterval);
+                        var res = [];
+                        for(var i=0; i<btns.length; i++) {
+                            var srv = btns[i].getAttribute("data-server");
+                            var url = btns[i].getAttribute("data-url");
                             try {
                                 var dec = _L(url);
                                 if(dec) res.push({server: srv, url: dec});
-                            } catch(e) {
-                                res.push({server: srv, url: url});
-                            }
-                        } else if (url && url.startsWith("http")) {
-                            res.push({server: srv, url: url});
+                            } catch(e) {}
                         }
+                        var resultStr = encodeURIComponent(JSON.stringify(res));
+                        var dummy = document.createElement("img");
+                        dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
+                        document.body.appendChild(dummy);
                     }
-                    var resultStr = encodeURIComponent(JSON.stringify(res));
-                    var dummy = document.createElement("img");
-                    dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
-                    document.body.appendChild(dummy);
-                } catch(e) {
-                    var dummy = document.createElement("img");
-                    dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
-                    document.body.appendChild(dummy);
-                }
-            }, 3000);
+                } catch(e) {}
+            }, 500); // Mengecek setiap setengah detik!
+            
+            // Timeout Darurat jika dalam 8 detik Series tidak muncul
+            setTimeout(function() { clearInterval(checkInterval); }, 8000);
         """.trimIndent()
 
         val interceptor = WebViewResolver(
@@ -357,39 +362,36 @@ class LayarKacaProvider : MainAPI() {
             script = injectionScript
         )
         
-        var jsonResult: String? = null
         try {
             val (request, _) = interceptor.resolveUsingWebView(url = currentUrl, referer = currentUrl)
             val interceptedUrl = request?.url?.toString() ?: ""
             if (interceptedUrl.contains("lk21-all-links/")) {
                 val encodedJson = interceptedUrl.substringAfter("lk21-all-links/")
-                jsonResult = java.net.URLDecoder.decode(encodedJson, "UTF-8")
-            }
-        } catch (e: Exception) { Log.e("LayarKacaProvider", "WebView Error: ${e.message}") }
-
-        if (!jsonResult.isNullOrBlank()) {
-            val extractedLinks = tryParseJson<List<DecryptedLink>>(jsonResult)
-            
-            extractedLinks?.forEach { decrypted ->
-                val iframeUrl = decrypted.url
-                val srv = decrypted.server.lowercase()
+                val jsonResult = java.net.URLDecoder.decode(encodedJson, "UTF-8")
+                val extractedLinks = tryParseJson<List<DecryptedLink>>(jsonResult)
                 
-                if (iframeUrl.contains("playeriframe.sbs")) {
-                    val id = iframeUrl.substringBefore("?").trimEnd('/').substringAfterLast("/")
+                extractedLinks?.forEach { decrypted ->
+                    val iframeUrl = decrypted.url
+                    val srv = decrypted.server.lowercase()
                     
-                    val extractorUrl = when {
-                        srv.contains("p2p") -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                        srv.contains("turbo") || srv.contains("vip") -> "https://turbovidhls.com/t/$id"
-                        srv.contains("cast") || srv.contains("f16") -> "https://f16px.com/e/$id"
-                        else -> null
-                    }
-                    
-                    if (extractorUrl != null) {
-                        loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                    if (iframeUrl.contains("playeriframe.sbs")) {
+                        val id = iframeUrl.substringBefore("?").trimEnd('/').substringAfterLast("/")
+                        
+                        val extractorUrl = when {
+                            srv.contains("p2p") -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                            srv.contains("turbo") || srv.contains("vip") -> "https://turbovidhls.com/t/$id"
+                            srv.contains("cast") || srv.contains("f16") -> "https://f16px.com/e/$id"
+                            else -> null
+                        }
+                        
+                        if (extractorUrl != null) {
+                            loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+                        }
                     }
                 }
             }
-        }
+        } catch (e: Exception) { Log.e("LayarKacaProvider", "WebView Error: ${e.message}") }
+
         return true
     }
 }
