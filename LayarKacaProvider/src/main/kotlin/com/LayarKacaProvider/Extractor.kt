@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.network.WebViewResolver
 import java.net.URI
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -17,7 +18,7 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
 // ============================================================================
-// 1. EMTURBOVID EXTRACTOR
+// 1. EMTURBOVID EXTRACTOR (TURBOVIP)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -34,19 +35,18 @@ open class EmturbovidExtractor : ExtractorApi() {
             
             if (playerScript.isNotBlank()) {
                 val m3u8Url = playerScript.substringAfter("var urlPlay = '").substringBefore("'")
-                val originUrl = try { URI(finalReferer).let { "${it.scheme}://${it.host}" } } catch (e: Exception) { mainUrl }
                 
-                val headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer" to finalReferer,
-                    "Origin" to originUrl
+                sources.add(
+                    newExtractorLink(
+                        source = name,
+                        name = "Turbovip HD",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
-                
-                sources.add(newExtractorLink(source = name, name = name, url = m3u8Url, type = ExtractorLinkType.M3U8) {
-                    this.referer = finalReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = headers
-                })
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -69,7 +69,7 @@ open class P2PExtractor : ExtractorApi() {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer" to url,
             "Origin" to mainUrl,
             "X-Requested-With" to "XMLHttpRequest"
@@ -83,10 +83,17 @@ open class P2PExtractor : ExtractorApi() {
             val videoUrl = json?.file ?: json?.link
    
             if (!videoUrl.isNullOrBlank()) {
-                sources.add(newExtractorLink(source = name, name = name, url = videoUrl, type = ExtractorLinkType.M3U8) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.Unknown.value
-                })
+                sources.add(
+                    newExtractorLink(
+                        source = name,
+                        name = "P2P HD",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
             }
         } catch (e: Exception) { e.printStackTrace() }
         return sources
@@ -94,7 +101,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 EXTRACTOR (FINAL BOSS FIX: NO REFERER & EXACT USER-AGENT)
+// 3. F16 EXTRACTOR (CAST)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -136,8 +143,7 @@ open class F16Extractor : ExtractorApi() {
             val jwtSignature = randomHex(43)
             val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
 
-            // KUNCI UTAMA: Kita patenkan 1 User-Agent untuk API & Player
-            val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            val customUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
             val headers = mapOf(
                 "User-Agent" to customUserAgent,
@@ -172,17 +178,10 @@ open class F16Extractor : ExtractorApi() {
 
                 if (decryptedJson != null) {
                     val result = tryParseJson<DecryptedResponse>(decryptedJson)
-                    
-                    // FIX: Hanya pakai User-Agent yang sama, TANPA Referer/Origin
-                    val videoHeaders = mapOf(
-                        "User-Agent" to customUserAgent
-                    )
 
                     result?.sources?.forEach { source ->
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
-                            
-                            // KEMBALI KE newExtractorLink AGAR LOLOS BUILD (TIDAK DEPRECATED)
                             sources.add(
                                 newExtractorLink(
                                     source = "CAST",
@@ -190,12 +189,10 @@ open class F16Extractor : ExtractorApi() {
                                     url = streamUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.referer = "" // INI KUNCI UTAMANYA: KOSONGKAN REFERER
+                                    this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
                                     this.quality = getQualityFromName(source.label)
-                                    this.headers = videoHeaders
                                 }
                             )
-                            
                         }
                     }
                 }
@@ -225,5 +222,52 @@ open class F16Extractor : ExtractorApi() {
             Log.e("F16Extractor", "Decrypt Failed: ${e.message}")
             null
         }
+    }
+}
+
+// ============================================================================
+// 4. HYDRAX EXTRACTOR
+// ============================================================================
+open class HydraxExtractor : ExtractorApi() {
+    override var name = "Hydrax"
+    override var mainUrl = "https://hydrax.net"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        
+        try {
+            // Memanfaatkan kemampuan super WebViewResolver untuk mengambil m3u8 asli
+            val interceptor = WebViewResolver(
+                interceptUrl = Regex(""".*\.m3u8.*""")
+            )
+            
+            val (request, _) = interceptor.resolveUsingWebView(
+                url = url,
+                referer = referer ?: mainUrl
+            )
+            
+            val m3u8Url = request?.url?.toString()
+            
+            if (m3u8Url != null && m3u8Url.contains(".m3u8")) {
+                sources.add(
+                    newExtractorLink(
+                        source = name,
+                        name = "Hydrax HD",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "" // KUNCI UTAMA: KOSONGKAN REFERER AGAR TIDAK ERROR 403
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            } else {
+                Log.e("HydraxExtractor", "Gagal menangkap m3u8 dari Hydrax")
+            }
+        } catch (e: Exception) {
+            Log.e("HydraxExtractor", "Error: ${e.message}")
+        }
+        
+        return sources
     }
 }
