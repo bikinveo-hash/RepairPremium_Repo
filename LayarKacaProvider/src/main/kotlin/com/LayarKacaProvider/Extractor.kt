@@ -144,8 +144,8 @@ open class F16Extractor : ExtractorApi() {
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId"
             )
 
-            // Mengirim request kosong agar body terbaca "Content-Length: 0"
-            val challengeRes = app.post(challengeUrl, headers = headersBase, text = "").text
+            // PERBAIKAN: Memanggil POST murni tanpa parameter `text` untuk mendapatkan Challenge ID
+            val challengeRes = app.post(challengeUrl, headers = headersBase).text
             val challengeJson = tryParseJson<F16Challenge>(challengeRes)
             
             if (challengeJson?.challenge_id == null || challengeJson.nonce == null) {
