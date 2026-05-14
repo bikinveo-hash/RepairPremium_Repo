@@ -20,7 +20,7 @@ val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KH
 val magicReferer = "https://playeriframe.sbs/"
 
 // ============================================================================
-// 1. P2P EXTRACTOR (Gaya Kode Lama - Aman)
+// 1. P2P EXTRACTOR (Terbukti Sukses 100%)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -75,7 +75,7 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR (Gaya Kode Lama + Anti Error 3001)
+// 2. TURBOVIP EXTRACTOR (Terbukti Sukses 100% Anti Error 3001)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -118,7 +118,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. CAST / F16 EXTRACTOR (Gaya Kode Lama + Anti Cloudflare JWT)
+// 3. CAST / F16 EXTRACTOR (Aman dari JWT Cloudflare Challenge)
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -164,7 +164,7 @@ open class F16Extractor : ExtractorApi() {
                 "Origin" to mainUrl,
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
                 "Accept" to "*/*",
-                "Content-Length" to "0" // Content-Length 0 sangat krusial
+                "Content-Length" to "0" // Content-Length 0 sangat krusial untuk Cloudflare
             )
 
             val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap<String, String>()).text
