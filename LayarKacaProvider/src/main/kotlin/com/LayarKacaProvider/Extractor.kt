@@ -17,11 +17,11 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
 // ============================================================================
-// 1. EMTURBOVID EXTRACTOR
+// 1. EMTURBOVID / TURBOVIP EXTRACTOR (UPDATED)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
-    override var mainUrl = "https://emturbovid.com"
+    override var mainUrl = "https://turbovidhls.com"
     override val requiresReferer = false
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
@@ -29,21 +29,21 @@ open class EmturbovidExtractor : ExtractorApi() {
         val sources = mutableListOf<ExtractorLink>()
         
         try {
-            val response = app.get(url, referer = finalReferer)
-            val playerScript = response.document.selectXpath("//script[contains(text(),'var urlPlay')]").html()
+            val response = app.get(url, referer = finalReferer).text
             
-            if (playerScript.isNotBlank()) {
-                val m3u8Url = playerScript.substringAfter("var urlPlay = '").substringBefore("'")
-                val originUrl = try { URI(finalReferer).let { "${it.scheme}://${it.host}" } } catch (e: Exception) { mainUrl }
+            val m3u8Url = Regex("(?i)var\\s+urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]").find(response)?.groupValues?.get(1)
+            
+            if (!m3u8Url.isNullOrBlank()) {
+                val originUrl = try { URI(url).let { "${it.scheme}://${it.host}" } } catch (e: Exception) { mainUrl }
                 
                 val headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer" to finalReferer,
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                    "Referer" to url,
                     "Origin" to originUrl
                 )
                 
-                sources.add(newExtractorLink(source = name, name = name, url = m3u8Url, type = ExtractorLinkType.M3U8) {
-                    this.referer = finalReferer
+                sources.add(newExtractorLink(source = "TurboVIP", name = "TurboVIP HD", url = m3u8Url, type = ExtractorLinkType.M3U8) {
+                    this.referer = url
                     this.quality = Qualities.Unknown.value
                     this.headers = headers
                 })
@@ -72,13 +72,11 @@ open class P2PExtractor : ExtractorApi() {
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "Referer" to url,
             "Origin" to mainUrl
-            // Sengaja tidak memakai X-Requested-With agar Stealth!
         )
         val formBody = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
         val sources = mutableListOf<ExtractorLink>()
         
         try {
-            // PANCING CLOUDFLARE: Melakukan GET request terlebih dahulu agar cookie Cloudflare tersimpan.
             app.get(url, headers = headers)
 
             val response = app.post(apiUrl, headers = headers, data = formBody).text
