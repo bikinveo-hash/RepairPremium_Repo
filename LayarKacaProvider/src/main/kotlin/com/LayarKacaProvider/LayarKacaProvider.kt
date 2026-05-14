@@ -203,8 +203,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
-
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
@@ -241,23 +239,42 @@ class LayarKacaProvider : MainAPI() {
         val episodes = ArrayList<Episode>()
         val jsonScript = document.select("script#season-data").html()
 
+        // PERBAIKAN FATAL: Ekstrak Episode menggunakan Regex murni yang anti-gagal
         if (jsonScript.isNotBlank()) {
-            tryParseJson<Map<String, List<NontonDramaEpisode>>>(jsonScript)?.forEach { (_, epsList) ->
-                epsList.forEach { epData ->
-                    episodes.add(newEpisode(fixUrl(epData.slug ?: "")) {
-                        this.name = epData.title ?: "Episode ${epData.episode_no}"
-                        this.season = epData.s
-                        this.episode = epData.episode_no
+            val slugRegex = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"")
+            val titleRegex = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"")
+            val epRegex = Regex("\"episode_no\"\\s*:\\s*(\\d+)")
+            val sRegex = Regex("\"s\"\\s*:\\s*(\\d+)")
+
+            // Cari setiap blok JSON object {...}
+            Regex("\\{([^}]+)\\}").findAll(jsonScript).forEach { match ->
+                val obj = match.value
+                val slug = slugRegex.find(obj)?.groupValues?.get(1)
+                
+                if (slug != null) {
+                    val epTitle = titleRegex.find(obj)?.groupValues?.get(1)
+                    val epNo = epRegex.find(obj)?.groupValues?.get(1)?.toIntOrNull()
+                    val sNo = sRegex.find(obj)?.groupValues?.get(1)?.toIntOrNull()
+                    
+                    episodes.add(newEpisode(fixUrl(slug)) {
+                        this.name = epTitle ?: "Episode $epNo"
+                        this.season = sNo
+                        this.episode = epNo
                     })
                 }
             }
-        } else {
-            document.select("ul.episodes li a").forEach {
-                episodes.add(newEpisode(fixUrl(it.attr("href"))) {
-                    this.name = it.text()
-                    val epNum = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
-                    this.episode = epNum
-                })
+        }
+        
+        // Cadangan tambahan jika script data tidak ada
+        if (episodes.isEmpty()) {
+            document.select("ul.episodes li a, div.mob-list-eps a, a.btn-primary:contains(Play)").forEach {
+                val href = it.attr("href")
+                if (href.isNotBlank() && href.contains("episode", ignoreCase = true)) {
+                    episodes.add(newEpisode(fixUrl(href)) {
+                        this.name = it.text().trim().ifEmpty { "Play Episode" }
+                        this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+                    })
+                }
             }
         }
 
@@ -291,6 +308,7 @@ class LayarKacaProvider : MainAPI() {
         val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
 
+        // Karena sekarang "episodes" PASTI terisi, dia akan masuk ke blok TvSeries yang benar!
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = tmdbPoster ?: fallbackPoster
@@ -369,10 +387,9 @@ class LayarKacaProvider : MainAPI() {
             rawSources.add(it)
         }
 
-        // TANGKAP PAKAI WEBVIEWRESOLVER DENGAN REGEX SANGAT SPESIFIK (MENGHINDARI JEBAKAN <link rel="preconnect">)
+        // TANGKAP PAKAI WEBVIEWRESOLVER (REGEX KETAT AGAR TIDAK TERJEBAK PRECONNECT)
         if (rawSources.isEmpty()) {
             try {
-                // FAKTA: Regex ini hanya akan menangkap URL pemutar spesifik, mengabaikan preconnect di header HTML
                 val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch)")
                 val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = response.url
@@ -388,7 +405,6 @@ class LayarKacaProvider : MainAPI() {
         allSources.forEach { url ->
             var finalUrl = url
             
-            // Bypass P2P PlayerIframe
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
@@ -402,7 +418,6 @@ class LayarKacaProvider : MainAPI() {
                 } catch (e: Exception) {}
             }
 
-            // Eksekusi Extractor secara manual
             when {
                 finalUrl.contains("cloud.hownetwork.xyz") -> {
                     P2PExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
