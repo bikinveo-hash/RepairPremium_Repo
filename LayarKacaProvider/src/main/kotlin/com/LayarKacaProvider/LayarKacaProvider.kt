@@ -1,11 +1,17 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.Coroutines.mainWork
 import com.lagradost.api.Log
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -176,9 +182,7 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
-        
-        // Timeout disetel sedikit panjang agar halaman web sempat merender iframe-nya
-        var response = app.get(cleanUrl, timeout = 30)
+        var response = app.get(cleanUrl)
         var document = response.document
 
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
@@ -186,7 +190,7 @@ class LayarKacaProvider : MainAPI() {
             val newUrl = redirectButton.attr("href")
             if (newUrl.isNotEmpty()) {
                 cleanUrl = fixUrl(newUrl)
-                response = app.get(cleanUrl, timeout = 30)
+                response = app.get(cleanUrl)
                 document = response.document
             }
         }
@@ -301,7 +305,12 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // --- CARA FINAL: MEMETAKAN LANGSUNG DOMAIN EXTRACTOR ---
+    data class DecryptedLink(
+        @JsonProperty("server") val server: String,
+        @JsonProperty("url") val url: String
+    )
+
+    // --- LOAD LINKS: SUPER MOCK RHINO JS & ES5 POLYFILL ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -317,41 +326,101 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        val htmlContent = document.html()
-        
-        // Kita tangkap semua ID tersembunyi dengan pintar, lalu bungkus dengan domain 
-        // yang secara otomatis akan memanggil file Extractor.kt mu!
-        val p2pIdRegex = Regex("""cloud\.hownetwork\.xyz\/video\.php\?id=([A-Za-z0-9_-]+)""")
-        val turbovipIdRegex = Regex("""emturbovid\.com\/e\/([A-Za-z0-9_-]+)""")
-        val castIdRegex = Regex("""f16px\.com\/e\/([A-Za-z0-9_-]+)""")
-        
-        // Panggil P2P Extractor
-        p2pIdRegex.findAll(htmlContent).forEach { match ->
-            val id = match.groupValues[1]
-            // API Cloudstream membutuhkan prefix url yang sama dengan mainUrl milik P2PExtractor
-            loadExtractor("https://cloud.hownetwork.xyz/api2.php?id=$id", currentUrl, subtitleCallback, callback)
-        }
-        
-        // Panggil Turbovip Extractor
-        turbovipIdRegex.findAll(htmlContent).forEach { match ->
-            val id = match.groupValues[1]
-            loadExtractor("https://emturbovid.com/e/$id", currentUrl, subtitleCallback, callback)
-        }
+        val playerList = document.select("ul#player-list li a")
+        if (playerList.isEmpty()) return false
 
-        // Panggil CAST (F16) Extractor
-        castIdRegex.findAll(htmlContent).forEach { match ->
-            val id = match.groupValues[1]
-            loadExtractor("https://f16px.com/e/$id", currentUrl, subtitleCallback, callback)
-        }
-        
-        // Cadangan: Tarik secara manual jika ada Iframe yang lolos langsung
-        document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.contains("hownetwork.xyz") || src.contains("emturbovid.com") || src.contains("f16px.com")) {
-                 loadExtractor(src, currentUrl, subtitleCallback, callback)
+        val playerJsUrl = document.select("script[src*=player.js]").attr("src")
+        val playerJs = if (playerJsUrl.isNotBlank()) {
+            app.get(fixUrl(playerJsUrl), referer = currentUrl).text
+        } else ""
+
+        val extractedLinks = mutableListOf<DecryptedLink>()
+
+        if (playerJs.isNotBlank()) {
+            val serversJsonArray = playerList.map { 
+                "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
+            }.joinToString(",", "[", "]")
+
+            // KUNCI EMAS 100% BEBAS SYNTAX ERROR:
+            // Mengubah ES6 (let, const, function*, async, await) menjadi ES5 polos yang disukai Rhino!
+            val safePlayerJs = playerJs
+                .replace(Regex("""\blet\s+"""), "var ")
+                .replace(Regex("""\bconst\s+"""), "var ")
+                .replace(Regex("""\basync\s+function"""), "function")
+                .replace(Regex("""\bawait\s+"""), "")
+                .replace(Regex("""function\s*\*\s*([a-zA-Z0-9_]*)"""), "function $1")
+                .replace(Regex("""yield\s+S"""), "S")
+                .replace(Regex("""yield\s+"""), "")
+
+            val script = """
+                var window = this; var globalThis = this;
+                var document = { 
+                    addEventListener: function(){}, 
+                    querySelector: function(){ return { style: {}, classList: { add: function(){}, remove: function(){} }, dataset: {} }; },
+                    querySelectorAll: function(){ return []; },
+                    getElementById: function(){ return { style: {}, addEventListener: function(){}, getAttribute: function(){return "";}, src: "" }; },
+                    body: { dataset: {} },
+                    createElement: function() { return { style: {}, setAttribute: function(){} }; }
+                };
+                var navigator = { userAgent: "Mozilla/5.0" };
+                var location = { href: "$currentUrl" };
+                var screen = { orientation: {} };
+                var localStorage = { getItem: function(){ return null; }, setItem: function(){} };
+                var alert = function(){};
+                var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
+                
+                // --- SCRIPT PELINDUNG (ES5 POLYFILLED) ---
+                $safePlayerJs
+                
+                var inputs = $serversJsonArray;
+                var results = [];
+                for (var i = 0; i < inputs.length; i++) {
+                    try {
+                        var dec = _L(inputs[i].url);
+                        if (dec) results.push({ server: inputs[i].server, url: dec });
+                    } catch(e) {}
+                }
+                JSON.stringify(results);
+            """.trimIndent()
+
+            try {
+                mainWork {
+                    val rhino = org.mozilla.javascript.Context.enter()
+                    try {
+                        rhino.optimizationLevel = -1
+                        rhino.languageVersion = org.mozilla.javascript.Context.VERSION_ES6
+                        val scope = rhino.initSafeStandardObjects()
+                        
+                        val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
+                        if (!resultJson.isNullOrBlank()) {
+                            val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
+                            if (parsed != null) extractedLinks.addAll(parsed)
+                        }
+                    } finally {
+                        org.mozilla.javascript.Context.exit()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("LayarKacaProvider", "Rhino Error: ${e.message}")
             }
         }
 
+        extractedLinks.forEach { decrypted ->
+            val iframeUrl = decrypted.url
+            val serverName = decrypted.server
+            
+            if (iframeUrl.contains("playeriframe.sbs")) {
+                val id = iframeUrl.substringAfterLast("/")
+                val extractorUrl = when (serverName.lowercase()) {
+                    "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                    "turbovip" -> "https://emturbovid.com/e/$id"
+                    "cast" -> "https://f16px.com/e/$id"
+                    "hydrax" -> "https://hydrax.net/watch?v=$id"
+                    else -> iframeUrl
+                }
+                loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+            }
+        }
         return true
     }
 }
