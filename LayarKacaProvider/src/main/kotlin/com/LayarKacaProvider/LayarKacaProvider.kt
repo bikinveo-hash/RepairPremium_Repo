@@ -310,7 +310,6 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("url") val url: String
     )
 
-    // --- LOAD LINKS: SUPER MOCK RHINO JS & ES5 POLYFILL ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -336,13 +335,12 @@ class LayarKacaProvider : MainAPI() {
 
         val extractedLinks = mutableListOf<DecryptedLink>()
 
+        // 1. Coba memecahkan enkripsi lewat Rhino Javascript (Method Pertama)
         if (playerJs.isNotBlank()) {
             val serversJsonArray = playerList.map { 
                 "{\"server\":\"${it.attr("data-server")}\", \"url\":\"${it.attr("data-url")}\"}" 
             }.joinToString(",", "[", "]")
 
-            // KUNCI EMAS 100% BEBAS SYNTAX ERROR:
-            // Mengubah ES6 (let, const, function*, async, await) menjadi ES5 polos yang disukai Rhino!
             val safePlayerJs = playerJs
                 .replace(Regex("""\blet\s+"""), "var ")
                 .replace(Regex("""\bconst\s+"""), "var ")
@@ -369,7 +367,6 @@ class LayarKacaProvider : MainAPI() {
                 var alert = function(){};
                 var Promise = { resolve: function(x){return x;}, reject: function(x){return x;} };
                 
-                // --- SCRIPT PELINDUNG (ES5 POLYFILLED) ---
                 $safePlayerJs
                 
                 var inputs = $serversJsonArray;
@@ -388,9 +385,7 @@ class LayarKacaProvider : MainAPI() {
                     val rhino = org.mozilla.javascript.Context.enter()
                     try {
                         rhino.optimizationLevel = -1
-                        rhino.languageVersion = org.mozilla.javascript.Context.VERSION_ES6
                         val scope = rhino.initSafeStandardObjects()
-                        
                         val resultJson = rhino.evaluateString(scope, script, "JavaScript", 1, null) as? String
                         if (!resultJson.isNullOrBlank()) {
                             val parsed = tryParseJson<List<DecryptedLink>>(resultJson)
@@ -405,6 +400,28 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
+        // 2. Jika Rhino gagal, gunakan Fallback Regex (Method Cadangan)
+        if (extractedLinks.isEmpty()) {
+            val htmlContent = document.html()
+            
+            // Tangkap ID yang bocor dari HTML
+            val p2pIdRegex = Regex("""cloud\.hownetwork\.xyz\/video\.php\?id=([A-Za-z0-9_-]+)""")
+            p2pIdRegex.findAll(htmlContent).forEach { match ->
+                extractedLinks.add(DecryptedLink("p2p", "https://cloud.hownetwork.xyz/api2.php?id=${match.groupValues[1]}"))
+            }
+            
+            val turbovipIdRegex = Regex("""emturbovid\.com\/e\/([A-Za-z0-9_-]+)""")
+            turbovipIdRegex.findAll(htmlContent).forEach { match ->
+                extractedLinks.add(DecryptedLink("turbovip", "https://emturbovid.com/e/${match.groupValues[1]}"))
+            }
+
+            val castIdRegex = Regex("""f16px\.com\/e\/([A-Za-z0-9_-]+)""")
+            castIdRegex.findAll(htmlContent).forEach { match ->
+                extractedLinks.add(DecryptedLink("cast", "https://f16px.com/e/${match.groupValues[1]}"))
+            }
+        }
+
+        // --- MENGIRIM HASIL KE EXTRACTOR ---
         extractedLinks.forEach { decrypted ->
             val iframeUrl = decrypted.url
             val serverName = decrypted.server
@@ -419,8 +436,12 @@ class LayarKacaProvider : MainAPI() {
                     else -> iframeUrl
                 }
                 loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
+            } else {
+                // Untuk format URL yang tertangkap oleh regex cadangan
+                loadExtractor(iframeUrl, currentUrl, subtitleCallback, callback)
             }
         }
+        
         return true
     }
 }
