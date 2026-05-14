@@ -250,18 +250,6 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
-        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
-        if (trailerUrl.isNullOrEmpty()) {
-            trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
-        }
-        if (trailerUrl.isNullOrEmpty()) {
-            trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        }
-        
-        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
-        val ytId = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
-        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
-
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = tmdbPoster ?: fallbackPoster
@@ -273,12 +261,6 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
-                    ))
-                }
             }
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
@@ -291,12 +273,6 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
-                if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false
-                    ))
-                }
             }
         }
     }
@@ -320,7 +296,6 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Trik Injeksi Script: Memaksa WebView mendaftar semua server dan dekripsi JS LK21
         val injectionScript = """
             setTimeout(function() {
                 var btns = document.querySelectorAll("ul#player-list li a");
@@ -357,33 +332,29 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) { Log.e("LayarKacaProvider", "WebView Error: ${e.message}") }
 
-        // Membagi-bagikan link ke Extractor masing-masing
         if (!jsonResult.isNullOrBlank()) {
             val extractedLinks = tryParseJson<List<DecryptedLink>>(jsonResult)
             
             extractedLinks?.forEach { decrypted ->
                 val iframeUrl = decrypted.url
-                val serverName = decrypted.server
+                val srv = decrypted.server.lowercase()
                 
                 if (iframeUrl.contains("playeriframe.sbs")) {
-                    var id = iframeUrl.substringAfter("iframe/$serverName/")
-                    id = id.substringBefore("?").substringBefore("/")
+                    // PENGAMBILAN ID SUPER AMAN: Mengambil bagian terakhir dari URL, bukan potong berdasarkan nama server
+                    val id = iframeUrl.substringBefore("?").trimEnd('/').substringAfterLast("/")
                     
-                    val extractorUrl = when (serverName.lowercase()) {
-                        "p2p" -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
-                        "turbovip" -> "https://turbovidhls.com/t/$id"
-                        "cast" -> "https://f16px.com/e/$id"
-                        "hydrax" -> "https://abysscdn.com/?v=$id"
+                    // PEMBACAAN NAMA SERVER FLEKSIBEL
+                    val extractorUrl = when {
+                        srv.contains("p2p") -> "https://cloud.hownetwork.xyz/api2.php?id=$id"
+                        srv.contains("turbo") || srv.contains("vip") -> "https://turbovidhls.com/t/$id"
+                        srv.contains("cast") || srv.contains("f16") -> "https://f16px.com/e/$id"
                         else -> iframeUrl
                     }
                     
                     loadExtractor(extractorUrl, currentUrl, subtitleCallback, callback)
                 }
             }
-        } else {
-            Log.e("LayarKacaProvider", "Gagal mendapatkan JSON dari WebViewResolver")
         }
-        
         return true
     }
 }
