@@ -32,8 +32,7 @@ class LayarKacaProvider : MainAPI() {
                 val temp = s[i]
                 s[i] = s[j]
                 s[j] = temp
-            } // PERBAIKAN: Kurung tutup ini sebelumnya ketinggalan!
-            
+            }
             var i = 0
             j = 0
             val result = ByteArray(cipher.size)
@@ -212,7 +211,7 @@ class LayarKacaProvider : MainAPI() {
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
             val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
             cleanUrl = if (path.contains("season") || path.contains("episode")) {
-                "https://tv4.nontondrama.my$path"
+                "https://series.lk21.de$path"
             } else {
                 "https://tv10.lk21official.cc$path"
             }
@@ -227,7 +226,7 @@ class LayarKacaProvider : MainAPI() {
                 cleanUrl = fixUrl(newUrl)
                 if (cleanUrl.contains("series") || cleanUrl.contains("nontondrama")) {
                     val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
-                    cleanUrl = "https://tv4.nontondrama.my$path"
+                    cleanUrl = "https://series.lk21.de$path"
                 }
                 response = app.get(cleanUrl)
                 document = response.document
@@ -253,8 +252,6 @@ class LayarKacaProvider : MainAPI() {
         val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
 
         val episodes = ArrayList<Episode>()
-        
-        // PERBAIKAN: Gunakan .html() karena Jsoup Elements tidak mendukung .data() secara langsung
         val jsonScript = document.select("script#season-data").html()
 
         if (jsonScript.isNotBlank()) {
@@ -352,38 +349,69 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var currentUrl = data
-        
-        // PERBAIKAN: Gunakan .html()
-        if (!currentUrl.contains("episode", ignoreCase = true) && currentUrl.contains("nontondrama")) {
-            try {
-                val doc = app.get(currentUrl).document
-                val jsonScript = doc.select("script#season-data").html()
-                val firstSlug = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").find(jsonScript)?.groupValues?.get(1)
-                if (firstSlug != null) {
-                    currentUrl = fixUrl(firstSlug)
-                }
-            } catch (e: Exception) {}
+        var response = app.get(currentUrl)
+        var document = response.document
+
+        if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
+            val path = try { URI(currentUrl).path } catch(e: Exception) { "" }
+            currentUrl = "https://tv4.nontondrama.my$path"
+            response = app.get(currentUrl)
+            document = response.document
+        }
+
+        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        if (redirectButton != null && redirectButton.attr("href").isNotEmpty()) {
+            currentUrl = fixUrl(redirectButton.attr("href"))
+            if (currentUrl.contains("series") || currentUrl.contains("nontondrama")) {
+                val path = try { URI(currentUrl).path } catch(e: Exception) { "" }
+                currentUrl = "https://tv4.nontondrama.my$path"
+            }
+            document = app.get(currentUrl).document
         }
 
         val rawSources = mutableListOf<String>()
 
-        try {
-            val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|turbovidhls\\.com/t|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php|turboviplay\\.com/.*\\.m3u8)")
-            val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
-            val interceptedUrl = response.url
-            
-            if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
-                rawSources.add(interceptedUrl)
-            }
-        } catch (e: Exception) {}
+        // 1. TANGKAP RC4 (Daftar Key Super Lengkap agar Anti-Gagal)
+        val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
+        val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
+        val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
+        
+        val possibleKeys = listOfNotNull(
+            host, baseDomain, 
+            "tv1.lk21official.cc", "tv2.lk21official.cc", "tv3.lk21official.cc", "tv4.lk21official.cc", "tv5.lk21official.cc",
+            "tv6.lk21official.cc", "tv7.lk21official.cc", "tv8.lk21official.cc", "tv9.lk21official.cc", "tv10.lk21official.cc",
+            "lk21official.cc", "tv1.nontondrama.my", "tv2.nontondrama.my", "tv3.nontondrama.my", "tv4.nontondrama.my", "nontondrama.my",
+            "series.lk21.de", "lk21.de", "lk21.party", "gudangvape.com"
+        ).distinct()
 
-        if (rawSources.isEmpty()) {
-            val document = app.get(currentUrl).document
-            document.select("iframe").mapNotNull { it.attr("src") }.filter { 
-                it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
-            }.forEach {
-                rawSources.add(it)
+        playerLinks.forEach { encryptedString ->
+            var decoded = ""
+            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
+                decoded = encryptedString
+            } else {
+                for (key in possibleKeys) {
+                    val attempt = decryptRC4(key, encryptedString)
+                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
+                        decoded = attempt
+                        break
+                    }
+                }
             }
+            if (decoded.isNotBlank()) rawSources.add(decoded)
+        }
+
+        // 2. TANGKAP PAKAI WEBVIEWRESOLVER SEBAGAI BACKUP
+        if (rawSources.isEmpty()) {
+            try {
+                // Berkat cURL-mu, kita tahu semua bermuara ke playeriframe.sbs/iframe!
+                val interceptorRegex = Regex("(?i)playeriframe\\.sbs/iframe")
+                val webResponse = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
+                val interceptedUrl = webResponse.url
+                
+                if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
+                    rawSources.add(interceptedUrl)
+                }
+            } catch (e: Exception) {}
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
@@ -391,70 +419,41 @@ class LayarKacaProvider : MainAPI() {
         allSources.forEach { url ->
             var finalUrl = url
             
-            if (finalUrl.contains("turboviplay.com") && finalUrl.endsWith(".m3u8", ignoreCase = true)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "TurboVIP",
-                        name = "TurboVIP HD",
-                        url = finalUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "https://turbovidhls.com/"
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-                return@forEach
-            }
-
+            // 3. BYPASS SEMUA SERVER (P2P, TurboVIP, Cast)
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
-                finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
-            } else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
+                P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
+            } 
+            else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
                 val id = finalUrl.substringAfter("turbovip/").substringBefore("/")
-                finalUrl = "https://turbovidhls.com/t/$id"
-            } else if (finalUrl.contains("playeriframe.sbs")) {
-                try {
-                    val response = app.get(finalUrl, referer = currentUrl)
-                    val iframe = response.document.selectFirst("iframe")?.attr("src")
-                    if (!iframe.isNullOrBlank()) {
-                        finalUrl = fixUrl(iframe)
-                    }
-                } catch (e: Exception) {}
-            }
-
-            when {
-                finalUrl.contains("cloud.hownetwork.xyz") -> {
-                    P2PExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
-                }
-                finalUrl.contains("emturbovid.com") || finalUrl.contains("turbovidhls.com") -> {
-                    EmturbovidExtractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
-                }
-                finalUrl.contains("f16px.com") -> {
-                    F16Extractor().getUrl(finalUrl, currentUrl)?.forEach { callback.invoke(it) }
-                }
-                else -> {
-                    val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
-                    if (!directLoaded) {
-                        try {
-                            val response = app.get(finalUrl, referer = currentUrl)
-                            val scriptHtml = response.document.html().replace("\\/", "/")
-                            Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                                val streamUrl = match.value
-                                val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = "LK21 VIP",
-                                        name = "LK21 VIP",
-                                        url = streamUrl,
-                                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.referer = finalUrl
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                            }
-                        } catch (e: Exception) {}
-                    }
+                EmturbovidExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
+            } 
+            else if (finalUrl.contains("playeriframe.sbs/iframe/cast/")) {
+                val id = finalUrl.substringAfter("cast/").substringBefore("/")
+                F16Extractor().getUrl("https://f16px.com/e/$id", currentUrl)?.forEach { callback.invoke(it) }
+            } 
+            else {
+                val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
+                if (!directLoaded) {
+                    try {
+                        val res = app.get(finalUrl, referer = currentUrl)
+                        val scriptHtml = res.document.html().replace("\\/", "/")
+                        Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
+                            val streamUrl = match.value
+                            val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "LK21 VIP",
+                                    name = "LK21 VIP",
+                                    url = streamUrl,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = finalUrl
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                        }
+                    } catch (e: Exception) {}
                 }
             }
         }
