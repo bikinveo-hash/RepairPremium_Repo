@@ -32,6 +32,17 @@ class LayarKacaProvider : MainAPI() {
                 val temp = s[i]
                 s[i] = s[j]
                 s[j] = temp
+            } // PERBAIKAN: Kurung tutup ini sebelumnya ketinggalan!
+            
+            var i = 0
+            j = 0
+            val result = ByteArray(cipher.size)
+            for (k in cipher.indices) {
+                i = (i + 1) % 256
+                j = (j + s[i]) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
                 val kStream = s[(s[i] + s[j]) % 256]
                 result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
             }
@@ -242,7 +253,9 @@ class LayarKacaProvider : MainAPI() {
         val recommendations = document.select("div.related-video li.slider article, div.mob-related-series li.slider article").mapNotNull { toSearchResult(it) }
 
         val episodes = ArrayList<Episode>()
-        val jsonScript = document.select("script#season-data").let { it.data().ifBlank { it.html() } }
+        
+        // PERBAIKAN: Gunakan .html() karena Jsoup Elements tidak mendukung .data() secara langsung
+        val jsonScript = document.select("script#season-data").html()
 
         if (jsonScript.isNotBlank()) {
             val slugs = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
@@ -340,10 +353,11 @@ class LayarKacaProvider : MainAPI() {
     ): Boolean {
         var currentUrl = data
         
+        // PERBAIKAN: Gunakan .html()
         if (!currentUrl.contains("episode", ignoreCase = true) && currentUrl.contains("nontondrama")) {
             try {
                 val doc = app.get(currentUrl).document
-                val jsonScript = doc.select("script#season-data").let { it.data().ifBlank { it.html() } }
+                val jsonScript = doc.select("script#season-data").html()
                 val firstSlug = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").find(jsonScript)?.groupValues?.get(1)
                 if (firstSlug != null) {
                     currentUrl = fixUrl(firstSlug)
