@@ -320,34 +320,30 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // ROBOT KLIK: Membiarkan LK21 sendiri yang melakukan dekripsi!
+        // Script Anti-Hang: Klik Tombol dan Tunggu Iframe Berubah (Max 2000ms)
         val injectionScript = """
             setTimeout(async function() {
                 try {
-                    window.matchMedia = window.matchMedia || function() { return { matches: false, addListener: function() {}, removeListener: function() {} }; };
                     var btns = document.querySelectorAll("ul#player-list li a");
                     var iframe = document.getElementById("main-player") || document.querySelector("iframe");
                     var res = [];
                     
                     if (btns.length === 0 && iframe && iframe.src.includes("playeriframe.sbs")) {
-                         // MODE MOVIE: Tangkap dari iframe langsung
                          var srv = "p2p";
                          if (iframe.src.includes("turbo") || iframe.src.includes("vip")) srv = "turbovip";
                          if (iframe.src.includes("cast") || iframe.src.includes("f16")) srv = "cast";
                          res.push({server: srv, url: iframe.src});
-                    } else {
-                        // MODE SERIES: Klik tombolnya satu per satu
+                    } else if (btns.length > 0) {
                         for(var i=0; i<btns.length; i++) {
                             var srv = btns[i].getAttribute("data-server");
                             btns[i].click();
                             
-                            // Polling: Tunggu sampai iframe ganti URL (Maksimal 2 detik per tombol)
                             var waitCount = 0;
                             var lastSrc = iframe ? iframe.src : "";
                             while(waitCount < 20) { 
                                 await new Promise(r => setTimeout(r, 100));
                                 iframe = document.getElementById("main-player") || document.querySelector("iframe");
-                                if(iframe && iframe.src !== lastSrc && iframe.src.includes("playeriframe.sbs")) {
+                                if(iframe && iframe.src && iframe.src !== lastSrc && iframe.src.includes("playeriframe.sbs")) {
                                     res.push({server: srv, url: iframe.src});
                                     break;
                                 }
@@ -355,7 +351,6 @@ class LayarKacaProvider : MainAPI() {
                             }
                         }
                     }
-                    
                     var resultStr = encodeURIComponent(JSON.stringify(res));
                     var dummy = document.createElement("img");
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
@@ -365,7 +360,7 @@ class LayarKacaProvider : MainAPI() {
                     dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
                     document.body.appendChild(dummy);
                 }
-            }, 2000); // Waktu 2 detik untuk memastikan halaman loading penuh
+            }, 2000); 
         """.trimIndent()
 
         val interceptor = WebViewResolver(
