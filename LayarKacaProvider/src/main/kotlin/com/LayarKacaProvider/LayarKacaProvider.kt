@@ -12,6 +12,7 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import java.net.URI
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
@@ -181,11 +182,26 @@ class LayarKacaProvider : MainAPI() {
         var response = app.get(cleanUrl, timeout = 30)
         var document = response.document
 
+        if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
+            val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
+            cleanUrl = if (path.contains("season") || path.contains("episode")) {
+                "https://series.lk21.de$path"
+            } else {
+                "https://tv10.lk21official.cc$path"
+            }
+            response = app.get(cleanUrl, timeout = 30)
+            document = response.document
+        }
+
         val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
         if (redirectButton != null) {
-            val newUrl = redirectButton.attr("href")
+            var newUrl = redirectButton.attr("href")
             if (newUrl.isNotEmpty()) {
                 cleanUrl = fixUrl(newUrl)
+                if (cleanUrl.contains("series") || cleanUrl.contains("nontondrama")) {
+                    val path = try { URI(cleanUrl).path } catch(e: Exception) { "" }
+                    cleanUrl = "https://series.lk21.de$path"
+                }
                 response = app.get(cleanUrl, timeout = 30)
                 document = response.document
             }
@@ -273,11 +289,8 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false 
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         } else {
@@ -291,11 +304,8 @@ class LayarKacaProvider : MainAPI() {
                 this.actors = actors
                 this.recommendations = recommendations
                 this.posterHeaders = mapOf("Referer" to mainUrl)
-                
                 if (!finalTrailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = finalTrailerUrl, referer = null, raw = false
-                    ))
+                    this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
                 }
             }
         }
@@ -320,44 +330,52 @@ class LayarKacaProvider : MainAPI() {
             currentUrl = fixUrl(redirectButton.attr("href"))
         }
 
-        // Script Elegan: Menggunakan _L() murni persis seperti kodemu yang lama!
+        // KUNCI SERIES:
+        // 1. Polling Interval: Menunggu tombol AJAX termuat.
+        // 2. window.location.origin: Anti-blokir CORS antar domain Series & Movie.
+        // 3. _L(url): Memecah sandi persis seperti percobaan Console kamu!
         val injectionScript = """
-            setTimeout(function() {
+            var checkInterval = setInterval(function() {
                 try {
                     var btns = document.querySelectorAll("ul#player-list li a");
-                    var res = [];
-                    for(var i=0; i<btns.length; i++) {
-                        var srv = btns[i].getAttribute("data-server");
-                        var url = btns[i].getAttribute("data-url");
-                        if(url && typeof _L === 'function') {
-                            try {
-                                var dec = _L(url);
-                                if(dec) res.push({server: srv, url: dec});
-                            } catch(e) {}
+                    if (btns.length > 0 && typeof _L === 'function') {
+                        clearInterval(checkInterval);
+                        var res = [];
+                        for(var i=0; i<btns.length; i++) {
+                            var srv = btns[i].getAttribute("data-server");
+                            var url = btns[i].getAttribute("data-url");
+                            if(url) {
+                                try {
+                                    var dec = _L(url);
+                                    if(dec) res.push({server: srv, url: dec});
+                                } catch(e) {}
+                            }
                         }
+                        var resultStr = encodeURIComponent(JSON.stringify(res));
+                        var dummy = document.createElement("img");
+                        dummy.src = window.location.origin + "/lk21-all-links/" + resultStr;
+                        document.body.appendChild(dummy);
                     }
-                    
-                    // Jika tidak ada tombol (Mode Movie Langsung di Iframe)
-                    if (btns.length === 0) {
-                        var iframe = document.getElementById("main-player") || document.querySelector("iframe");
-                        if (iframe && iframe.src && iframe.src.includes("playeriframe.sbs")) {
-                             var srv = "p2p";
-                             if (iframe.src.includes("turbo") || iframe.src.includes("vip")) srv = "turbovip";
-                             if (iframe.src.includes("cast") || iframe.src.includes("f16")) srv = "cast";
-                             res.push({server: srv, url: iframe.src});
-                        }
+                } catch(e) {}
+            }, 500);
+            
+            // Fallback (Mode Movie / Direct Iframe) jika tombol tidak pernah muncul
+            setTimeout(function() {
+                clearInterval(checkInterval);
+                try {
+                    var iframe = document.getElementById("main-player") || document.querySelector("iframe");
+                    if (iframe && iframe.src && iframe.src.includes("playeriframe.sbs")) {
+                         var srv = "p2p";
+                         if (iframe.src.includes("turbo") || iframe.src.includes("vip")) srv = "turbovip";
+                         if (iframe.src.includes("cast") || iframe.src.includes("f16")) srv = "cast";
+                         var res = [{server: srv, url: iframe.src}];
+                         var resultStr = encodeURIComponent(JSON.stringify(res));
+                         var dummy = document.createElement("img");
+                         dummy.src = window.location.origin + "/lk21-all-links/" + resultStr;
+                         document.body.appendChild(dummy);
                     }
-                    
-                    var resultStr = encodeURIComponent(JSON.stringify(res));
-                    var dummy = document.createElement("img");
-                    dummy.src = "https://tv10.lk21official.cc/lk21-all-links/" + resultStr;
-                    document.body.appendChild(dummy);
-                } catch(e) {
-                    var dummy = document.createElement("img");
-                    dummy.src = "https://tv10.lk21official.cc/lk21-all-links/[]";
-                    document.body.appendChild(dummy);
-                }
-            }, 3000); 
+                } catch(e) {}
+            }, 5000); 
         """.trimIndent()
 
         val interceptor = WebViewResolver(
@@ -378,7 +396,7 @@ class LayarKacaProvider : MainAPI() {
                     val srv = decrypted.server.lowercase()
                     
                     if (iframeUrl.contains("playeriframe.sbs")) {
-                        // KUNCI UTAMA FIX SERIES: MENGHAPUS STRING "/embed" SEBELUM MEMOTONG ID!
+                        // FIX FATAL BUG: Hapus "/embed" agar ID server murni!
                         val cleanIframeUrl = iframeUrl.substringBefore("?").replace("/embed", "").trimEnd('/')
                         val id = cleanIframeUrl.substringAfterLast("/")
                         
