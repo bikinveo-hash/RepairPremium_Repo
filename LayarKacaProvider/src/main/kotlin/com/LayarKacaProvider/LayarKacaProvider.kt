@@ -259,12 +259,22 @@ class LayarKacaProvider : MainAPI() {
             val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val epNos = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
             val sNos = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
+            
+            // Ekstraksi tambahan untuk UI yang lebih detail (opsional, jika web menyediakan di JSON)
+            val posters = Regex("\"poster\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val plots = Regex("\"description\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val dates = Regex("\"release_date\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
 
             for (i in slugs.indices) {
                 episodes.add(newEpisode(fixUrl(slugs[i])) {
                     this.name = titles.getOrNull(i) ?: "Episode ${i + 1}"
                     this.season = sNos.getOrNull(i)
                     this.episode = epNos.getOrNull(i)
+                    
+                    // --- SETTING UI TAMPILAN DETAIL ---
+                    this.posterUrl = posters.getOrNull(i)?.takeIf { it.isNotBlank() } ?: fallbackPoster
+                    this.description = plots.getOrNull(i)
+                    addDate(dates.getOrNull(i), format = "yyyy-MM-dd")
                 })
             }
         }
@@ -276,6 +286,9 @@ class LayarKacaProvider : MainAPI() {
                     episodes.add(newEpisode(fixUrl(href)) {
                         this.name = it.text().trim().ifEmpty { "Play Episode" }
                         this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+                        
+                        // --- SETTING UI TAMPILAN DETAIL ---
+                        this.posterUrl = fallbackPoster 
                     })
                 }
             }
