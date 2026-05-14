@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.SubtitleFile
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -28,7 +29,13 @@ open class P2PExtractor : ExtractorApi() {
     
     data class HownetworkResponse(val file: String?, val link: String?, val label: String?)
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+    // MENGGUNAKAN CALLBACK INVOKE SESUAI EXTRACTORAPI.KT LAMA
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
         
@@ -39,7 +46,6 @@ open class P2PExtractor : ExtractorApi() {
             "X-Requested-With" to "XMLHttpRequest"
         )
         val formBody = mapOf("r" to magicReferer, "d" to "cloud.hownetwork.xyz")
-        val sources = mutableListOf<ExtractorLink>()
         
         try {
             val response = app.post(apiUrl, headers = headers, data = formBody).text
@@ -47,32 +53,42 @@ open class P2PExtractor : ExtractorApi() {
             val videoUrl = json?.file ?: json?.link
    
             if (!videoUrl.isNullOrBlank()) {
-                sources.add(newExtractorLink(name, "P2P HD", videoUrl, ExtractorLinkType.M3U8) {
-                    this.referer = magicReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "User-Agent" to customUserAgent,
-                        "Referer" to magicReferer,
-                        "Origin" to mainUrl,
-                        "Accept" to "*/*"
-                    )
-                })
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "P2P HD",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = magicReferer
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf(
+                            "User-Agent" to customUserAgent,
+                            "Referer" to magicReferer,
+                            "Origin" to mainUrl,
+                            "Accept" to "*/*"
+                        )
+                    }
+                )
             }
         } catch (e: Exception) { Log.e("P2P", e.message.toString()) }
-        return sources
     }
 }
 
 // ============================================================================
-// 2. TURBOVIP EXTRACTOR (Aman dari Error 3001)
+// 2. TURBOVIP EXTRACTOR
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
     override var mainUrl = "https://turbovidhls.com"
     override val requiresReferer = false
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
             val id = url.substringAfterLast("/")
             val targetUrl = "$mainUrl/t/$id"
@@ -82,22 +98,28 @@ open class EmturbovidExtractor : ExtractorApi() {
             val m3u8Url = m3u8Regex.find(response)?.groupValues?.get(1)
             
             if (!m3u8Url.isNullOrBlank()) {
-                sources.add(newExtractorLink(name, "Turbovip HD", m3u8Url, ExtractorLinkType.M3U8) {
-                    this.referer = "" // Dikosongkan agar bebas blokir CDN
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "User-Agent" to customUserAgent,
-                        "Accept" to "*/*"
-                    )
-                })
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "Turbovip HD",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "" // ANTI ERROR 3001
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf(
+                            "User-Agent" to customUserAgent,
+                            "Accept" to "*/*"
+                        )
+                    }
+                )
             }
         } catch (e: Exception) { Log.e("Turbovid", e.message.toString()) }
-        return sources
     }
 }
 
 // ============================================================================
-// 3. CAST / F16 EXTRACTOR (Aman dari JWT Cloudflare Challenge)
+// 3. CAST / F16 EXTRACTOR
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "F16"
@@ -121,8 +143,12 @@ open class F16Extractor : ExtractorApi() {
         return (1..length).map { chars[Random.nextInt(chars.length)] }.joinToString("")
     }
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
             val videoId = url.substringAfter("/e/").substringBefore("?")
             val challengeUrl = "$mainUrl/api/videos/access/challenge"
@@ -138,17 +164,14 @@ open class F16Extractor : ExtractorApi() {
                 "Referer" to pageUrl,
                 "Origin" to mainUrl,
                 "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
-                "Accept" to "*/*"
+                "Accept" to "*/*",
+                "Content-Length" to "0"
             )
 
-            // POST dengan map kosong untuk Challenge ID
             val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap<String, String>()).text
             val challengeJson = tryParseJson<F16Challenge>(challengeRes)
             
-            if (challengeJson?.challenge_id == null || challengeJson.nonce == null) {
-                Log.e("F16Extractor", "Gagal mendapatkan security challenge")
-                return sources
-            }
+            if (challengeJson?.challenge_id == null || challengeJson.nonce == null) return
 
             val jwtHeader = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" 
             val jwtPayload = """{"viewer_id":"$viewerId","device_id":"$deviceId","confidence":0.93,"iat":$timestamp,"exp":${timestamp + 600},"challenge_id":"${challengeJson.challenge_id}","nonce":"${challengeJson.nonce}"}"""
@@ -161,15 +184,16 @@ open class F16Extractor : ExtractorApi() {
                 this["x-embed-origin"] = "playeriframe.sbs"
                 this["x-embed-parent"] = pageUrl
                 this["x-embed-referer"] = magicReferer
+                this.remove("Content-Length")
             }
             
             val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.93))
             val responseText = app.post(apiUrl, headers = headersPlayback, json = jsonPayload).text
             
             val json = tryParseJson<F16Playback>(responseText)
-            val pb = json?.playback
+            val pb = json?.playback ?: return
 
-            if (pb != null && pb.payload != null && pb.iv != null && !pb.key_parts.isNullOrEmpty()) {
+            if (pb.payload != null && pb.iv != null && !pb.key_parts.isNullOrEmpty()) {
                 val part1 = Base64.decode(pb.key_parts[0].fixBase64(), Base64.URL_SAFE)
                 val part2 = Base64.decode(pb.key_parts[1].fixBase64(), Base64.URL_SAFE)
                 val combinedKey = part1 + part2 
@@ -180,22 +204,28 @@ open class F16Extractor : ExtractorApi() {
                     result?.sources?.forEach { source ->
                         val streamUrl = source.url
                         if (!streamUrl.isNullOrBlank()) {
-                            sources.add(newExtractorLink("CAST", "CAST HD", streamUrl, ExtractorLinkType.M3U8) {
-                                this.referer = "$mainUrl/" 
-                                this.quality = getQualityFromName(source.label)
-                                this.headers = mapOf(
-                                    "User-Agent" to customUserAgent,
-                                    "Origin" to mainUrl, 
-                                    "Referer" to "$mainUrl/",
-                                    "Accept" to "*/*"
-                                )
-                            })
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "CAST HD",
+                                    url = streamUrl,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = "$mainUrl/" 
+                                    this.quality = getQualityFromName(source.label)
+                                    this.headers = mapOf(
+                                        "User-Agent" to customUserAgent,
+                                        "Origin" to mainUrl, 
+                                        "Referer" to "$mainUrl/",
+                                        "Accept" to "*/*"
+                                    )
+                                }
+                            )
                         }
                     }
                 }
             }
         } catch (e: Exception) { Log.e("F16Extractor", "Error: ${e.message}") }
-        return sources
     }
 
     private fun decryptAesGcm(encryptedBase64: String, keyBytes: ByteArray, ivBase64: String): String? {
