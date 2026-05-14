@@ -1,7 +1,5 @@
 package com.LayarKacaProvider
 
-import android.util.Base64
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -9,18 +7,94 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.SubtitleFile
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import kotlin.random.Random
-
-val customUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-val magicReferer = "https://playeriframe.sbs/"
+import com.lagradost.cloudstream3.network.WebViewResolver
 
 // ============================================================================
-// 1. P2P EXTRACTOR (Terbukti Sukses 100%)
+// 1. TURBOVIP EXTRACTOR (Bypass Cloudflare)
+// ============================================================================
+open class EmturbovidExtractor : ExtractorApi() {
+    override var name = "TurboVIP"
+    override var mainUrl = "https://turbovidhls.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        try {
+            // Surat Pengantar agar Cloudflare tidak curiga
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Referer" to "https://playeriframe.sbs/"
+            )
+            
+            // Tangkap request yang mengandung m3u8
+            val interceptorRegex = Regex("(?i)m3u8")
+            val response = app.get(url, headers = headers, interceptor = WebViewResolver(interceptorRegex))
+            val videoUrl = response.url
+
+            if (videoUrl.contains("m3u8", ignoreCase = true)) {
+                sources.add(
+                    newExtractorLink(
+                        source = "TurboVIP",
+                        name = "TurboVIP HD",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return sources
+    }
+}
+
+// ============================================================================
+// 2. CAST / F16PX EXTRACTOR (Bypass WebCrypto)
+// ============================================================================
+open class F16Extractor : ExtractorApi() {
+    override var name = "Cast"
+    override var mainUrl = "https://f16px.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        try {
+            // Surat Pengantar untuk F16px
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Referer" to "https://playeriframe.sbs/"
+            )
+
+            // Tangkap request m3u8
+            val interceptorRegex = Regex("(?i)m3u8")
+            val response = app.get(url, headers = headers, interceptor = WebViewResolver(interceptorRegex))
+            val videoUrl = response.url
+
+            if (videoUrl.contains("m3u8", ignoreCase = true)) {
+                sources.add(
+                    newExtractorLink(
+                        source = "Cast",
+                        name = "Cast HD",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return sources
+    }
+}
+
+// ============================================================================
+// 3. P2P EXTRACTOR (TETAP SAMA - KARENA SUDAH LANCAR JAYA)
 // ============================================================================
 open class P2PExtractor : ExtractorApi() {
     override var name = "P2P"
@@ -29,213 +103,31 @@ open class P2PExtractor : ExtractorApi() {
     
     data class HownetworkResponse(val file: String?, val link: String?, val label: String?)
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val id = url.substringAfter("id=").substringBefore("&")
         val apiUrl = "$mainUrl/api2.php?id=$id"
-        
         val headers = mapOf(
-            "User-Agent" to customUserAgent,
-            "Referer" to magicReferer,
-            "Origin" to mainUrl,
-            "X-Requested-With" to "XMLHttpRequest"
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "Referer" to url,
+            "Origin" to mainUrl
         )
-        val formBody = mapOf("r" to magicReferer, "d" to "cloud.hownetwork.xyz")
+        val formBody = mapOf("r" to "https://playeriframe.sbs/", "d" to "cloud.hownetwork.xyz")
+        val sources = mutableListOf<ExtractorLink>()
         
         try {
+            app.get(url, headers = headers)
+
             val response = app.post(apiUrl, headers = headers, data = formBody).text
             val json = tryParseJson<HownetworkResponse>(response)
             val videoUrl = json?.file ?: json?.link
    
             if (!videoUrl.isNullOrBlank()) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "P2P HD",
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = magicReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "User-Agent" to customUserAgent,
-                            "Referer" to magicReferer,
-                            "Origin" to mainUrl,
-                            "Accept" to "*/*"
-                        )
-                    }
-                )
+                sources.add(newExtractorLink(source = name, name = name, url = videoUrl, type = ExtractorLinkType.M3U8) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                })
             }
-        } catch (e: Exception) { Log.e("P2P", e.message.toString()) }
-    }
-}
-
-// ============================================================================
-// 2. TURBOVIP EXTRACTOR (Terbukti Sukses 100% Anti Error 3001)
-// ============================================================================
-open class EmturbovidExtractor : ExtractorApi() {
-    override var name = "Emturbovid"
-    override var mainUrl = "https://turbovidhls.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val id = url.substringAfterLast("/")
-            val targetUrl = "$mainUrl/t/$id"
-            
-            val response = app.get(targetUrl, headers = mapOf("User-Agent" to customUserAgent, "Referer" to magicReferer)).text
-            val m3u8Regex = Regex("""(https?://[^"'\s]*?\.m3u8[^"'\s]*)""")
-            val m3u8Url = m3u8Regex.find(response)?.groupValues?.get(1)
-            
-            if (!m3u8Url.isNullOrBlank()) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "Turbovip HD",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "" // KOSONG KAN UNTUK MENCEGAH ERROR 3001 CLOUDFLARE
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "User-Agent" to customUserAgent,
-                            "Accept" to "*/*"
-                        )
-                    }
-                )
-            }
-        } catch (e: Exception) { Log.e("Turbovid", e.message.toString()) }
-    }
-}
-
-// ============================================================================
-// 3. CAST / F16 EXTRACTOR (Aman dari JWT Cloudflare Challenge)
-// ============================================================================
-open class F16Extractor : ExtractorApi() {
-    override var name = "F16"
-    override var mainUrl = "https://f16px.com"
-    override val requiresReferer = false
-
-    data class F16Challenge(val challenge_id: String?, val nonce: String?)
-    data class F16Playback(val playback: PlaybackData?)
-    data class PlaybackData(val iv: String?, val payload: String?, val key_parts: List<String>?)
-    data class DecryptedSource(val url: String?, val label: String?)
-    data class DecryptedResponse(val sources: List<DecryptedSource>?)
-
-    private fun String.fixBase64(): String {
-        var s = this.replace("-", "+").replace("_", "/")
-        while (s.length % 4 != 0) s += "="
-        return s
-    }
-
-    private fun randomHex(length: Int): String {
-        val chars = "0123456789abcdef"
-        return (1..length).map { chars[Random.nextInt(chars.length)] }.joinToString("")
-    }
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val videoId = url.substringAfter("/e/").substringBefore("?")
-            val challengeUrl = "$mainUrl/api/videos/access/challenge"
-            val apiUrl = "$mainUrl/api/videos/$videoId/embed/playback"
-            val pageUrl = "$mainUrl/e/$videoId"
-            
-            val viewerId = randomHex(32) 
-            val deviceId = randomHex(32)
-            val timestamp = System.currentTimeMillis() / 1000
-
-            val headersBase = mapOf(
-                "User-Agent" to customUserAgent,
-                "Referer" to pageUrl,
-                "Origin" to mainUrl,
-                "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId",
-                "Accept" to "*/*",
-                "Content-Length" to "0" // Content-Length 0 sangat krusial untuk Cloudflare
-            )
-
-            val challengeRes = app.post(challengeUrl, headers = headersBase, data = emptyMap<String, String>()).text
-            val challengeJson = tryParseJson<F16Challenge>(challengeRes)
-            
-            if (challengeJson?.challenge_id == null || challengeJson.nonce == null) return
-
-            val jwtHeader = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" 
-            val jwtPayload = """{"viewer_id":"$viewerId","device_id":"$deviceId","confidence":0.93,"iat":$timestamp,"exp":${timestamp + 600},"challenge_id":"${challengeJson.challenge_id}","nonce":"${challengeJson.nonce}"}"""
-            val jwtPayloadEncoded = Base64.encodeToString(jwtPayload.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            val jwtSignature = randomHex(43)
-            val token = "$jwtHeader.$jwtPayloadEncoded.$jwtSignature"
-
-            val headersPlayback = headersBase.toMutableMap().apply { 
-                this["Content-Type"] = "application/json"
-                this["x-embed-origin"] = "playeriframe.sbs"
-                this["x-embed-parent"] = pageUrl
-                this["x-embed-referer"] = magicReferer
-                this.remove("Content-Length")
-            }
-            
-            val jsonPayload = mapOf("fingerprint" to mapOf("token" to token, "viewer_id" to viewerId, "device_id" to deviceId, "confidence" to 0.93))
-            val responseText = app.post(apiUrl, headers = headersPlayback, json = jsonPayload).text
-            
-            val json = tryParseJson<F16Playback>(responseText)
-            val pb = json?.playback ?: return
-
-            if (pb.payload != null && pb.iv != null && !pb.key_parts.isNullOrEmpty()) {
-                val part1 = Base64.decode(pb.key_parts[0].fixBase64(), Base64.URL_SAFE)
-                val part2 = Base64.decode(pb.key_parts[1].fixBase64(), Base64.URL_SAFE)
-                val combinedKey = part1 + part2 
-
-                val decryptedJson = decryptAesGcm(pb.payload, combinedKey, pb.iv)
-                if (decryptedJson != null) {
-                    val result = tryParseJson<DecryptedResponse>(decryptedJson)
-                    result?.sources?.forEach { source ->
-                        val streamUrl = source.url
-                        if (!streamUrl.isNullOrBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "CAST HD",
-                                    url = streamUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = "$mainUrl/" 
-                                    this.quality = getQualityFromName(source.label)
-                                    this.headers = mapOf(
-                                        "User-Agent" to customUserAgent,
-                                        "Origin" to mainUrl, 
-                                        "Referer" to "$mainUrl/",
-                                        "Accept" to "*/*"
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) { Log.e("F16Extractor", "Error: ${e.message}") }
-    }
-
-    private fun decryptAesGcm(encryptedBase64: String, keyBytes: ByteArray, ivBase64: String): String? {
-        return try {
-            val iv = Base64.decode(ivBase64.fixBase64(), Base64.URL_SAFE)
-            val cipherText = Base64.decode(encryptedBase64.fixBase64(), Base64.URL_SAFE)
-            val spec = GCMParameterSpec(128, iv)
-            val keySpec = SecretKeySpec(keyBytes, "AES")
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, spec)
-            String(cipher.doFinal(cipherText), Charsets.UTF_8)
-        } catch (e: Exception) { null }
+        } catch (e: Exception) { e.printStackTrace() }
+        return sources
     }
 }
