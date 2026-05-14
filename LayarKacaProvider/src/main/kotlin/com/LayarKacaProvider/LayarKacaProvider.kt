@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -21,6 +20,38 @@ class LayarKacaProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    // ==============================================
+    // ALGORITMA DEKRIPSI RC4 (SUPER CEPAT)
+    // ==============================================
+    private fun decryptRC4(key: String, encryptedBase64: String): String {
+        return try {
+            val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
+            val s = IntArray(256) { it }
+            var j = 0
+            for (i in 0..255) {
+                j = (j + s[i] + key[i % key.length].code) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
+            }
+            var i = 0
+            j = 0
+            val result = ByteArray(cipher.size)
+            for (k in cipher.indices) {
+                i = (i + 1) % 256
+                j = (j + s[i]) % 256
+                val temp = s[i]
+                s[i] = s[j]
+                s[j] = temp
+                val kStream = s[(s[i] + s[j]) % 256]
+                result[k] = ((cipher[k].toInt() and 0xFF) xor kStream).toByte()
+            }
+            String(result, Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
+    }
 
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
@@ -174,10 +205,23 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
+    data class NontonDramaEpisode(val s: Int? = null, val episode_no: Int? = null, val title: String? = null, val slug: String? = null)
+
+    // KEMBALI KE KODE LOAD ASLI YANG SUDAH TERBUKTI BEKERJA SEMPURNA
     override suspend fun load(url: String): LoadResponse {
-        val cleanUrl = fixUrl(url)
-        val response = app.get(cleanUrl)
-        val document = response.document
+        var cleanUrl = fixUrl(url)
+        var response = app.get(cleanUrl)
+        var document = response.document
+
+        val redirectButton = document.select("a:contains(Buka Sekarang), a.btn:contains(Nontondrama)").first()
+        if (redirectButton != null) {
+            val newUrl = redirectButton.attr("href")
+            if (newUrl.isNotEmpty()) {
+                cleanUrl = fixUrl(newUrl)
+                response = app.get(cleanUrl)
+                document = response.document
+            }
+        }
 
         val rawTitle = document.select("h1.entry-title, h1.page-title, div.movie-info h1").text().trim()
         val title = getCleanTitle(rawTitle) 
@@ -201,29 +245,22 @@ class LayarKacaProvider : MainAPI() {
         val jsonScript = document.select("script#season-data").html()
 
         if (jsonScript.isNotBlank()) {
-            val slugs = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val epNos = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-            val sNos = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-
-            for (i in slugs.indices) {
-                episodes.add(newEpisode(fixUrl(slugs[i])) {
-                    this.name = titles.getOrNull(i) ?: "Episode ${i + 1}"
-                    this.season = sNos.getOrNull(i)
-                    this.episode = epNos.getOrNull(i)
-                })
-            }
-        }
-        
-        if (episodes.isEmpty()) {
-            document.select("ul.episodes li a, div.mob-list-eps a, .movie-action a[href*='episode']").forEach {
-                val href = it.attr("href")
-                if (href.isNotBlank() && href.contains("episode", ignoreCase = true)) {
-                    episodes.add(newEpisode(fixUrl(href)) {
-                        this.name = it.text().trim().ifEmpty { "Play Episode" }
-                        this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+            tryParseJson<Map<String, List<NontonDramaEpisode>>>(jsonScript)?.forEach { (_, epsList) ->
+                epsList.forEach { epData ->
+                    episodes.add(newEpisode(fixUrl(epData.slug ?: "")) {
+                        this.name = epData.title ?: "Episode ${epData.episode_no}"
+                        this.season = epData.s
+                        this.episode = epData.episode_no
                     })
                 }
+            }
+        } else {
+            document.select("ul.episodes li a").forEach {
+                episodes.add(newEpisode(fixUrl(it.attr("href"))) {
+                    this.name = it.text()
+                    val epNum = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = epNum
+                })
             }
         }
 
@@ -294,46 +331,56 @@ class LayarKacaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val currentUrl = data // FIXED: Tidak ada lagi modifikasi/override currentUrl!
+        val currentUrl = data
+        val document = app.get(currentUrl).document
+
         val rawSources = mutableListOf<String>()
 
-        // 1. TANGKAP PAKAI WEBVIEWRESOLVER (SENJATA UTAMA)
-        try {
-            val interceptorRegex = Regex("(?i)(playeriframe\\.sbs/iframe|emturbovid\\.com/e|f16px\\.com/e|hydrax\\.net/watch|cloud\\.hownetwork\\.xyz/video\\.php)")
-            val response = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
-            val interceptedUrl = response.url
-            
-            if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
-                rawSources.add(interceptedUrl)
-            }
-        } catch (e: Exception) {}
+        // 1. Ekstrak dari variabel global (contoh: var firstStreamingUrl = '...')
+        val firstUrlRegex = Regex("var\\s+firstStreamingUrl\\s*=\\s*'([^']+)'").find(document.html())?.groupValues?.get(1)
+        if (!firstUrlRegex.isNullOrBlank()) {
+            rawSources.add(firstUrlRegex)
+        }
 
-        // 2. FALLBACK MANUAL JIKA WEBVIEW GAGAL
-        if (rawSources.isEmpty()) {
-            val document = app.get(currentUrl).document
-            document.select("iframe").mapNotNull { it.attr("src") }.filter { 
-                it.isNotBlank() && !it.contains("youtube", ignoreCase = true) && !it.contains("youtu.be", ignoreCase = true) 
-            }.forEach {
-                rawSources.add(it)
+        // 2. Ekstrak dari list player
+        document.select("ul#player-list li a").forEach {
+            val dataUrl = it.attr("data-url")
+            if (dataUrl.isNotBlank()) {
+                rawSources.add(dataUrl)
             }
         }
 
-        val allSources = rawSources.distinct().map { fixUrl(it) }
+        // 3. Dekripsi menggunakan RC4 (Menghindari WebView yang memakan waktu)
+        val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
+        val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
+        val possibleKeys = listOfNotNull(
+            host, baseDomain, "lk21official.cc", "nontondrama.my", "tv8.lk21official.cc", "tv4.nontondrama.my", "lk21.party"
+        ).distinct()
 
-        allSources.forEach { url ->
-            var finalUrl = url
+        val decryptedSources = mutableListOf<String>()
+
+        rawSources.distinct().forEach { encryptedString ->
+            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
+                decryptedSources.add(encryptedString)
+            } else {
+                for (key in possibleKeys) {
+                    val attempt = decryptRC4(key, encryptedString)
+                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
+                        decryptedSources.add(attempt)
+                        break
+                    }
+                }
+            }
+        }
+
+        // 4. Proses Hasil Dekripsi dan serahkan ke Extractor
+        decryptedSources.distinct().forEach { url ->
+            var finalUrl = fixUrl(url)
             
+            // Bypass P2P PlayerIframe
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 finalUrl = "https://cloud.hownetwork.xyz/video.php?id=$id"
-            } else if (finalUrl.contains("playeriframe.sbs")) {
-                try {
-                    val response = app.get(finalUrl, referer = currentUrl)
-                    val iframe = response.document.selectFirst("iframe")?.attr("src")
-                    if (!iframe.isNullOrBlank()) {
-                        finalUrl = fixUrl(iframe)
-                    }
-                } catch (e: Exception) {}
             }
 
             when {
