@@ -5,7 +5,6 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
-// WAJIB TAMBAHKAN IMPORT INI UNTUK MEMAKSA TIPE TEKS
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 
@@ -24,16 +23,19 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            val actualReferer = referer ?: "https://z1.idlixku.com/"
-            val actualOrigin = actualReferer.trimEnd('/') 
+            // KUNCI JAWABAN TERBARU:
+            // Browser modern memakai mode "strict-origin-when-cross-origin".
+            // Kita HARUS memotong path URL panjang dan memaksanya jadi domain utama saja.
+            // Jika Origin mengandung path panjang, Cloudflare akan langsung memblokirnya!
+            val actualOrigin = "https://z1.idlixku.com"
+            val actualReferer = "https://z1.idlixku.com/"
+            
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-            // KUNCI JAWABAN TERBARU: 
-            // Kita bikin string JSON manual, lalu paksa dia menjadi tipe "text/plain".
-            // Jangan pakai parameter 'json = mapOf(...)' karena OkHttp akan membocorkan identitas aslinya.
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
+            // Menukar Tiket
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
@@ -42,11 +44,12 @@ class Majorplay : ExtractorApi() {
                     "Accept" to "*/*",
                     "User-Agent" to userAgent
                 ),
-                requestBody = requestBody // <- Pakai requestBody mentah di sini
+                requestBody = requestBody
             ).parsedSafe<NewMajorplayResponse>() ?: return
 
             val videoUrl = response.url ?: return
             
+            // Header untuk pemutar M3U8 ExoPlayer
             val streamHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
