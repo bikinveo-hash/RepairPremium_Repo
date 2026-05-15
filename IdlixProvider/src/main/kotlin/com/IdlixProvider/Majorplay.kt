@@ -30,9 +30,7 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // KUNCI JAWABAN FINAL:
-            // "Jubah Gaib" lengkap ala Google Chrome. 
-            // Kita masukkan semua header sec-ch-ua agar Cloudflare 100% tertipu!
+            // Jubah Gaib Anti-Cloudflare
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -47,7 +45,7 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
-            // Menukar Tiket dengan Jubah Gaib
+            // 1. Tukar Token di Majorplay
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -56,6 +54,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
+            // 2. Subtitle ternyata aman, kita nyalakan kembali!
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -64,19 +63,36 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // Kembalikan ke tipe M3U8 agar Cloudstream bisa memisah resolusi 360p, 720p, 1080p
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = videoUrl,
-                    type = ExtractorLinkType.M3U8 
-                ) {
-                    this.referer = actualReferer
-                    this.quality = Qualities.Unknown.value
-                    this.headers = safeHeaders // Melempar Jubah Gaib ke pemutar video!
-                }
+            // 3. KUNCI JAWABAN FINAL (Bypass Error 2004)
+            // Kita ekstrak resolusinya secara MANUAL menggunakan M3u8Helper
+            // Ini menjamin "Jubah Gaib" kita tertempel permanen di file video!
+            val extractedLinks = M3u8Helper.generateM3u8(
+                source = name,
+                url = videoUrl,
+                referer = actualReferer,
+                headers = safeHeaders
             )
+
+            // Lempar semua resolusi (360p, 720p, 1080p) ke Cloudstream
+            if (extractedLinks.isNotEmpty()) {
+                extractedLinks.forEach { link ->
+                    callback.invoke(link)
+                }
+            } else {
+                // Fallback (Jaga-jaga jika M3u8Helper gagal mengekstrak)
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8 
+                    ) {
+                        this.referer = actualReferer
+                        this.quality = Qualities.Unknown.value
+                        this.headers = safeHeaders
+                    }
+                )
+            }
 
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
