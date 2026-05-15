@@ -45,6 +45,7 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
+            // Menukar Tiket
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -53,7 +54,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // Subtitle aman
+            // Nyalakan subtitle-nya dengan aman
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -65,17 +66,19 @@ class Majorplay : ExtractorApi() {
             // ==========================================
             // KUNCI JAWABAN PALING FINAL
             // ==========================================
-            // Memakai fungsi huruf kecil 'newExtractorLink' agar tidak error deprecated
+            // Gunakan ExtractorLinkType.VIDEO agar Cloudstream TIDAK crash 
+            // melihat ekstensi '.js' dan '.css'. Biarkan ExoPlayer memutarnya!
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    referer = actualReferer,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = false, // WAJIB FALSE agar M3u8Helper tidak error soal TS file!
-                    headers = safeHeaders
-                )
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = actualReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = safeHeaders
+                }
             )
 
         } catch (e: Exception) { 
