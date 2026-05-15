@@ -30,25 +30,31 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
+            // KUNCI JAWABAN FINAL:
+            // "Jubah Gaib" lengkap ala Google Chrome. 
+            // Kita masukkan semua header sec-ch-ua agar Cloudflare 100% tertipu!
+            val safeHeaders = mapOf(
+                "Origin" to actualOrigin,
+                "Referer" to actualReferer,
+                "User-Agent" to userAgent,
+                "Accept" to "*/*",
+                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+                "sec-ch-ua-mobile" to "?1",
+                "sec-ch-ua-platform" to "\"Android\"",
+                "sec-fetch-dest" to "empty",
+                "sec-fetch-mode" to "cors",
+                "sec-fetch-site" to "cross-site"
+            )
+
+            // Menukar Tiket dengan Jubah Gaib
             val response = app.post(
                 url = "$mainUrl/api/play",
-                headers = mapOf(
-                    "Origin" to actualOrigin,
-                    "Referer" to actualReferer,
-                    "Accept" to "*/*",
-                    "User-Agent" to userAgent
-                ),
+                headers = safeHeaders,
                 requestBody = requestBody
             ).parsedSafe<NewMajorplayResponse>() ?: return
 
             val videoUrl = response.url ?: return
-            
-            val streamHeaders = mapOf(
-                "Origin" to actualOrigin,
-                "Referer" to actualReferer,
-                "User-Agent" to userAgent,
-                "Accept" to "*/*"
-            )
 
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
@@ -58,16 +64,17 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
+            // Kembalikan ke tipe M3U8 agar Cloudstream bisa memisah resolusi 360p, 720p, 1080p
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = ExtractorLinkType.VIDEO // Bypass parser internal Cloudstream
+                    type = ExtractorLinkType.M3U8 
                 ) {
                     this.referer = actualReferer
                     this.quality = Qualities.Unknown.value
-                    this.headers = streamHeaders
+                    this.headers = safeHeaders // Melempar Jubah Gaib ke pemutar video!
                 }
             )
 
