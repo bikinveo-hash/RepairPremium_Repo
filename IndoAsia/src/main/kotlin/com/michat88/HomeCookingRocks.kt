@@ -38,9 +38,12 @@ class HomeCookingRocks : MainAPI() {
             val link = titleElement.attr("href")
             
             val imgElement = element.selectFirst("img")
-            val image = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
+            val rawImage = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
                 ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
                 ?: imgElement?.attr("src")
+            
+            // 👇 PERBARUAN KUALITAS GAMBAR: Menghapus ukuran resolusi (contoh: -170x255)
+            val image = rawImage?.replace(Regex("""-\d+x\d+"""), "")
             
             newMovieSearchResponse(title, link, TvType.Movie) {
                 this.posterUrl = image
@@ -59,9 +62,12 @@ class HomeCookingRocks : MainAPI() {
             val url = titleElement.attr("href")
             
             val imgElement = element.selectFirst("img")
-            val image = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
+            val rawImage = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
                 ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
                 ?: imgElement?.attr("src")
+            
+            // 👇 PERBARUAN KUALITAS GAMBAR: Menghapus ukuran resolusi (contoh: -170x255)
+            val image = rawImage?.replace(Regex("""-\d+x\d+"""), "")
             
             newMovieSearchResponse(title, url, TvType.Movie) {
                 this.posterUrl = image
@@ -72,7 +78,11 @@ class HomeCookingRocks : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text() ?: return null
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        
+        val rawPoster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        // 👇 PERBARUAN KUALITAS GAMBAR: Berjaga-jaga jika di detail film juga menggunakan thumbnail
+        val poster = rawPoster?.replace(Regex("""-\d+x\d+"""), "")
+        
         val plot = document.select(".entry-content p").joinToString("\n") { it.text() }.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun:) a")?.text()?.toIntOrNull()
         val ratingString = document.selectFirst(".gmr-meta-rating span[itemprop=ratingValue]")?.text()
