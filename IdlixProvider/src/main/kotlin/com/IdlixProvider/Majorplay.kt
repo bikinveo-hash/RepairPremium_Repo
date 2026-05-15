@@ -34,17 +34,10 @@ class Majorplay : ExtractorApi() {
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
                 "User-Agent" to userAgent,
-                "Accept" to "*/*",
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-                "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-                "sec-ch-ua-mobile" to "?1",
-                "sec-ch-ua-platform" to "\"Android\"",
-                "sec-fetch-dest" to "empty",
-                "sec-fetch-mode" to "cors",
-                "sec-fetch-site" to "cross-site"
+                "Accept" to "*/*"
             )
 
-            // Mengambil Link Video
+            // Menukar Tiket
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -53,7 +46,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // Memanggil Subtitle
+            // Nyalakan subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -65,10 +58,7 @@ class Majorplay : ExtractorApi() {
             // ==========================================
             // KUNCI JAWABAN MUTLAK TERAKHIR
             // ==========================================
-            // Tetap pakai M3U8 agar ExoPlayer mau memutarnya.
-            // Biarkan log "M3u8 must contains TS files" MUNCUL MERAH di logcat. 
-            // ITU TIDAK APA-APA! Itu cuma error PreviewThumbnail Generator yang gagal berjalan di background.
-            // VIDEO AKAN TETAP BERJALAN DENGAN NORMAL!
+            // HARUS pakai tipe M3U8 agar ExoPlayer mengenalinya sebagai HLS.
             callback.invoke(
                 newExtractorLink(
                     source = name,
