@@ -30,6 +30,7 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
+            // Jubah Gaib Lengkap Anti-Blokir
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -44,6 +45,7 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
+            // Menukar Tiket di Majorplay
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -52,6 +54,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
+            // Panggil subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -60,87 +63,24 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // Pembedahan Manual
-            val m3u8Text = app.get(videoUrl, headers = safeHeaders).text
-            
-            if (m3u8Text.contains("#EXT-X-STREAM-INF")) {
-                val lines = m3u8Text.split("\n")
-                var hasExtracted = false
-                
-                for (i in lines.indices) {
-                    val line = lines[i]
-                    if (line.startsWith("#EXT-X-STREAM-INF")) {
-                        val resMatch = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
-                        val nameMatch = Regex("""NAME="([^"]+)"""").find(line)
-                        
-                        val qualityStr = resMatch?.groupValues?.get(1) ?: nameMatch?.groupValues?.get(1) ?: "Unknown"
-                        val cleanQualityStr = qualityStr.replace("p", "", ignoreCase = true)
-                        val qualityInt = cleanQualityStr.toIntOrNull() ?: Qualities.Unknown.value
-                        
-                        var playlistUrl = ""
-                        for (j in i + 1 until lines.size) {
-                            val nextLine = lines[j].trim()
-                            if (nextLine.isNotEmpty() && !nextLine.startsWith("#")) {
-                                playlistUrl = nextLine
-                                break
-                            }
-                        }
-                        
-                        if (playlistUrl.isNotEmpty()) {
-                            val finalUrl = when {
-                                playlistUrl.startsWith("http") -> playlistUrl
-                                playlistUrl.startsWith("/") -> "https://e2e.majorplay.net$playlistUrl"
-                                else -> videoUrl.substringBeforeLast("/") + "/" + playlistUrl
-                            }
-
-                            // KUNCI JAWABAN FIX ERROR 3003: 
-                            // Kembalikan tipenya ke M3U8.
-                            // ExoPlayer akan memproses file .json/.js tersebut dengan mesin HLS!
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "$name ${cleanQualityStr}p",
-                                    url = finalUrl,
-                                    type = ExtractorLinkType.M3U8 
-                                ) {
-                                    this.referer = actualReferer
-                                    this.quality = qualityInt
-                                    this.headers = safeHeaders
-                                }
-                            )
-                            hasExtracted = true
-                        }
-                    }
+            // ==========================================
+            // KUNCI KEMENANGAN MUTLAK
+            // Serahkan link Master Playlist mentah-mentah agar Cloudstream 
+            // menugaskan ExoPlayer membedahnya secara otomatis. 
+            // Jika muncul "Trek 0, 1, 2", abaikan saja! Itu cacat server dari Majorplay.
+            // ==========================================
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = videoUrl,
+                    type = ExtractorLinkType.M3U8 
+                ) {
+                    this.referer = actualReferer
+                    this.quality = Qualities.Unknown.value
+                    this.headers = safeHeaders
                 }
-                
-                if (!hasExtracted) {
-                     callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = name,
-                            url = videoUrl,
-                            type = ExtractorLinkType.M3U8 
-                        ) {
-                            this.referer = actualReferer
-                            this.quality = Qualities.Unknown.value
-                            this.headers = safeHeaders
-                        }
-                    )
-                }
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8 
-                    ) {
-                        this.referer = actualReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = safeHeaders
-                    }
-                )
-            }
+            )
 
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
