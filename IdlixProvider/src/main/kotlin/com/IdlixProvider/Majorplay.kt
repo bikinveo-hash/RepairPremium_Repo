@@ -69,7 +69,7 @@ class Majorplay : ExtractorApi() {
             // Memanggil ExtractorLink langsung, memaksakan isM3u8 = true.
             // Memasukkan `safeHeaders` agar ExoPlayer tidak diblokir saat mengambil file .m3u8
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
