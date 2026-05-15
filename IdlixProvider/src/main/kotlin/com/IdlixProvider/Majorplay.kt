@@ -30,22 +30,14 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // Jubah Gaib Anti-Cloudflare
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
                 "User-Agent" to userAgent,
-                "Accept" to "*/*",
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-                "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-                "sec-ch-ua-mobile" to "?1",
-                "sec-ch-ua-platform" to "\"Android\"",
-                "sec-fetch-dest" to "empty",
-                "sec-fetch-mode" to "cors",
-                "sec-fetch-site" to "cross-site"
+                "Accept" to "*/*"
             )
 
-            // 1. Tukar Token di Majorplay
+            // Menukar Token
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -54,7 +46,6 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // 2. Subtitle ternyata aman, kita nyalakan kembali!
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -63,36 +54,23 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // 3. KUNCI JAWABAN FINAL (Bypass Error 2004)
-            // Kita ekstrak resolusinya secara MANUAL menggunakan M3u8Helper
-            // Ini menjamin "Jubah Gaib" kita tertempel permanen di file video!
-            val extractedLinks = M3u8Helper.generateM3u8(
-                source = name,
-                url = videoUrl,
-                referer = actualReferer,
-                headers = safeHeaders
-            )
-
-            // Lempar semua resolusi (360p, 720p, 1080p) ke Cloudstream
-            if (extractedLinks.isNotEmpty()) {
-                extractedLinks.forEach { link ->
-                    callback.invoke(link)
-                }
-            } else {
-                // Fallback (Jaga-jaga jika M3u8Helper gagal mengekstrak)
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8 
-                    ) {
-                        this.referer = actualReferer
-                        this.quality = Qualities.Unknown.value
-                        this.headers = safeHeaders
-                    }
+            // ==========================================
+            // KUNCI JAWABAN PALING FINAL
+            // ==========================================
+            // Kita HARUS pakai isM3u8 = false agar sistem "M3u8Helper" Cloudstream 
+            // TIDAK ikut campur dan TIDAK crash melihat ekstensi .js atau .css.
+            // Biarkan mesin ExoPlayer yang membedah file playlist ini secara otomatis!
+            callback.invoke(
+                ExtractorLink(
+                    source = name,
+                    name = name,
+                    url = videoUrl,
+                    referer = actualReferer,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = false, // JANGAN UBAH INI JADI TRUE!
+                    headers = safeHeaders
                 )
-            }
+            )
 
         } catch (e: Exception) { 
             Log.e("adixtream", "Majorplay Error: ${e.message}") 
