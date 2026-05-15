@@ -30,7 +30,6 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // Jubah Gaib Chrome Lengkap
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -45,7 +44,7 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
-            // Menukar Tiket
+            // Mengambil Link Video
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -54,7 +53,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // Nyalakan subtitle-nya dengan aman
+            // Memanggil Subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -64,16 +63,18 @@ class Majorplay : ExtractorApi() {
             }
 
             // ==========================================
-            // KUNCI JAWABAN PALING FINAL
+            // KUNCI JAWABAN MUTLAK TERAKHIR
             // ==========================================
-            // Gunakan ExtractorLinkType.VIDEO agar Cloudstream TIDAK crash 
-            // melihat ekstensi '.js' dan '.css'. Biarkan ExoPlayer memutarnya!
+            // Tetap pakai M3U8 agar ExoPlayer mau memutarnya.
+            // Biarkan log "M3u8 must contains TS files" MUNCUL MERAH di logcat. 
+            // ITU TIDAK APA-APA! Itu cuma error PreviewThumbnail Generator yang gagal berjalan di background.
+            // VIDEO AKAN TETAP BERJALAN DENGAN NORMAL!
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = ExtractorLinkType.VIDEO
+                    type = ExtractorLinkType.M3U8 
                 ) {
                     this.referer = actualReferer
                     this.quality = Qualities.Unknown.value
