@@ -3,6 +3,8 @@ package com.ReelShort
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -14,7 +16,6 @@ import javax.crypto.spec.SecretKeySpec
 // CETAKAN DATA CLASS (UNTUK MEMBACA JSON)
 // ==========================================
 
-// 1. Cetakan Halaman Utama (Homepage)
 data class HallResponse(@JsonProperty("data") val data: HallData?)
 data class HallData(@JsonProperty("lists") val lists: List<HallList>?)
 data class HallList(@JsonProperty("books") val books: List<HallBook>?)
@@ -24,7 +25,6 @@ data class HallBook(
     @JsonProperty("book_pic") val bookPic: String?
 )
 
-// 2. Cetakan Halaman Detail
 data class DetailResponse(@JsonProperty("data") val data: DetailData?)
 data class DetailData(
     @JsonProperty("retBook") val retBook: RetBook?,
@@ -44,7 +44,6 @@ data class ChapterItem(
     @JsonProperty("serial_number") val serialNumber: Int?
 )
 
-// 3. Cetakan Pemutar Video
 data class ChapterContentResponse(@JsonProperty("data") val data: ChapterContentData?)
 data class ChapterContentData(@JsonProperty("play_info") val playInfo: String?)
 
@@ -60,7 +59,7 @@ class ReelShortProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // FUNGSI SAKTI PEMBONGKAR GEMBOK AES REELSHORT 🔥
+    // FUNGSI SAKTI PEMBONGKAR GEMBOK AES REELSHORT
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
             val key = SecretKeySpec("jlcVUHH9XgmYlfsK".toByteArray(), "AES")
@@ -92,7 +91,8 @@ class ReelShortProvider : MainAPI() {
             "action_type" to "1"
         )
 
-        val response = app.post(
+        // Menggunakan metode .text lalu tryParseJson untuk menghindari error parsedSafe
+        val res = app.post(
             url = url,
             data = body,
             headers = mapOf(
@@ -103,8 +103,9 @@ class ReelShortProvider : MainAPI() {
                 "sign" to "05cdc786050ebeba31836c403f1c27a31f8724cf44f626f5c997310b83947424", 
                 "user-agent" to "okhttp/4.11.0"
             )
-        ).parsedSafe<HallResponse>()
+        ).text
 
+        val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<SearchResponse>()
 
         response?.data?.lists?.forEach { list ->
@@ -139,7 +140,7 @@ class ReelShortProvider : MainAPI() {
             "play_details" to "1"
         )
 
-        val response = app.post(
+        val res = app.post(
             url = apiUrl,
             data = body,
             headers = mapOf(
@@ -150,14 +151,14 @@ class ReelShortProvider : MainAPI() {
                 "ts" to "1778884289", 
                 "sign" to "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2" 
             )
-        ).parsedSafe<DetailResponse>()
+        ).text
 
+        val response = tryParseJson<DetailResponse>(res)
         val retBook = response?.data?.retBook ?: return null
         
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
             val chapId = ep.chapterId ?: return@mapNotNull null
             
-            [span_1](start_span)// Fiksasi Error: `data` sebagai parameter, sisanya di dalam blok[span_1](end_span)
             newEpisode(
                 data = "$url||$chapId"
             ) {
@@ -167,7 +168,6 @@ class ReelShortProvider : MainAPI() {
             }
         } ?: emptyList()
 
-        [span_2](start_span)// Fiksasi Error: gunakan `type = TvType...` bukan `tvType`[span_2](end_span)
         return newTvSeriesLoadResponse(
             name = retBook.bookTitle ?: "",
             url = url,
@@ -203,7 +203,7 @@ class ReelShortProvider : MainAPI() {
             "is_adv_unlock" to "0"
         )
 
-        val response = app.post(
+        val res = app.post(
             url = apiUrl,
             data = body,
             headers = mapOf(
@@ -211,18 +211,19 @@ class ReelShortProvider : MainAPI() {
                 "lang" to "in",
                 "uid" to "809046271",
                 "user-agent" to "okhttp/4.11.0",
-                "ts" to "1778884634",
+                "ts" to "1778884634", 
                 "sign" to "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9" 
             )
-        ).parsedSafe<ChapterContentResponse>()
+        ).text
 
+        val response = tryParseJson<ChapterContentResponse>(res)
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
+        // Dekripsi menggunakan AES
         val m3u8Url = decryptPlayInfo(playInfoEncrypted)
 
         if (m3u8Url.isBlank()) return false
 
-        [span_3](start_span)// Fiksasi Error: Menggunakan fungsi newExtractorLink[span_3](end_span)
         callback.invoke(
             newExtractorLink(
                 source = name,
