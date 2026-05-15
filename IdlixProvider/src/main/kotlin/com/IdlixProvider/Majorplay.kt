@@ -30,7 +30,7 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // JUBAH GAIB CHROME LENGKAP
+            // Jubah Gaib Chrome Lengkap
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -45,7 +45,6 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
-            // Menukar Tiket di Majorplay
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -54,7 +53,7 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // Subtitle aman, nyalakan kembali!
+            // Subtitle aman
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -66,8 +65,7 @@ class Majorplay : ExtractorApi() {
             // ==========================================
             // KUNCI JAWABAN PALING FINAL
             // ==========================================
-            // Memanggil ExtractorLink langsung, memaksakan isM3u8 = true.
-            // Memasukkan `safeHeaders` agar ExoPlayer tidak diblokir saat mengambil file .m3u8
+            // Memakai fungsi huruf kecil 'newExtractorLink' agar tidak error deprecated
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -75,8 +73,8 @@ class Majorplay : ExtractorApi() {
                     url = videoUrl,
                     referer = actualReferer,
                     quality = Qualities.Unknown.value,
-                    isM3u8 = true, 
-                    headers = safeHeaders 
+                    isM3u8 = false, // WAJIB FALSE agar M3u8Helper tidak error soal TS file!
+                    headers = safeHeaders
                 )
             )
 
