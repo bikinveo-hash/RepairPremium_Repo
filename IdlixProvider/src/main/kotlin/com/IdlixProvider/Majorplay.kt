@@ -5,6 +5,9 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
+// WAJIB TAMBAHKAN IMPORT INI UNTUK MEMAKSA TIPE TEKS
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 
 class Majorplay : ExtractorApi() {
     override var name = "Majorplay"
@@ -21,29 +24,29 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // 1. IDENTITAS WEB ASLI (Dinamis dari Cloudstream)
-            // IdlixProvider.kt akan mengirimkan https://z1.idlixku.com/ ke sini
             val actualReferer = referer ?: "https://z1.idlixku.com/"
             val actualOrigin = actualReferer.trimEnd('/') 
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-            // 2. PENUKARAN TIKET: WAJIB MENGGUNAKAN IDENTITAS IDLIX (BUKAN MAJORPLAY)
+            // KUNCI JAWABAN TERBARU: 
+            // Kita bikin string JSON manual, lalu paksa dia menjadi tipe "text/plain".
+            // Jangan pakai parameter 'json = mapOf(...)' karena OkHttp akan membocorkan identitas aslinya.
+            val rawJsonString = "{\"claim\":\"$claimToken\"}"
+            val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
+
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
                     "Origin" to actualOrigin,
                     "Referer" to actualReferer,
                     "Accept" to "*/*",
-                    "User-Agent" to userAgent,
-                    // Tambahan header Content-Type yang terbaca di log network-mu
-                    "Content-Type" to "text/plain" 
+                    "User-Agent" to userAgent
                 ),
-                json = mapOf("claim" to claimToken) // Payload tetap menggunakan format Object JSON
+                requestBody = requestBody // <- Pakai requestBody mentah di sini
             ).parsedSafe<NewMajorplayResponse>() ?: return
 
             val videoUrl = response.url ?: return
             
-            // 3. HEADER PEMUTARAN VIDEO: JUGA MENGGUNAKAN IDENTITAS IDLIX
             val streamHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -59,7 +62,6 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // Melempar Master Playlist config.json ke ExoPlayer
             callback.invoke(
                 newExtractorLink(
                     source = name,
