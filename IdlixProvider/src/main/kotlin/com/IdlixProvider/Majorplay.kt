@@ -58,9 +58,6 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // KUNCI JAWABAN TERBARU:
-            // Ubah tipe jadi VIDEO agar Cloudstream tidak men-scan isi file .js/.html nya.
-            // Tambahkan this.isM3u8 = true agar ExoPlayer tahu cara memutarnya!
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -71,7 +68,6 @@ class Majorplay : ExtractorApi() {
                     this.referer = actualReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = streamHeaders
-                    this.isM3u8 = true // Memaksa ExoPlayer membaca sebagai HLS M3U8
                 }
             )
 
