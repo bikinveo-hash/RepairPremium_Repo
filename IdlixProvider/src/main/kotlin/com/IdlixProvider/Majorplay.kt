@@ -30,7 +30,6 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // Jubah Gaib Lengkap Anti-Cloudflare
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -45,7 +44,6 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
-            // Menukar Tiket di Majorplay
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
@@ -54,7 +52,6 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
 
-            // Panggil subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -63,10 +60,7 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // ==========================================
-            // OPERASI BEDAH MANUAL (SOLUSI FINAL)
-            // ==========================================
-            // Kita sedot isi M3U8/JSON dan ambil playlist anaknya secara manual.
+            // Pembedahan Manual
             val m3u8Text = app.get(videoUrl, headers = safeHeaders).text
             
             if (m3u8Text.contains("#EXT-X-STREAM-INF")) {
@@ -76,7 +70,6 @@ class Majorplay : ExtractorApi() {
                 for (i in lines.indices) {
                     val line = lines[i]
                     if (line.startsWith("#EXT-X-STREAM-INF")) {
-                        // Ambil kualitas dari NAME="360p" atau RESOLUTION=
                         val resMatch = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
                         val nameMatch = Regex("""NAME="([^"]+)"""").find(line)
                         
@@ -84,7 +77,6 @@ class Majorplay : ExtractorApi() {
                         val cleanQualityStr = qualityStr.replace("p", "", ignoreCase = true)
                         val qualityInt = cleanQualityStr.toIntOrNull() ?: Qualities.Unknown.value
                         
-                        // Ambil URL playlist (contoh: style/playlist.m3u8?t=...)
                         var playlistUrl = ""
                         for (j in i + 1 until lines.size) {
                             val nextLine = lines[j].trim()
@@ -95,22 +87,21 @@ class Majorplay : ExtractorApi() {
                         }
                         
                         if (playlistUrl.isNotEmpty()) {
-                            // Rakit URL menjadi URL absolut
                             val finalUrl = when {
                                 playlistUrl.startsWith("http") -> playlistUrl
                                 playlistUrl.startsWith("/") -> "https://e2e.majorplay.net$playlistUrl"
                                 else -> videoUrl.substringBeforeLast("/") + "/" + playlistUrl
                             }
 
-                            // Kirim sebagai VIDEO agar M3u8Helper tidak ikut campur.
-                            // Karena finalUrl sekarang berakhiran .m3u8, ExoPlayer akan sukses
-                            // membacanya sebagai file streaming HLS!
+                            // KUNCI JAWABAN FIX ERROR 3003: 
+                            // Kembalikan tipenya ke M3U8.
+                            // ExoPlayer akan memproses file .json/.js tersebut dengan mesin HLS!
                             callback.invoke(
                                 newExtractorLink(
                                     source = name,
                                     name = "$name ${cleanQualityStr}p",
                                     url = finalUrl,
-                                    type = ExtractorLinkType.VIDEO 
+                                    type = ExtractorLinkType.M3U8 
                                 ) {
                                     this.referer = actualReferer
                                     this.quality = qualityInt
@@ -122,14 +113,13 @@ class Majorplay : ExtractorApi() {
                     }
                 }
                 
-                // Fallback jika pembedahan gagal
                 if (!hasExtracted) {
                      callback.invoke(
                         newExtractorLink(
                             source = name,
                             name = name,
                             url = videoUrl,
-                            type = ExtractorLinkType.VIDEO 
+                            type = ExtractorLinkType.M3U8 
                         ) {
                             this.referer = actualReferer
                             this.quality = Qualities.Unknown.value
@@ -138,13 +128,12 @@ class Majorplay : ExtractorApi() {
                     )
                 }
             } else {
-                // Untuk file yang tidak punya banyak resolusi
                 callback.invoke(
                     newExtractorLink(
                         source = name,
                         name = name,
                         url = videoUrl,
-                        type = ExtractorLinkType.VIDEO 
+                        type = ExtractorLinkType.M3U8 
                     ) {
                         this.referer = actualReferer
                         this.quality = Qualities.Unknown.value
