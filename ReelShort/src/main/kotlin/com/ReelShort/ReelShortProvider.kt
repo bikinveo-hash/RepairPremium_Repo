@@ -3,9 +3,9 @@ package com.ReelShort
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parsedSafe
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -63,7 +63,6 @@ class ReelShortProvider : MainAPI() {
     // FUNGSI SAKTI PEMBONGKAR GEMBOK AES REELSHORT 🔥
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
-            // Kunci rahasia yang kamu dapatkan dari hasil bongkar APK!
             val key = SecretKeySpec("jlcVUHH9XgmYlfsK".toByteArray(), "AES")
             val iv = IvParameterSpec("fOEZ9V4a3VaniWAa".toByteArray())
             
@@ -73,9 +72,9 @@ class ReelShortProvider : MainAPI() {
             val decodedBytes = Base64.decode(encryptedBase64, Base64.DEFAULT)
             val decryptedBytes = cipher.doFinal(decodedBytes)
             
-            String(decryptedBytes, Charsets.UTF_8).replace("\"", "") // Hapus tanda kutip jika ada
+            String(decryptedBytes, Charsets.UTF_8).replace("\"", "")
         } catch (e: Exception) {
-            "" // Kembalikan kosong jika gagal
+            ""
         }
     }
 
@@ -100,8 +99,8 @@ class ReelShortProvider : MainAPI() {
                 "clientver" to "3.8.00",
                 "lang" to "in",
                 "uid" to "809046271",
-                "ts" to "1778882859", // Hardcode sementara
-                "sign" to "05cdc786050ebeba31836c403f1c27a31f8724cf44f626f5c997310b83947424", // Hardcode sementara
+                "ts" to "1778882859", 
+                "sign" to "05cdc786050ebeba31836c403f1c27a31f8724cf44f626f5c997310b83947424", 
                 "user-agent" to "okhttp/4.11.0"
             )
         ).parsedSafe<HallResponse>()
@@ -132,7 +131,6 @@ class ReelShortProvider : MainAPI() {
 
     // 2. MENAMPILKAN DETAIL & DAFTAR EPISODE
     override suspend fun load(url: String): LoadResponse? {
-        // url di sini adalah bookId dari fungsi di atas
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         
         val body = mapOf(
@@ -149,8 +147,8 @@ class ReelShortProvider : MainAPI() {
                 "lang" to "in",
                 "uid" to "809046271",
                 "user-agent" to "okhttp/4.11.0",
-                "ts" to "1778884289", // Hardcode sementara
-                "sign" to "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2" // Hardcode sementara
+                "ts" to "1778884289", 
+                "sign" to "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2" 
             )
         ).parsedSafe<DetailResponse>()
 
@@ -159,19 +157,21 @@ class ReelShortProvider : MainAPI() {
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
             val chapId = ep.chapterId ?: return@mapNotNull null
             
+            [span_1](start_span)// Fiksasi Error: `data` sebagai parameter, sisanya di dalam blok[span_1](end_span)
             newEpisode(
-                data = "$url||$chapId", // Gabung book_id dan chapter_id
-                name = ep.chapterName
+                data = "$url||$chapId"
             ) {
+                this.name = ep.chapterName
                 this.posterUrl = ep.videoPic
                 this.episode = ep.serialNumber
             }
         } ?: emptyList()
 
+        [span_2](start_span)// Fiksasi Error: gunakan `type = TvType...` bukan `tvType`[span_2](end_span)
         return newTvSeriesLoadResponse(
             name = retBook.bookTitle ?: "",
             url = url,
-            tvType = TvType.TvSeries,
+            type = TvType.TvSeries,
             episodes = episodes
         ) {
             this.posterUrl = retBook.bookPic
@@ -187,7 +187,6 @@ class ReelShortProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Memecah ID
         val parts = data.split("||")
         if (parts.size < 2) return false
         val bookId = parts[0]
@@ -212,28 +211,28 @@ class ReelShortProvider : MainAPI() {
                 "lang" to "in",
                 "uid" to "809046271",
                 "user-agent" to "okhttp/4.11.0",
-                "ts" to "1778884634", // Hardcode sementara
-                "sign" to "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9" // Hardcode sementara
+                "ts" to "1778884634",
+                "sign" to "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9" 
             )
         ).parsedSafe<ChapterContentResponse>()
 
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
-        // Dekripsi menggunakan AES
         val m3u8Url = decryptPlayInfo(playInfoEncrypted)
 
         if (m3u8Url.isBlank()) return false
 
-        // Kirim link video ke pemutar Cloudstream
+        [span_3](start_span)// Fiksasi Error: Menggunakan fungsi newExtractorLink[span_3](end_span)
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = name,
                 name = "ReelShort HD",
                 url = m3u8Url,
-                referer = mainUrl,
-                quality = Qualities.P720.value,
-                isM3u8 = true
-            )
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.P720.value
+            }
         )
         return true
     }
