@@ -26,9 +26,7 @@ class MangoPorn : MainAPI() {
     // ==============================
     override val mainPage = mainPageOf(
         // Kategori Utama
-        "$mainUrl/trending/" to "Trending",
         "$mainUrl/ratings/" to "Top Rated",
-        "$mainUrl/genres/porn-movies/" to "Porn Movies",
         "$mainUrl/xxxclips/" to "XXX Clips",
         
         // Kategori Tambahan
