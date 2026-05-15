@@ -23,19 +23,13 @@ class Majorplay : ExtractorApi() {
             val claimToken = url.substringAfter("claim=").substringBefore("&")
             if (claimToken.isEmpty() || !url.contains("claim=")) return
             
-            // KUNCI JAWABAN TERBARU:
-            // Browser modern memakai mode "strict-origin-when-cross-origin".
-            // Kita HARUS memotong path URL panjang dan memaksanya jadi domain utama saja.
-            // Jika Origin mengandung path panjang, Cloudflare akan langsung memblokirnya!
             val actualOrigin = "https://z1.idlixku.com"
             val actualReferer = "https://z1.idlixku.com/"
-            
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // Menukar Tiket
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = mapOf(
@@ -49,7 +43,6 @@ class Majorplay : ExtractorApi() {
 
             val videoUrl = response.url ?: return
             
-            // Header untuk pemutar M3U8 ExoPlayer
             val streamHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -65,16 +58,20 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
+            // KUNCI JAWABAN TERBARU:
+            // Ubah tipe jadi VIDEO agar Cloudstream tidak men-scan isi file .js/.html nya.
+            // Tambahkan this.isM3u8 = true agar ExoPlayer tahu cara memutarnya!
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = videoUrl,
-                    type = ExtractorLinkType.M3U8
+                    type = ExtractorLinkType.VIDEO // Bypass parser internal Cloudstream
                 ) {
                     this.referer = actualReferer
                     this.quality = Qualities.Unknown.value
                     this.headers = streamHeaders
+                    this.isM3u8 = true // Memaksa ExoPlayer membaca sebagai HLS M3U8
                 }
             )
 
