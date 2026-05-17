@@ -67,28 +67,6 @@ class ReelShortProvider : MainAPI() {
     override var lang = "in" 
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // 🔥 HARTA KARUN GHIDRA: SALT SHA-256
-    private val SIGN_SALT = "6a508f8a81314c65" 
-
-    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Abjad A-Z)
-    private fun generateSign(params: Map<String, String>): String {
-        val sortedKeys = params.keys.sorted()
-        val sb = StringBuilder()
-        for (key in sortedKeys) {
-            val value = params[key]
-            if (!value.isNullOrEmpty()) {
-                sb.append(key).append("=").append(value).append("&")
-            }
-        }
-        var signString = sb.toString()
-        if (signString.endsWith("&")) {
-            signString = signString.dropLast(1)
-        }
-        val input = signString + SIGN_SALT
-        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
-
     // 🔥 FUNGSI PEMBONGKAR GEMBOK AES VIDEO
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
@@ -104,78 +82,43 @@ class ReelShortProvider : MainAPI() {
         }
     }
 
-    // ================== HELPER REQUEST ==================
-    private suspend fun postWithSign(url: String, body: Map<String, String>): String {
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
-        val clientTraceId = currentTs + (1000000..9999999).random().toString()
-        
-        // PAKAI REQUEST TIME & SESSION TERBARU LU HARI INI
-        val requestTime = "XIEsgk5qm9LL1gJXM5Fwzk97GLUnRa1yn/5fTt+hucRlgcRDH+lRK36S5Y63RiEKOT374fOpWDE/5xvHK11odxqq9ia9KH+ECCNi0Vejvmo="
-        val session = "89e92d91b0b2c17ea4007fdb6d1ea63f"
-
-        val signParams = mutableMapOf(
-            "uid" to "809046271",
-            "channelId" to "AVG10003",
-            "ts" to currentTs,
-            "apiVersion" to "1.4.14",
-            "session" to session,
-            "lang" to "in",
-            "devId" to "b0c9622df6e963d9",
-            "clientVer" to "3.8.00",
-            "clientTraceId" to clientTraceId,
-            "requestTime" to requestTime
-        )
-        signParams.putAll(body)
-        
-        val dynamicSign = generateSign(signParams)
-
-        val headers = mapOf(
-            "uid" to "809046271",
-            "channelid" to "AVG10003",
-            "ts" to currentTs,
-            "apiversion" to "1.4.14",
-            "session" to session,
-            "lang" to "in",
-            "devid" to "b0c9622df6e963d9",
-            "clientver" to "3.8.00",
-            "clienttraceid" to clientTraceId,
-            "requesttime" to requestTime,
-            "sign" to dynamicSign,
-            "user-agent" to "okhttp/4.11.0"
-        )
-
-        return app.post(url = url, data = body, headers = headers).text
-    }
-
     // 1. MENAMPILKAN HALAMAN BERANDA (HOME PAGE)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val url = "$mainUrl/api/ms/hall/infoV4"
-        
-        // Parameter body ini gue samain persis 100% sama Reqable lu hari ini
+        val url = "https://d1k8g7qaebqd28.cloudfront.net/api/ms/hall/infoV4"
         val body = mapOf(
             "abtest_group" to "newHall", "is_first_req" to "0", "widescreen" to "0",
-            "no_continue_watch" to "1", "current_level1_tab_id" to "44422", "current_level2_tab_id" to "0",
-            "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "aKg+ug0m91kD3cXjAlKT/w==", "action_type" to "1"
+            "no_continue_watch" to "1", "current_level1_tab_id" to "44423", "current_level2_tab_id" to "0",
+            "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "rVuHNANX2f9SVp+CxnlCWA==", "action_type" to "100"
+        )
+        val headers = mapOf(
+            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1779002134", "apiversion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
+            "clientver" to "3.8.00", "clienttraceid" to "17790021345467806", 
+            "requesttime" to "sEzVd56f690IFRNdfytX/H2lqOcCDfU6MJ28LVn9bkTReBrrgXJDZKxSC2LOQqaDrWrPmHrKKrNn2G1IzKqBEQ2NkgccJY3rsaa5iuLYMtU=",
+            "sign" to "94d80e2602aaea9bfd8762c54a63b0216c15ca7db3201afafa1288e08af27e73", "user-agent" to "okhttp/4.11.0"
         )
 
-        val res = postWithSign(url, body)
-        Log.d("ReelShort", "Response Home: " + res.take(200)) // RADAR DEBUG
-        
+        val res = app.post(url = url, data = body, headers = headers).text
         val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<HomePageList>()
 
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            debugList.add(newTvSeriesSearchResponse("Error Home: $res", "debug", TvType.TvSeries) { this.posterUrl = "" })
-            items.add(HomePageList("⚠️ SERVER MENOLAK", debugList))
+            debugList.add(newTvSeriesSearchResponse("Server Menolak Home: $res", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            items.add(HomePageList("⚠️ ERROR", debugList))
             return newHomePageResponse(items)
         }
 
         response.data.lists.forEachIndexed { index, list ->
             val innerItems = mutableListOf<SearchResponse>()
-            val listName = list.title ?: list.books?.firstOrNull()?.bookTitle?.take(10) ?: "Rekomendasi ${index + 1}"
+            val listName = list.title ?: list.books?.firstOrNull()?.bookTitle?.take(10) ?: "Trending ${index + 1}"
 
             list.books?.forEach { book ->
+                if (book.bookTitle != null && book.bookId != null) {
+                    innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
+                }
+            }
+            list.rankList?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
                     innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
                 }
@@ -190,7 +133,14 @@ class ReelShortProvider : MainAPI() {
         val searchItems = mutableListOf<SearchResponse>()
         if (query.isBlank()) {
             val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
-            val res = postWithSign(apiUrl, emptyMap())
+            val headers = mapOf(
+                "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999115", "apiversion" to "1.4.14",
+                "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
+                "clientver" to "3.8.00", "clienttraceid" to "17789991159181873",
+                "requesttime" to "l5j7K59+vT9PC4jVkFZ5FbBor55T/24F5STJigl992f/vFBjQ1nB/Ed9jbVj5q8ymyxFSm5nwjoRVE/jOGYeifENZfnrBlyKcycNkLgYZh0=",
+                "sign" to "d0e479ddc98146c9cc39a524d0a0b8844a4714ef6d531cc437776c8e51c85f38", "user-agent" to "okhttp/4.11.0"
+            )
+            val res = app.post(url = apiUrl, headers = headers).text
             val response = tryParseJson<SearchDefaultResponse>(res)
             response?.data?.bookRankData?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
@@ -200,7 +150,14 @@ class ReelShortProvider : MainAPI() {
         } else {
             val apiUrl = "$mainUrl/api/video/search/search"
             val body = mapOf("word" to query, "page" to "1", "limit" to "20")
-            val res = postWithSign(apiUrl, body)
+            val headers = mapOf(
+                "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999178", "apiversion" to "1.4.14",
+                "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
+                "clientver" to "3.8.00", "clienttraceid" to "17789991781546491",
+                "requesttime" to "vDtJpGcRAncCUoimi4zbCdJj3W2V1j+HSxvymvlODntB2Z0rHvRUBd35CQxwqygu+8LA8ILZZATyBKx5jzpzT3RrNXAECABUGUvDc/Y3oYw=",
+                "sign" to "bbf6beb5fbeceaf81006b1dd259b995697a7098dc0eb36b99fa2ce35b4af59d6", "user-agent" to "okhttp/4.11.0"
+            )
+            val res = app.post(url = apiUrl, data = body, headers = headers).text
             val response = tryParseJson<SearchRsResponse>(res)
             response?.data?.lists?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
@@ -215,12 +172,17 @@ class ReelShortProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
-        val res = postWithSign(apiUrl, body)
+        val headers = mapOf(
+            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1779001670", "apiversion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
+            "clientver" to "3.8.00", "clienttraceid" to "17790016708576281",
+            "requesttime" to "9NOcYxyzU0p6jAn2SHts97w8bebl+8RfKVOzJkFP4cveXJxucars41CqI6YpmiWNSzzYJb4eBS8oRyuanJbXWOEHAc0rBkvJewxrITtsZTc=",
+            "sign" to "7f77183d6aa03feb876c7bc609038cd3db3dc13449e18dbb23807f9f36c37cd0", "user-agent" to "okhttp/4.11.0"
+        )
         
-        Log.d("ReelShort", "Response Detail: " + res.take(200)) // RADAR DEBUG
-
+        val res = app.post(url = apiUrl, data = body, headers = headers).text
         val response = tryParseJson<DetailResponse>(res)
-        if (response?.data?.retBook == null) throw Error("Server Nolak Detail: " + res.take(100))
+        if (response?.data?.retBook == null) throw Error("Server Nolak Detail: $res")
 
         val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
@@ -259,10 +221,15 @@ class ReelShortProvider : MainAPI() {
             "is_hand_pay" to "0", "is_wait_free_unlock" to "0", "book_id" to parts[0], 
             "chapter_id" to parts[1], "set_auto" to "0", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
+        val headers = mapOf(
+            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999391", "apiversion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
+            "clientver" to "3.8.00", "clienttraceid" to "17789993919784549",
+            "requesttime" to "xtV6LhgVkvodqC75ZnSAMcQf5UgP4u448ZwPllFa9ogN0BAD3CWioyfXaLbWbZqq4c7vT4G1TpRsngYGKAfEDhLsYrv8O6rzcbzshWGaUs4=",
+            "sign" to "15be991bb2548b19934b57aecbf1b5f13ba4c3e778079f78b3c74218771bc342", "user-agent" to "okhttp/4.11.0"
+        )
 
-        val res = postWithSign(apiUrl, body)
-        Log.d("ReelShort", "Response Video: " + res.take(200)) // RADAR DEBUG
-
+        val res = app.post(url = apiUrl, data = body, headers = headers).text
         val response = tryParseJson<ChapterContentResponse>(res)
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
