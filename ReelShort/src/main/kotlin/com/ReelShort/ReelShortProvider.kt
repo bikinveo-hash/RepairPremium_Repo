@@ -27,6 +27,12 @@ data class HallBook(
     @JsonProperty("book_pic") val bookPic: String?
 )
 
+data class SearchDefaultResponse(@JsonProperty("data") val data: SearchDefaultData?)
+data class SearchDefaultData(@JsonProperty("book_rank_data") val bookRankData: List<HallBook>?)
+
+data class SearchRsResponse(@JsonProperty("data") val data: SearchRsData?)
+data class SearchRsData(@JsonProperty("lists") val lists: List<HallBook>?)
+
 data class DetailResponse(@JsonProperty("data") val data: DetailData?)
 data class DetailData(
     @JsonProperty("retBook") val retBook: RetBook?,
@@ -78,110 +84,116 @@ class ReelShortProvider : MainAPI() {
     // 1. MENAMPILKAN HALAMAN BERANDA (HOME PAGE)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = "$mainUrl/api/ms/hall/infoV4"
-        
-        // KITA PAKAI PASANGAN TS & SIGN ASLI DARI REQABLE BIAR PASTI TEMBUS
+        val body = mapOf(
+            "abtest_group" to "newHall", "is_first_req" to "0", "widescreen" to "0",
+            "no_continue_watch" to "1", "current_level1_tab_id" to "44421", "current_level2_tab_id" to "0",
+            "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==", "action_type" to "100"
+        )
+
+        // Tiket Home Page dari Reqable
         val fixTs = "1778998077"
         val fixSign = "d50f6adff61cd67b4da656e59befd367b7530161b60bb2b79e3c55ea9d85cb58"
 
-        val body = mapOf(
-            "abtest_group" to "newHall",
-            "is_first_req" to "0",
-            "widescreen" to "0",
-            "no_continue_watch" to "1",
-            "current_level1_tab_id" to "44421",
-            "current_level2_tab_id" to "0",
-            "current_tag_id" to "",
-            "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==",
-            "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==",
-            "action_type" to "100"
-        )
-
         val res = app.post(
-            url = url,
-            data = body,
+            url = url, data = body,
             headers = mapOf(
-                "clientver" to "3.8.00",
-                "lang" to "in",
-                "uid" to "809046271",
-                "ts" to fixTs, 
-                "sign" to fixSign, 
-                "user-agent" to "okhttp/4.11.0"
+                "clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0",
+                "ts" to fixTs, "sign" to fixSign 
             )
         ).text
 
         val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<HomePageList>()
 
-        // 🔥 JURUS DEBUG: Kalau API nolak, tampilkan balasannya di layar sebagai judul film!
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            val errorMsg = res.take(150) // Ambil 150 huruf pertama dari server
-            debugList.add(
-                newTvSeriesSearchResponse("Server Menolak: $errorMsg", "debug", TvType.TvSeries) {
-                    this.posterUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Error.svg/1200px-Error.svg.png"
-                }
-            )
-            items.add(HomePageList("⚠️ ERROR DARI SERVER REELSHORT", debugList))
+            debugList.add(newTvSeriesSearchResponse("Server Menolak (Tiket Home Basi)", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            items.add(HomePageList("⚠️ ERROR", debugList))
             return newHomePageResponse(items)
         }
 
-        // Kalau tembus, susun daftar filmnya
         response.data.lists.forEachIndexed { index, list ->
             val innerItems = mutableListOf<SearchResponse>()
             val listName = list.title ?: "Rekomendasi ${index + 1}"
 
             list.books?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
-                    innerItems.add(
-                        newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) {
-                            this.posterUrl = book.bookPic
-                        }
-                    )
+                    innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
                 }
             }
             list.rankList?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
-                    innerItems.add(
-                        newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) {
-                            this.posterUrl = book.bookPic
-                        }
-                    )
+                    innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
                 }
             }
-
             if (innerItems.isNotEmpty()) {
                 items.add(HomePageList(listName, innerItems))
             }
         }
-
         return newHomePageResponse(items)
     }
 
-    // 2. MENAMPILKAN DETAIL & DAFTAR EPISODE
+    // 2. FUNGSI PENCARIAN FILM (GABUNGAN DEFAULT & KEYWORD)
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchItems = mutableListOf<SearchResponse>()
+        
+        if (query.isBlank()) {
+            // Pencarian Kosong (Trending)
+            val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
+            val fixTs = "1778999115"
+            val fixSign = "d0e479ddc98146c9cc39a524d0a0b8844a4714ef6d531cc437776c8e51c85f38"
+            
+            val res = app.post(
+                url = apiUrl,
+                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+            ).text
+            
+            val response = tryParseJson<SearchDefaultResponse>(res)
+            response?.data?.bookRankData?.forEach { book ->
+                if (book.bookTitle != null && book.bookId != null) {
+                    searchItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
+                }
+            }
+        } else {
+            // Pencarian Pakai Kata Kunci
+            val apiUrl = "$mainUrl/api/video/search/search"
+            val body = mapOf("word" to query, "page" to "1", "limit" to "20")
+            val fixTs = "1778999178"
+            val fixSign = "bbf6beb5fbeceaf81006b1dd259b995697a7098dc0eb36b99fa2ce35b4af59d6"
+
+            val res = app.post(
+                url = apiUrl, data = body,
+                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+            ).text
+
+            val response = tryParseJson<SearchRsResponse>(res)
+            response?.data?.lists?.forEach { book ->
+                if (book.bookTitle != null && book.bookId != null) {
+                    searchItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
+                }
+            }
+        }
+        return searchItems
+    }
+
+    // 3. MENAMPILKAN DETAIL & DAFTAR EPISODE
     override suspend fun load(url: String): LoadResponse? {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
         
-        // Pasangan TS & Sign asli untuk Load Episode
-        val fixTs = "1778884289"
-        val fixSign = "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2"
+        // Tiket Detail dari Reqable
+        val fixTs = "1778998984"
+        val fixSign = "0cc7058330bda2497f880ebeacf9c1fccfbca5c19a27ee05ddbe8548998a01b9"
 
         val res = app.post(
-            url = apiUrl,
-            data = body,
-            headers = mapOf(
-                "clientver" to "3.8.00",
-                "lang" to "in",
-                "uid" to "809046271",
-                "user-agent" to "okhttp/4.11.0",
-                "ts" to fixTs, 
-                "sign" to fixSign
-            )
+            url = apiUrl, data = body,
+            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
         ).text
 
         val response = tryParseJson<DetailResponse>(res)
-        val retBook = response?.data?.retBook ?: return null
-        
+        if (response?.data?.retBook == null) throw Error("Server Menolak (Tiket Detail Basi)")
+
+        val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
             val chapId = ep.chapterId ?: return@mapNotNull null
             newEpisode(data = "$url||$chapId") {
@@ -192,7 +204,7 @@ class ReelShortProvider : MainAPI() {
         } ?: emptyList()
 
         return newTvSeriesLoadResponse(
-            name = retBook.bookTitle ?: "",
+            name = retBook.bookTitle ?: "Unknown",
             url = url,
             type = TvType.TvSeries,
             episodes = episodes
@@ -203,7 +215,7 @@ class ReelShortProvider : MainAPI() {
         }
     }
 
-    // 3. MENGAMBIL LINK VIDEO (.m3u8) & DEKRIPSI AES
+    // 4. MENGAMBIL LINK VIDEO (.m3u8) & DEKRIPSI AES
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -215,32 +227,23 @@ class ReelShortProvider : MainAPI() {
         
         val apiUrl = "$mainUrl/api/video/book/getChapterContent"
         val body = mapOf(
-            "is_hand_pay" to "0", "is_wait_free_unlock" to "0",
-            "book_id" to parts[0], "chapter_id" to parts[1],
-            "set_auto" to "1", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
+            "is_hand_pay" to "0", "is_wait_free_unlock" to "0", "book_id" to parts[0], 
+            "chapter_id" to parts[1], "set_auto" to "0", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
 
-        // Pasangan TS & Sign asli untuk Link Video
-        val fixTs = "1778884634"
-        val fixSign = "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9"
+        // Tiket Video dari Reqable
+        val fixTs = "1778999391"
+        val fixSign = "15be991bb2548b19934b57aecbf1b5f13ba4c3e778079f78b3c74218771bc342"
 
         val res = app.post(
-            url = apiUrl,
-            data = body,
-            headers = mapOf(
-                "clientver" to "3.8.00",
-                "lang" to "in",
-                "uid" to "809046271",
-                "user-agent" to "okhttp/4.11.0",
-                "ts" to fixTs, 
-                "sign" to fixSign 
-            )
+            url = apiUrl, data = body,
+            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
         ).text
 
         val response = tryParseJson<ChapterContentResponse>(res)
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
-        // Momen Kebenaran: Dekripsi menggunakan kunci AES!
+        // Dekripsi gembok AES
         val m3u8Url = decryptPlayInfo(playInfoEncrypted)
         if (m3u8Url.isBlank()) return false
 
