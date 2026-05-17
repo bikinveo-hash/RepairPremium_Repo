@@ -67,7 +67,52 @@ class ReelShortProvider : MainAPI() {
     override var lang = "in" 
     override val supportedTypes = setOf(TvType.TvSeries)
 
+    // =======================================================
+    // 🔥 MESIN PEMBUAT SIGNATURE DINAMIS (BYPASS 100007) 🔥
+    // =======================================================
+    private fun getSha256(input: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun getDynamicHeaders(body: Map<String, String>? = null): Map<String, String> {
+        // 1. Bikin Timestamp waktu SEKARANG (10 digit / detik)
+        val ts = (System.currentTimeMillis() / 1000).toString()
+        val clientTraceId = ts + (100000..999999).random().toString()
+        
+        // 2. Urutkan parameter request dari A-Z (Wajib untuk Sign aplikasi Cina)
+        val dataString = body?.entries?.sortedBy { it.key }?.joinToString("&") { "${it.key}=${it.value}" } ?: ""
+        
+        // 3. SALT SAKTI DARI GHIDRA
+        val salt = "56jh5jsk98888888"
+        
+        // 4. Racik PlainText (Kita tes format paling umum: 1 + ts + data + salt)
+        // Jika error, ubah line ini jadi: val plainText = "$dataString$salt"
+        val plainText = "1${ts}${dataString}${salt}"
+        
+        // 5. Enkripsi jadi SHA-256
+        val sign = getSha256(plainText)
+        Log.d("ReelShort_Sign", "PlainText: $plainText | Hasil: $sign")
+
+        return mapOf(
+            "uid" to "809046271", 
+            "channelid" to "AVG10003", 
+            "ts" to ts, 
+            "apiversion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", 
+            "lang" to "in", 
+            "devid" to "b0c9622df6e963d9",
+            "clientver" to "3.8.00", 
+            "clienttraceid" to clientTraceId,
+            "sign" to sign, 
+            "user-agent" to "okhttp/4.11.0"
+            // requesttime sengaja dibuang biar server fokus ke 'ts' dan 'sign' baru kita
+        )
+    }
+
+    // =======================================================
     // 🔥 FUNGSI PEMBONGKAR GEMBOK AES VIDEO
+    // =======================================================
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
             val key = SecretKeySpec("jlcVUHH9XgmYlfsK".toByteArray(), "AES")
@@ -90,13 +135,9 @@ class ReelShortProvider : MainAPI() {
             "no_continue_watch" to "1", "current_level1_tab_id" to "44423", "current_level2_tab_id" to "0",
             "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "rVuHNANX2f9SVp+CxnlCWA==", "action_type" to "100"
         )
-        val headers = mapOf(
-            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1779002134", "apiversion" to "1.4.14",
-            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
-            "clientver" to "3.8.00", "clienttraceid" to "17790021345467806", 
-            "requesttime" to "sEzVd56f690IFRNdfytX/H2lqOcCDfU6MJ28LVn9bkTReBrrgXJDZKxSC2LOQqaDrWrPmHrKKrNn2G1IzKqBEQ2NkgccJY3rsaa5iuLYMtU=",
-            "sign" to "94d80e2602aaea9bfd8762c54a63b0216c15ca7db3201afafa1288e08af27e73", "user-agent" to "okhttp/4.11.0"
-        )
+        
+        // PANGGIL GENERATOR HEADER DINAMIS!
+        val headers = getDynamicHeaders(body)
 
         val res = app.post(url = url, data = body, headers = headers).text
         val response = tryParseJson<HallResponse>(res)
@@ -133,13 +174,9 @@ class ReelShortProvider : MainAPI() {
         val searchItems = mutableListOf<SearchResponse>()
         if (query.isBlank()) {
             val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
-            val headers = mapOf(
-                "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999115", "apiversion" to "1.4.14",
-                "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
-                "clientver" to "3.8.00", "clienttraceid" to "17789991159181873",
-                "requesttime" to "l5j7K59+vT9PC4jVkFZ5FbBor55T/24F5STJigl992f/vFBjQ1nB/Ed9jbVj5q8ymyxFSm5nwjoRVE/jOGYeifENZfnrBlyKcycNkLgYZh0=",
-                "sign" to "d0e479ddc98146c9cc39a524d0a0b8844a4714ef6d531cc437776c8e51c85f38", "user-agent" to "okhttp/4.11.0"
-            )
+            // PANGGIL GENERATOR HEADER (Kosongin parameter body)
+            val headers = getDynamicHeaders(null)
+            
             val res = app.post(url = apiUrl, headers = headers).text
             val response = tryParseJson<SearchDefaultResponse>(res)
             response?.data?.bookRankData?.forEach { book ->
@@ -150,13 +187,9 @@ class ReelShortProvider : MainAPI() {
         } else {
             val apiUrl = "$mainUrl/api/video/search/search"
             val body = mapOf("word" to query, "page" to "1", "limit" to "20")
-            val headers = mapOf(
-                "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999178", "apiversion" to "1.4.14",
-                "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
-                "clientver" to "3.8.00", "clienttraceid" to "17789991781546491",
-                "requesttime" to "vDtJpGcRAncCUoimi4zbCdJj3W2V1j+HSxvymvlODntB2Z0rHvRUBd35CQxwqygu+8LA8ILZZATyBKx5jzpzT3RrNXAECABUGUvDc/Y3oYw=",
-                "sign" to "bbf6beb5fbeceaf81006b1dd259b995697a7098dc0eb36b99fa2ce35b4af59d6", "user-agent" to "okhttp/4.11.0"
-            )
+            // PANGGIL GENERATOR HEADER
+            val headers = getDynamicHeaders(body)
+            
             val res = app.post(url = apiUrl, data = body, headers = headers).text
             val response = tryParseJson<SearchRsResponse>(res)
             response?.data?.lists?.forEach { book ->
@@ -172,13 +205,9 @@ class ReelShortProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
-        val headers = mapOf(
-            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1779001670", "apiversion" to "1.4.14",
-            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
-            "clientver" to "3.8.00", "clienttraceid" to "17790016708576281",
-            "requesttime" to "9NOcYxyzU0p6jAn2SHts97w8bebl+8RfKVOzJkFP4cveXJxucars41CqI6YpmiWNSzzYJb4eBS8oRyuanJbXWOEHAc0rBkvJewxrITtsZTc=",
-            "sign" to "7f77183d6aa03feb876c7bc609038cd3db3dc13449e18dbb23807f9f36c37cd0", "user-agent" to "okhttp/4.11.0"
-        )
+        
+        // PANGGIL GENERATOR HEADER
+        val headers = getDynamicHeaders(body)
         
         val res = app.post(url = apiUrl, data = body, headers = headers).text
         val response = tryParseJson<DetailResponse>(res)
@@ -221,13 +250,9 @@ class ReelShortProvider : MainAPI() {
             "is_hand_pay" to "0", "is_wait_free_unlock" to "0", "book_id" to parts[0], 
             "chapter_id" to parts[1], "set_auto" to "0", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
-        val headers = mapOf(
-            "uid" to "809046271", "channelid" to "AVG10003", "ts" to "1778999391", "apiversion" to "1.4.14",
-            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f", "lang" to "in", "devid" to "b0c9622df6e963d9",
-            "clientver" to "3.8.00", "clienttraceid" to "17789993919784549",
-            "requesttime" to "xtV6LhgVkvodqC75ZnSAMcQf5UgP4u448ZwPllFa9ogN0BAD3CWioyfXaLbWbZqq4c7vT4G1TpRsngYGKAfEDhLsYrv8O6rzcbzshWGaUs4=",
-            "sign" to "15be991bb2548b19934b57aecbf1b5f13ba4c3e778079f78b3c74218771bc342", "user-agent" to "okhttp/4.11.0"
-        )
+        
+        // PANGGIL GENERATOR HEADER
+        val headers = getDynamicHeaders(body)
 
         val res = app.post(url = apiUrl, data = body, headers = headers).text
         val response = tryParseJson<ChapterContentResponse>(res)
