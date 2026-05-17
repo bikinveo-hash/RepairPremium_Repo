@@ -57,19 +57,8 @@ class ReelShortProvider : MainAPI() {
     override var name = "ReelShort"
     override var mainUrl = "https://v-api.crazymaplestudios.com"
     override val hasMainPage = true
-    override var lang = "in" // Pakai "in" sesuai request Reqable lu
+    override var lang = "in" 
     override val supportedTypes = setOf(TvType.TvSeries)
-
-    // HARTA KARUN GHIDRA: SALT SHA-256
-    private val SIGN_SALT = "6a508f8a81314c65" 
-
-    // FUNGSI SAKTI PEMBUAT TIKET MASUK (SIGN GENERATOR)
-    private fun generateSign(ts: String): String {
-        // Logika umum: Menggabungkan timestamp + uid + salt (Bisa disesuaikan kalau api butuh parameter lain)
-        val input = "ts=${ts}uid=809046271" + SIGN_SALT
-        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
 
     // FUNGSI SAKTI PEMBONGKAR GEMBOK AES (DARI MT MANAGER)
     private fun decryptPlayInfo(encryptedBase64: String): String {
@@ -90,6 +79,10 @@ class ReelShortProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = "$mainUrl/api/ms/hall/infoV4"
         
+        // KITA PAKAI PASANGAN TS & SIGN ASLI DARI REQABLE BIAR PASTI TEMBUS
+        val fixTs = "1778998077"
+        val fixSign = "d50f6adff61cd67b4da656e59befd367b7530161b60bb2b79e3c55ea9d85cb58"
+
         val body = mapOf(
             "abtest_group" to "newHall",
             "is_first_req" to "0",
@@ -97,13 +90,11 @@ class ReelShortProvider : MainAPI() {
             "no_continue_watch" to "1",
             "current_level1_tab_id" to "44421",
             "current_level2_tab_id" to "0",
+            "current_tag_id" to "",
+            "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==",
+            "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==",
             "action_type" to "100"
         )
-
-        // Bikin Waktu Otomatis (Format Detik)
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
-        // Bikin Sign Otomatis pakai Salt Ghidra
-        val dynamicSign = generateSign(currentTs)
 
         val res = app.post(
             url = url,
@@ -112,9 +103,8 @@ class ReelShortProvider : MainAPI() {
                 "clientver" to "3.8.00",
                 "lang" to "in",
                 "uid" to "809046271",
-                "ts" to currentTs, 
-                // Jika server menolak dynamicSign kita, sementara bisa pakai sign hardcoded lu kemarin buat testing aja
-                "sign" to "d50f6adff61cd67b4da656e59befd367b7530161b60bb2b79e3c55ea9d85cb58", 
+                "ts" to fixTs, 
+                "sign" to fixSign, 
                 "user-agent" to "okhttp/4.11.0"
             )
         ).text
@@ -122,11 +112,24 @@ class ReelShortProvider : MainAPI() {
         val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<HomePageList>()
 
-        response?.data?.lists?.forEachIndexed { index, list ->
+        // 🔥 JURUS DEBUG: Kalau API nolak, tampilkan balasannya di layar sebagai judul film!
+        if (response?.data?.lists == null) {
+            val debugList = mutableListOf<SearchResponse>()
+            val errorMsg = res.take(150) // Ambil 150 huruf pertama dari server
+            debugList.add(
+                newTvSeriesSearchResponse("Server Menolak: $errorMsg", "debug", TvType.TvSeries) {
+                    this.posterUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Error.svg/1200px-Error.svg.png"
+                }
+            )
+            items.add(HomePageList("⚠️ ERROR DARI SERVER REELSHORT", debugList))
+            return newHomePageResponse(items)
+        }
+
+        // Kalau tembus, susun daftar filmnya
+        response.data.lists.forEachIndexed { index, list ->
             val innerItems = mutableListOf<SearchResponse>()
             val listName = list.title ?: "Rekomendasi ${index + 1}"
 
-            // Ambil dari keranjang 'books'
             list.books?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
                     innerItems.add(
@@ -136,8 +139,6 @@ class ReelShortProvider : MainAPI() {
                     )
                 }
             }
-
-            // Ambil dari keranjang 'rank_list' (Trending)
             list.rankList?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
                     innerItems.add(
@@ -153,7 +154,6 @@ class ReelShortProvider : MainAPI() {
             }
         }
 
-        if (items.isEmpty()) return null
         return newHomePageResponse(items)
     }
 
@@ -161,7 +161,10 @@ class ReelShortProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        
+        // Pasangan TS & Sign asli untuk Load Episode
+        val fixTs = "1778884289"
+        val fixSign = "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2"
 
         val res = app.post(
             url = apiUrl,
@@ -171,8 +174,8 @@ class ReelShortProvider : MainAPI() {
                 "lang" to "in",
                 "uid" to "809046271",
                 "user-agent" to "okhttp/4.11.0",
-                "ts" to currentTs, 
-                "sign" to "1d5243b95fc83e677594c65b1bbf7ec4b45c87c32e34ff398e9d1303e47aa1a2" // Pakai hardcode dulu buat tes parsing berjalan mulus
+                "ts" to fixTs, 
+                "sign" to fixSign
             )
         ).text
 
@@ -217,7 +220,9 @@ class ReelShortProvider : MainAPI() {
             "set_auto" to "1", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
 
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        // Pasangan TS & Sign asli untuk Link Video
+        val fixTs = "1778884634"
+        val fixSign = "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9"
 
         val res = app.post(
             url = apiUrl,
@@ -227,8 +232,8 @@ class ReelShortProvider : MainAPI() {
                 "lang" to "in",
                 "uid" to "809046271",
                 "user-agent" to "okhttp/4.11.0",
-                "ts" to currentTs, 
-                "sign" to "99378f58651f984ee19d93f22b6a334d0c9a297c0b323354a555ce2dfbf090f9" // Pakai hardcode dulu buat tes parsing berjalan mulus
+                "ts" to fixTs, 
+                "sign" to fixSign 
             )
         ).text
 
