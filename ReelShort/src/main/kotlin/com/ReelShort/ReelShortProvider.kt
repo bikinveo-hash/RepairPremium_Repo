@@ -1,6 +1,7 @@
 package com.ReelShort
 
 import android.util.Base64
+import android.util.Log
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -69,27 +70,20 @@ class ReelShortProvider : MainAPI() {
     // 🔥 HARTA KARUN GHIDRA: SALT SHA-256
     private val SIGN_SALT = "6a508f8a81314c65" 
 
-    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Sesuai Dex Lel/f MT Manager)
+    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Abjad A-Z)
     private fun generateSign(params: Map<String, String>): String {
-        // 1. Urutkan parameter berdasarkan Abjad (A-Z)
         val sortedKeys = params.keys.sorted()
-        
-        // 2. Gabungkan jadi format URL (key=value&key2=value2...)
         val sb = StringBuilder()
         for (key in sortedKeys) {
             val value = params[key]
-            if (!value.isNullOrEmpty()) { // Sama persis kayak TextUtils.isEmpty di Smali
+            if (!value.isNullOrEmpty()) {
                 sb.append(key).append("=").append(value).append("&")
             }
         }
-        
-        // 3. Hapus simbol '&' di akhir kalimat
         var signString = sb.toString()
         if (signString.endsWith("&")) {
             signString = signString.dropLast(1)
         }
-        
-        // 4. Tambahkan Salt dan Hash dengan SHA-256
         val input = signString + SIGN_SALT
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
@@ -111,41 +105,36 @@ class ReelShortProvider : MainAPI() {
     }
 
     // ================== HELPER REQUEST ==================
-    // Ini Koki Utama kita! Ngeracik semua 10 Header Wajib biar nggak ditendang server
     private suspend fun postWithSign(url: String, body: Map<String, String>): String {
         val currentTs = (System.currentTimeMillis() / 1000).toString()
         val clientTraceId = currentTs + (1000000..9999999).random().toString()
         
-        // Teks waktu launch dari Reqable lu (Wajib ada di Sign)
-        val requestTime = "9NOcYxyzU0p6jAn2SHts97w8bebl+8RfKVOzJkFP4cveXJxucars41CqI6YpmiWNSzzYJb4eBS8oRyuanJbXWOEHAc0rBkvJewxrITtsZTc="
+        // PAKAI REQUEST TIME & SESSION TERBARU LU HARI INI
+        val requestTime = "XIEsgk5qm9LL1gJXM5Fwzk97GLUnRa1yn/5fTt+hucRlgcRDH+lRK36S5Y63RiEKOT374fOpWDE/5xvHK11odxqq9ia9KH+ECCNi0Vejvmo="
+        val session = "89e92d91b0b2c17ea4007fdb6d1ea63f"
 
-        // Map khusus buat di-Hash (PERHATIKAN HURUF BESAR KECILNYA, WAJIB SAMA KAYA SMALI)
         val signParams = mutableMapOf(
             "uid" to "809046271",
             "channelId" to "AVG10003",
             "ts" to currentTs,
             "apiVersion" to "1.4.14",
-            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f",
+            "session" to session,
             "lang" to "in",
             "devId" to "b0c9622df6e963d9",
             "clientVer" to "3.8.00",
             "clientTraceId" to clientTraceId,
             "requestTime" to requestTime
         )
-
-        // Gabungin Body Data ke dalam Sign
         signParams.putAll(body)
         
-        // Buat Tanda Tangan (Sign)
         val dynamicSign = generateSign(signParams)
 
-        // Header yang dikirim lewat internet (HTTP Header)
         val headers = mapOf(
             "uid" to "809046271",
             "channelid" to "AVG10003",
             "ts" to currentTs,
             "apiversion" to "1.4.14",
-            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f",
+            "session" to session,
             "lang" to "in",
             "devid" to "b0c9622df6e963d9",
             "clientver" to "3.8.00",
@@ -161,33 +150,32 @@ class ReelShortProvider : MainAPI() {
     // 1. MENAMPILKAN HALAMAN BERANDA (HOME PAGE)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = "$mainUrl/api/ms/hall/infoV4"
+        
+        // Parameter body ini gue samain persis 100% sama Reqable lu hari ini
         val body = mapOf(
             "abtest_group" to "newHall", "is_first_req" to "0", "widescreen" to "0",
-            "no_continue_watch" to "1", "current_level1_tab_id" to "44421", "current_level2_tab_id" to "0",
-            "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==", "action_type" to "100"
+            "no_continue_watch" to "1", "current_level1_tab_id" to "44422", "current_level2_tab_id" to "0",
+            "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "aKg+ug0m91kD3cXjAlKT/w==", "action_type" to "1"
         )
 
         val res = postWithSign(url, body)
+        Log.d("ReelShort", "Response Home: " + res.take(200)) // RADAR DEBUG
+        
         val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<HomePageList>()
 
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            debugList.add(newTvSeriesSearchResponse("Server Error: $res", "debug", TvType.TvSeries) { this.posterUrl = "" })
-            items.add(HomePageList("⚠️ ERROR", debugList))
+            debugList.add(newTvSeriesSearchResponse("Error Home: $res", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            items.add(HomePageList("⚠️ SERVER MENOLAK", debugList))
             return newHomePageResponse(items)
         }
 
         response.data.lists.forEachIndexed { index, list ->
             val innerItems = mutableListOf<SearchResponse>()
-            val listName = list.title ?: "Rekomendasi ${index + 1}"
+            val listName = list.title ?: list.books?.firstOrNull()?.bookTitle?.take(10) ?: "Rekomendasi ${index + 1}"
 
             list.books?.forEach { book ->
-                if (book.bookTitle != null && book.bookId != null) {
-                    innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
-                }
-            }
-            list.rankList?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
                     innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
                 }
@@ -197,14 +185,12 @@ class ReelShortProvider : MainAPI() {
         return newHomePageResponse(items)
     }
 
-    // 2. FUNGSI PENCARIAN FILM (GABUNGAN DEFAULT & KEYWORD)
+    // 2. FUNGSI PENCARIAN FILM
     override suspend fun search(query: String): List<SearchResponse> {
         val searchItems = mutableListOf<SearchResponse>()
-        
         if (query.isBlank()) {
             val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
             val res = postWithSign(apiUrl, emptyMap())
-            
             val response = tryParseJson<SearchDefaultResponse>(res)
             response?.data?.bookRankData?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
@@ -215,7 +201,6 @@ class ReelShortProvider : MainAPI() {
             val apiUrl = "$mainUrl/api/video/search/search"
             val body = mapOf("word" to query, "page" to "1", "limit" to "20")
             val res = postWithSign(apiUrl, body)
-
             val response = tryParseJson<SearchRsResponse>(res)
             response?.data?.lists?.forEach { book ->
                 if (book.bookTitle != null && book.bookId != null) {
@@ -231,9 +216,11 @@ class ReelShortProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
         val res = postWithSign(apiUrl, body)
+        
+        Log.d("ReelShort", "Response Detail: " + res.take(200)) // RADAR DEBUG
 
         val response = tryParseJson<DetailResponse>(res)
-        if (response?.data?.retBook == null) throw Error("Server Nolak Detail: $res")
+        if (response?.data?.retBook == null) throw Error("Server Nolak Detail: " + res.take(100))
 
         val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
@@ -274,10 +261,11 @@ class ReelShortProvider : MainAPI() {
         )
 
         val res = postWithSign(apiUrl, body)
+        Log.d("ReelShort", "Response Video: " + res.take(200)) // RADAR DEBUG
+
         val response = tryParseJson<ChapterContentResponse>(res)
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
-        // Dekripsi gembok AES
         val m3u8Url = decryptPlayInfo(playInfoEncrypted)
         if (m3u8Url.isBlank()) return false
 
