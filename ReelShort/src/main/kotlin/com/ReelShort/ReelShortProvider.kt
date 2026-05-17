@@ -66,7 +66,19 @@ class ReelShortProvider : MainAPI() {
     override var lang = "in" 
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // FUNGSI SAKTI PEMBONGKAR GEMBOK AES (DARI MT MANAGER)
+    // 🔥 HARTA KARUN GHIDRA: SALT SHA-256
+    private val SIGN_SALT = "6a508f8a81314c65" 
+
+    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS
+    private fun generateSign(ts: String, body: Map<String, String>? = null): String {
+        // Logika umum ReelShort: gabungan timestamp, parameter, dan Salt
+        // Jika server masih nolak, kita perlu ubah urutan teks input di bawah ini
+        val input = "ts=${ts}" + SIGN_SALT
+        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    // 🔥 FUNGSI PEMBONGKAR GEMBOK AES (DARI MT MANAGER)
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
             val key = SecretKeySpec("jlcVUHH9XgmYlfsK".toByteArray(), "AES")
@@ -90,15 +102,15 @@ class ReelShortProvider : MainAPI() {
             "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==", "action_type" to "100"
         )
 
-        // Tiket Home Page dari Reqable
-        val fixTs = "1778998077"
-        val fixSign = "d50f6adff61cd67b4da656e59befd367b7530161b60bb2b79e3c55ea9d85cb58"
+        // Generate Tiket Otomatis!
+        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        val dynamicSign = generateSign(currentTs, body)
 
         val res = app.post(
             url = url, data = body,
             headers = mapOf(
                 "clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0",
-                "ts" to fixTs, "sign" to fixSign 
+                "ts" to currentTs, "sign" to dynamicSign 
             )
         ).text
 
@@ -107,7 +119,7 @@ class ReelShortProvider : MainAPI() {
 
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            debugList.add(newTvSeriesSearchResponse("Server Menolak (Tiket Home Basi)", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            debugList.add(newTvSeriesSearchResponse("Server Menolak (Sign Gagal)", "debug", TvType.TvSeries) { this.posterUrl = "" })
             items.add(HomePageList("⚠️ ERROR", debugList))
             return newHomePageResponse(items)
         }
@@ -136,16 +148,15 @@ class ReelShortProvider : MainAPI() {
     // 2. FUNGSI PENCARIAN FILM (GABUNGAN DEFAULT & KEYWORD)
     override suspend fun search(query: String): List<SearchResponse> {
         val searchItems = mutableListOf<SearchResponse>()
+        val currentTs = (System.currentTimeMillis() / 1000).toString()
         
         if (query.isBlank()) {
-            // Pencarian Kosong (Trending)
             val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
-            val fixTs = "1778999115"
-            val fixSign = "d0e479ddc98146c9cc39a524d0a0b8844a4714ef6d531cc437776c8e51c85f38"
+            val dynamicSign = generateSign(currentTs, emptyMap())
             
             val res = app.post(
                 url = apiUrl,
-                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
             ).text
             
             val response = tryParseJson<SearchDefaultResponse>(res)
@@ -155,15 +166,13 @@ class ReelShortProvider : MainAPI() {
                 }
             }
         } else {
-            // Pencarian Pakai Kata Kunci
             val apiUrl = "$mainUrl/api/video/search/search"
             val body = mapOf("word" to query, "page" to "1", "limit" to "20")
-            val fixTs = "1778999178"
-            val fixSign = "bbf6beb5fbeceaf81006b1dd259b995697a7098dc0eb36b99fa2ce35b4af59d6"
+            val dynamicSign = generateSign(currentTs, body)
 
             val res = app.post(
                 url = apiUrl, data = body,
-                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
             ).text
 
             val response = tryParseJson<SearchRsResponse>(res)
@@ -181,17 +190,17 @@ class ReelShortProvider : MainAPI() {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
         
-        // Tiket Detail dari Reqable
-        val fixTs = "1778998984"
-        val fixSign = "0cc7058330bda2497f880ebeacf9c1fccfbca5c19a27ee05ddbe8548998a01b9"
+        // Generate Tiket Otomatis!
+        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        val dynamicSign = generateSign(currentTs, body)
 
         val res = app.post(
             url = apiUrl, data = body,
-            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
         ).text
 
         val response = tryParseJson<DetailResponse>(res)
-        if (response?.data?.retBook == null) throw Error("Server Menolak (Tiket Detail Basi)")
+        if (response?.data?.retBook == null) throw Error("Server Menolak (Sign Gagal di Detail)")
 
         val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
@@ -231,13 +240,13 @@ class ReelShortProvider : MainAPI() {
             "chapter_id" to parts[1], "set_auto" to "0", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
 
-        // Tiket Video dari Reqable
-        val fixTs = "1778999391"
-        val fixSign = "15be991bb2548b19934b57aecbf1b5f13ba4c3e778079f78b3c74218771bc342"
+        // Generate Tiket Otomatis!
+        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        val dynamicSign = generateSign(currentTs, body)
 
         val res = app.post(
             url = apiUrl, data = body,
-            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to fixTs, "sign" to fixSign)
+            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
         ).text
 
         val response = tryParseJson<ChapterContentResponse>(res)
