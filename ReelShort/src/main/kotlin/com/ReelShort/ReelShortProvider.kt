@@ -11,7 +11,7 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 // ==========================================
-// 📦 CETAKAN DATA CLASS (SESUAI JSON ASLI)
+// 📦 CETAKAN DATA CLASS
 // ==========================================
 
 data class HallResponse(@JsonProperty("data") val data: HallData?)
@@ -69,11 +69,28 @@ class ReelShortProvider : MainAPI() {
     // 🔥 HARTA KARUN GHIDRA: SALT SHA-256
     private val SIGN_SALT = "6a508f8a81314c65" 
 
-    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS
-    private fun generateSign(ts: String, body: Map<String, String>? = null): String {
-        // Logika umum ReelShort: gabungan timestamp, parameter, dan Salt
-        // Jika server masih nolak, kita perlu ubah urutan teks input di bawah ini
-        val input = "ts=${ts}" + SIGN_SALT
+    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Sesuai Dex Lel/f)
+    private fun generateSign(params: Map<String, String>): String {
+        // 1. Urutkan parameter berdasarkan Abjad (A-Z)
+        val sortedKeys = params.keys.sorted()
+        
+        // 2. Gabungkan jadi format URL (key=value&key2=value2...)
+        val sb = StringBuilder()
+        for (key in sortedKeys) {
+            val value = params[key]
+            if (!value.isNullOrEmpty()) {
+                sb.append(key).append("=").append(value).append("&")
+            }
+        }
+        
+        // 3. Hapus simbol '&' di akhir kalimat
+        var signString = sb.toString()
+        if (signString.endsWith("&")) {
+            signString = signString.dropLast(1)
+        }
+        
+        // 4. Tambahkan Salt dari libstupid.so dan Hash dengan SHA-256
+        val input = signString + SIGN_SALT
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
     }
@@ -93,6 +110,33 @@ class ReelShortProvider : MainAPI() {
         }
     }
 
+    // ================== HELPER REQUEST ==================
+    // Fungsi ini ngebantu kita ngegabungin Header + Body sebelum di-Sign
+    private suspend fun postWithSign(url: String, body: Map<String, String>): String {
+        val currentTs = (System.currentTimeMillis() / 1000).toString()
+        
+        // Ini adalah Header Wajib yang juga ikut dinilai oleh server
+        val headers = mutableMapOf(
+            "clientver" to "3.8.00",
+            "lang" to "in",
+            "uid" to "809046271",
+            "ts" to currentTs
+        )
+
+        // Gabungkan Header dan Body untuk dimasak oleh fungsi generateSign
+        val allParamsForSign = mutableMapOf<String, String>()
+        allParamsForSign.putAll(headers)
+        allParamsForSign.putAll(body)
+        
+        val dynamicSign = generateSign(allParamsForSign)
+
+        // Tambahkan Header tambahan yang tidak perlu di-sign
+        headers["sign"] = dynamicSign
+        headers["user-agent"] = "okhttp/4.11.0"
+
+        return app.post(url = url, data = body, headers = headers).text
+    }
+
     // 1. MENAMPILKAN HALAMAN BERANDA (HOME PAGE)
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = "$mainUrl/api/ms/hall/infoV4"
@@ -102,24 +146,13 @@ class ReelShortProvider : MainAPI() {
             "current_tag_id" to "", "tabs_md5" to "BRPoJKgbEFJsRTwxRUXYvA==", "tab_md5" to "BNV/noy8lns5VuypXDeqrQ==", "action_type" to "100"
         )
 
-        // Generate Tiket Otomatis!
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
-        val dynamicSign = generateSign(currentTs, body)
-
-        val res = app.post(
-            url = url, data = body,
-            headers = mapOf(
-                "clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0",
-                "ts" to currentTs, "sign" to dynamicSign 
-            )
-        ).text
-
+        val res = postWithSign(url, body)
         val response = tryParseJson<HallResponse>(res)
         val items = mutableListOf<HomePageList>()
 
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            debugList.add(newTvSeriesSearchResponse("Server Menolak (Sign Gagal)", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            debugList.add(newTvSeriesSearchResponse("Server Menolak (Tiket Basi)", "debug", TvType.TvSeries) { this.posterUrl = "" })
             items.add(HomePageList("⚠️ ERROR", debugList))
             return newHomePageResponse(items)
         }
@@ -138,26 +171,18 @@ class ReelShortProvider : MainAPI() {
                     innerItems.add(newTvSeriesSearchResponse(book.bookTitle, book.bookId, TvType.TvSeries) { this.posterUrl = book.bookPic })
                 }
             }
-            if (innerItems.isNotEmpty()) {
-                items.add(HomePageList(listName, innerItems))
-            }
+            if (innerItems.isNotEmpty()) items.add(HomePageList(listName, innerItems))
         }
         return newHomePageResponse(items)
     }
 
-    // 2. FUNGSI PENCARIAN FILM (GABUNGAN DEFAULT & KEYWORD)
+    // 2. FUNGSI PENCARIAN FILM
     override suspend fun search(query: String): List<SearchResponse> {
         val searchItems = mutableListOf<SearchResponse>()
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
         
         if (query.isBlank()) {
             val apiUrl = "$mainUrl/api/video/search/getSearchDefault"
-            val dynamicSign = generateSign(currentTs, emptyMap())
-            
-            val res = app.post(
-                url = apiUrl,
-                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
-            ).text
+            val res = postWithSign(apiUrl, emptyMap())
             
             val response = tryParseJson<SearchDefaultResponse>(res)
             response?.data?.bookRankData?.forEach { book ->
@@ -168,12 +193,7 @@ class ReelShortProvider : MainAPI() {
         } else {
             val apiUrl = "$mainUrl/api/video/search/search"
             val body = mapOf("word" to query, "page" to "1", "limit" to "20")
-            val dynamicSign = generateSign(currentTs, body)
-
-            val res = app.post(
-                url = apiUrl, data = body,
-                headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
-            ).text
+            val res = postWithSign(apiUrl, body)
 
             val response = tryParseJson<SearchRsResponse>(res)
             response?.data?.lists?.forEach { book ->
@@ -189,18 +209,10 @@ class ReelShortProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val apiUrl = "$mainUrl/api/video/book/getBookDetailV2"
         val body = mapOf("book_id" to url, "from" to "0", "play_details" to "1")
-        
-        // Generate Tiket Otomatis!
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
-        val dynamicSign = generateSign(currentTs, body)
-
-        val res = app.post(
-            url = apiUrl, data = body,
-            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
-        ).text
+        val res = postWithSign(apiUrl, body)
 
         val response = tryParseJson<DetailResponse>(res)
-        if (response?.data?.retBook == null) throw Error("Server Menolak (Sign Gagal di Detail)")
+        if (response?.data?.retBook == null) throw Error("Server Menolak (Tiket Basi)")
 
         val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
@@ -240,15 +252,7 @@ class ReelShortProvider : MainAPI() {
             "chapter_id" to parts[1], "set_auto" to "0", "account_bind_from_player" to "0", "is_adv_unlock" to "0"
         )
 
-        // Generate Tiket Otomatis!
-        val currentTs = (System.currentTimeMillis() / 1000).toString()
-        val dynamicSign = generateSign(currentTs, body)
-
-        val res = app.post(
-            url = apiUrl, data = body,
-            headers = mapOf("clientver" to "3.8.00", "lang" to "in", "uid" to "809046271", "user-agent" to "okhttp/4.11.0", "ts" to currentTs, "sign" to dynamicSign)
-        ).text
-
+        val res = postWithSign(apiUrl, body)
         val response = tryParseJson<ChapterContentResponse>(res)
         val playInfoEncrypted = response?.data?.playInfo ?: return false
 
