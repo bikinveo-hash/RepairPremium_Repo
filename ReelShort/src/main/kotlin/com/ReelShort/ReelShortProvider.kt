@@ -1,12 +1,11 @@
-package com.ReelShort // 👈 Udah gue benerin biar ReelShortPlugin lu nggak error
+package com.ReelShort
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink // 👈 Import ini yang kurang
-import com.lagradost.cloudstream3.utils.Qualities    // 👈 Import ini juga kurang
+import com.lagradost.cloudstream3.utils.* // 👈 Import ini menutupi ExtractorLink, Qualities, dan newExtractorLink
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
@@ -45,7 +44,7 @@ class ReelShortProvider : MainAPI() {
     }
 
     // ==========================================
-    // 📦 DATA CLASSES (Struktur JSON Umum Reelshort)
+    // 📦 DATA CLASSES (Struktur JSON Umum)
     // ==========================================
     data class RsResponse(
         @JsonProperty("code") val code: Int?,
@@ -91,7 +90,6 @@ class ReelShortProvider : MainAPI() {
             val books = tryParseJson<List<RsBook>>(jsonString) 
             
             books?.forEach { book ->
-                // Menggunakan Builder baru Cloudstream
                 homeItems.add(
                     newTvSeriesSearchResponse(
                         book.bookName ?: "Unknown", 
@@ -108,7 +106,6 @@ class ReelShortProvider : MainAPI() {
             items.add(HomePageList("Rekomendasi", homeItems))
         }
         
-        // Menggunakan Builder baru Cloudstream
         return newHomePageResponse(items)
     }
 
@@ -125,7 +122,6 @@ class ReelShortProvider : MainAPI() {
             val jsonString = res.data?.toJson() ?: ""
             val books = tryParseJson<List<RsBook>>(jsonString)
             books?.forEach { book ->
-                // Menggunakan Builder baru Cloudstream
                 searchList.add(
                     newTvSeriesSearchResponse(
                         book.bookName ?: "Unknown", 
@@ -155,7 +151,6 @@ class ReelShortProvider : MainAPI() {
             val chapters = tryParseJson<List<RsChapter>>(jsonString)
             
             chapters?.forEach { ch ->
-                // Menggunakan Builder baru Cloudstream
                 episodes.add(
                     newEpisode(ch.chapterId ?: "") {
                         this.name = ch.chapterName ?: "Episode ${ch.chapterIndex}"
@@ -165,7 +160,6 @@ class ReelShortProvider : MainAPI() {
             }
         }
 
-        // Menggunakan Builder baru Cloudstream
         return newTvSeriesLoadResponse(
             "ReelShort Drama", 
             url, 
@@ -196,8 +190,9 @@ class ReelShortProvider : MainAPI() {
             tryParseJson<RsVideoData>(decryptedJson)?.let { videoData ->
                 val videoUrl = videoData.playUrl ?: videoData.videoUrl ?: return false
                 
+                // 👈 INI YANG BARU: Pakai newExtractorLink
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = this.name,
                         name = this.name,
                         url = videoUrl,
