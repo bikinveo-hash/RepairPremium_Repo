@@ -69,7 +69,7 @@ class ReelShortProvider : MainAPI() {
     // 🔥 HARTA KARUN GHIDRA: SALT SHA-256
     private val SIGN_SALT = "6a508f8a81314c65" 
 
-    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Sesuai Dex Lel/f)
+    // 🔥 FUNGSI PEMBUAT TIKET OTOMATIS (Sesuai Dex Lel/f MT Manager)
     private fun generateSign(params: Map<String, String>): String {
         // 1. Urutkan parameter berdasarkan Abjad (A-Z)
         val sortedKeys = params.keys.sorted()
@@ -78,7 +78,7 @@ class ReelShortProvider : MainAPI() {
         val sb = StringBuilder()
         for (key in sortedKeys) {
             val value = params[key]
-            if (!value.isNullOrEmpty()) {
+            if (!value.isNullOrEmpty()) { // Sama persis kayak TextUtils.isEmpty di Smali
                 sb.append(key).append("=").append(value).append("&")
             }
         }
@@ -89,13 +89,13 @@ class ReelShortProvider : MainAPI() {
             signString = signString.dropLast(1)
         }
         
-        // 4. Tambahkan Salt dari libstupid.so dan Hash dengan SHA-256
+        // 4. Tambahkan Salt dan Hash dengan SHA-256
         val input = signString + SIGN_SALT
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    // 🔥 FUNGSI PEMBONGKAR GEMBOK AES (DARI MT MANAGER)
+    // 🔥 FUNGSI PEMBONGKAR GEMBOK AES VIDEO
     private fun decryptPlayInfo(encryptedBase64: String): String {
         return try {
             val key = SecretKeySpec("jlcVUHH9XgmYlfsK".toByteArray(), "AES")
@@ -111,28 +111,49 @@ class ReelShortProvider : MainAPI() {
     }
 
     // ================== HELPER REQUEST ==================
-    // Fungsi ini ngebantu kita ngegabungin Header + Body sebelum di-Sign
+    // Ini Koki Utama kita! Ngeracik semua 10 Header Wajib biar nggak ditendang server
     private suspend fun postWithSign(url: String, body: Map<String, String>): String {
         val currentTs = (System.currentTimeMillis() / 1000).toString()
+        val clientTraceId = currentTs + (1000000..9999999).random().toString()
         
-        // Ini adalah Header Wajib yang juga ikut dinilai oleh server
-        val headers = mutableMapOf(
-            "clientver" to "3.8.00",
-            "lang" to "in",
+        // Teks waktu launch dari Reqable lu (Wajib ada di Sign)
+        val requestTime = "9NOcYxyzU0p6jAn2SHts97w8bebl+8RfKVOzJkFP4cveXJxucars41CqI6YpmiWNSzzYJb4eBS8oRyuanJbXWOEHAc0rBkvJewxrITtsZTc="
+
+        // Map khusus buat di-Hash (PERHATIKAN HURUF BESAR KECILNYA, WAJIB SAMA KAYA SMALI)
+        val signParams = mutableMapOf(
             "uid" to "809046271",
-            "ts" to currentTs
+            "channelId" to "AVG10003",
+            "ts" to currentTs,
+            "apiVersion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f",
+            "lang" to "in",
+            "devId" to "b0c9622df6e963d9",
+            "clientVer" to "3.8.00",
+            "clientTraceId" to clientTraceId,
+            "requestTime" to requestTime
         )
 
-        // Gabungkan Header dan Body untuk dimasak oleh fungsi generateSign
-        val allParamsForSign = mutableMapOf<String, String>()
-        allParamsForSign.putAll(headers)
-        allParamsForSign.putAll(body)
+        // Gabungin Body Data ke dalam Sign
+        signParams.putAll(body)
         
-        val dynamicSign = generateSign(allParamsForSign)
+        // Buat Tanda Tangan (Sign)
+        val dynamicSign = generateSign(signParams)
 
-        // Tambahkan Header tambahan yang tidak perlu di-sign
-        headers["sign"] = dynamicSign
-        headers["user-agent"] = "okhttp/4.11.0"
+        // Header yang dikirim lewat internet (HTTP Header)
+        val headers = mapOf(
+            "uid" to "809046271",
+            "channelid" to "AVG10003",
+            "ts" to currentTs,
+            "apiversion" to "1.4.14",
+            "session" to "89e92d91b0b2c17ea4007fdb6d1ea63f",
+            "lang" to "in",
+            "devid" to "b0c9622df6e963d9",
+            "clientver" to "3.8.00",
+            "clienttraceid" to clientTraceId,
+            "requesttime" to requestTime,
+            "sign" to dynamicSign,
+            "user-agent" to "okhttp/4.11.0"
+        )
 
         return app.post(url = url, data = body, headers = headers).text
     }
@@ -152,7 +173,7 @@ class ReelShortProvider : MainAPI() {
 
         if (response?.data?.lists == null) {
             val debugList = mutableListOf<SearchResponse>()
-            debugList.add(newTvSeriesSearchResponse("Server Menolak (Tiket Basi)", "debug", TvType.TvSeries) { this.posterUrl = "" })
+            debugList.add(newTvSeriesSearchResponse("Server Error: $res", "debug", TvType.TvSeries) { this.posterUrl = "" })
             items.add(HomePageList("⚠️ ERROR", debugList))
             return newHomePageResponse(items)
         }
@@ -176,7 +197,7 @@ class ReelShortProvider : MainAPI() {
         return newHomePageResponse(items)
     }
 
-    // 2. FUNGSI PENCARIAN FILM
+    // 2. FUNGSI PENCARIAN FILM (GABUNGAN DEFAULT & KEYWORD)
     override suspend fun search(query: String): List<SearchResponse> {
         val searchItems = mutableListOf<SearchResponse>()
         
@@ -212,7 +233,7 @@ class ReelShortProvider : MainAPI() {
         val res = postWithSign(apiUrl, body)
 
         val response = tryParseJson<DetailResponse>(res)
-        if (response?.data?.retBook == null) throw Error("Server Menolak (Tiket Basi)")
+        if (response?.data?.retBook == null) throw Error("Server Nolak Detail: $res")
 
         val retBook = response.data.retBook
         val episodes = response.data.chapterList?.chapterLists?.mapNotNull { ep ->
