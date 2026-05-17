@@ -5,8 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.* // 👈 Import ini menutupi ExtractorLink, Qualities, dan newExtractorLink
-import java.security.MessageDigest
+import com.lagradost.cloudstream3.utils.* import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -190,15 +189,15 @@ class ReelShortProvider : MainAPI() {
             tryParseJson<RsVideoData>(decryptedJson)?.let { videoData ->
                 val videoUrl = videoData.playUrl ?: videoData.videoUrl ?: return false
                 
-                // 👈 INI YANG BARU: Pakai newExtractorLink
+                // 👈 INI YANG BARU: Langsung masukin nilainya sesuai urutan (tanpa nama parameter)
                 callback.invoke(
                     newExtractorLink(
-                        source = this.name,
-                        name = this.name,
-                        url = videoUrl,
-                        referer = mainUrl,
-                        quality = Qualities.P720.value,
-                        isM3u8 = videoUrl.contains(".m3u8")
+                        this.name,                  // source
+                        this.name,                  // name
+                        videoUrl,                   // url
+                        mainUrl,                    // referer
+                        Qualities.P720.value,       // quality
+                        videoUrl.contains(".m3u8")  // isM3u8
                     )
                 )
             }
