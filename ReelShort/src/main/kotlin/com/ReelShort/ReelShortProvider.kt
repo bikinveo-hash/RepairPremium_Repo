@@ -189,16 +189,17 @@ class ReelShortProvider : MainAPI() {
             tryParseJson<RsVideoData>(decryptedJson)?.let { videoData ->
                 val videoUrl = videoData.playUrl ?: videoData.videoUrl ?: return false
                 
-                // 👈 INI YANG BARU: Langsung masukin nilainya sesuai urutan (tanpa nama parameter)
+                // 👈 INI YANG BARU DAN BENAR: Pakai Builder { } dan ExtractorLinkType
                 callback.invoke(
                     newExtractorLink(
-                        this.name,                  // source
-                        this.name,                  // name
-                        videoUrl,                   // url
-                        mainUrl,                    // referer
-                        Qualities.P720.value,       // quality
-                        videoUrl.contains(".m3u8")  // isM3u8
-                    )
+                        source = this.name,
+                        name = this.name,
+                        url = videoUrl,
+                        type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.P720.value
+                    }
                 )
             }
         }
