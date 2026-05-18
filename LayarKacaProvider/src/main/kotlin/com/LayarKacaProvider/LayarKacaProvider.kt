@@ -1,25 +1,24 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import org.jsoup.nodes.Element
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+
+// Data class ini digunakan untuk mem-parsing data JSON yang tertanam di halaman HTML web LK21
+data class Lk21WatchData(
+    @JsonProperty("id") val id: Int?,
+    @JsonProperty("title") val title: String?,
+    @JsonProperty("rating") val rating: String?,
+    @JsonProperty("poster") val poster: String?,
+    @JsonProperty("year") val year: Int?
+)
 
 class LayarKacaProvider : MainAPI() {
-    // URL utama website yang akan kita scrape
     override var mainUrl = "https://mamamas.xyz"
-    
-    // Nama provider yang akan muncul di aplikasi Cloudstream
     override var name = "LK21"
-    
-    // Memberitahu Cloudstream bahwa plugin ini punya halaman depan (Home)
     override val hasMainPage = true
-    
-    // Bahasa default subtitle atau web
     override var lang = "id"
-    
-    // Mengizinkan fitur download pada plugin ini
     override val hasDownloadSupport = true
-    
-    // Tipe media yang didukung oleh provider ini
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
@@ -27,62 +26,48 @@ class LayarKacaProvider : MainAPI() {
         TvType.Anime
     )
 
-    // Daftar menu kategori di halaman depan (Home)
-    // Kata di sebelah kiri adalah path URL, sebelah kanan adalah nama tab-nya
+    // Daftar menu kategori halaman depan
     override val mainPage = mainPageOf(
         "/latest" to "Terbaru",
+        "/latest-series" to "Series Terbaru",
+        "/top-series-today" to "Series Unggulan",
         "/populer" to "Populer",
-        "/rating" to "Top Rating"
+        "/nonton-bareng-keluarga" to "Nobar Keluarga",
+        "/genre/action" to "Action",
+        "/genre/horror" to "Horror"
     )
 
-    /**
-     * Fungsi ini dipanggil oleh Cloudstream untuk memuat halaman depan.
-     * Akan dijalankan setiap kali user membuka tab "Terbaru", "Populer", dll, atau saat men-scroll (halaman berikutnya).
-     */
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Mengatur pagination (Halaman 1, 2, 3...)
-        // Jika halaman 1, gunakan URL asli (contoh: https://mamamas.xyz/latest)
-        // Jika halaman > 1, tambahkan /page/angka (contoh: https://mamamas.xyz/latest/page/2)
+        // Mengatur pagination
         val url = if (page == 1) {
             "$mainUrl${request.data}"
         } else {
             "$mainUrl${request.data}/page/$page"
         }
 
-        // Mengunduh dan mem-parsing dokumen HTML dari URL tersebut
         val document = app.get(url).document
 
-        // Mencari semua elemen film di dalam <div class="gallery-grid">
+        // Scrape halaman depan
         val home = document.select("div.gallery-grid article").mapNotNull { element ->
-            // Mengambil teks judul film
             val title = element.selectFirst("h3.poster-title")?.text() ?: return@mapNotNull null
-            
-            // Mengambil URL detail film
             val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            val link = fixUrl(href) // fixUrl memastikan URL menjadi absolute (menambahkan https://mamamas.xyz jika perlu)
-            
-            // Mengambil URL gambar poster
+            val link = fixUrl(href)
             val poster = element.selectFirst("img[itemprop=image]")?.attr("src")
-            
-            // Mengambil teks kualitas (misal: "HD")
             val qualityStr = element.selectFirst("span.label")?.text()
-            
-            // Mengambil teks rating (misal: "6.8")
             val ratingStr = element.selectFirst("span[itemprop=ratingValue]")?.text()
-
-            // Mengecek apakah elemen ini adalah TV Series (ditandai dengan adanya class 'episode')
+            
+            // Mendeteksi apakah konten ini Series
             val episodeStr = element.selectFirst("span.episode")?.text()
             val isTvSeries = episodeStr != null
 
-            // Menggunakan Builder Pattern (fungsi 'new...') untuk membungkus data
             if (isTvSeries) {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
                     this.posterUrl = poster
                     addQuality(qualityStr ?: "")
-                    ratingStr?.let { addScore(it, 10) } // Rating maksimal 10
+                    ratingStr?.let { addScore(it, 10) }
                 }
             } else {
                 newMovieSearchResponse(title, link, TvType.Movie) {
@@ -93,14 +78,49 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
-        // Mengembalikan daftar film ke antarmuka aplikasi Cloudstream
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
                 list = home,
-                isHorizontalImages = false // Kita set false karena poster film biasanya berbentuk vertikal/potret
+                isHorizontalImages = false
             ),
-            hasNext = true // Set true agar Cloudstream tahu bahwa ada halaman selanjutnya untuk di-scroll
+            hasNext = true
         )
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        val document = app.get(url).document
+
+        // 1. Membaca data JSON yang ada di script paling bawah HTML
+        val jsonString = document.selectFirst("script#watch-history-data")?.data()
+        val watchData = jsonString?.let { tryParseJson<Lk21WatchData>(it) }
+
+        // Jika tidak ditemukan data judul, batalkan fungsi
+        if (watchData?.title == null) return null
+
+        // 2. Mengambil detail tambahan menggunakan CSS selector dari Jsoup
+        val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
+        val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
+        
+        // --- CATATAN UNTUK NANTI: Di sinilah kita akan menambahkan deteksi TV Series ---
+        // val isTvSeries = ... (KITA AKAN TAMBAHKAN SETELAH DAPAT HTML SERIES)
+
+        // 3. Mengembalikan format Movie
+        return newMovieLoadResponse(
+            name = watchData.title,
+            url = url,
+            type = TvType.Movie,
+            dataUrl = url 
+        ) {
+            this.posterUrl = watchData.poster
+            this.year = watchData.year
+            this.plot = plotText
+            this.tags = tagsList
+            
+            // Mengubah teks rating (contoh: "7.3") menjadi skor UI
+            watchData.rating?.let {
+                addScore(it, 10)
+            }
+        }
     }
 }
