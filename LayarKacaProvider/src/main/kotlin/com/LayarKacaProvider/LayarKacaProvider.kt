@@ -32,7 +32,8 @@ data class Lk21SearchItem(
     @JsonProperty("poster") val poster: String?,
     @JsonProperty("type") val type: String?,
     @JsonProperty("quality") val quality: String?,
-    @JsonProperty("rating") val rating: Double?
+    // PERBAIKAN: Menggunakan Any? agar aman jika server mengirim angka bulat atau desimal
+    @JsonProperty("rating") val rating: Any? 
 )
 
 class LayarKacaProvider : MainAPI() {
@@ -100,7 +101,17 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val searchUrl = "https://gudangvape.com/search.php?s=$query&page=$page"
-        val resText = app.get(searchUrl).text
+        
+        // PERBAIKAN: Menambahkan Headers (KTP) agar API mengizinkan request kita
+        val resText = app.get(
+            url = searchUrl,
+            headers = mapOf(
+                "X-Requested-With" to "org.streaming.lk21official",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )
+        ).text
+        
         val response = tryParseJson<Lk21SearchResponse>(resText) ?: return null
 
         val results = response.data?.mapNotNull { item ->
@@ -113,13 +124,13 @@ class LayarKacaProvider : MainAPI() {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
                     this.posterUrl = posterUrl
                     addQuality(item.quality ?: "")
-                    item.rating?.let { this.score = Score.from(it, 10) }
+                    item.rating?.toString()?.let { this.score = Score.from(it, 10) }
                 }
             } else {
                 newMovieSearchResponse(title, link, TvType.Movie) {
                     this.posterUrl = posterUrl
                     addQuality(item.quality ?: "")
-                    item.rating?.let { this.score = Score.from(it, 10) }
+                    item.rating?.toString()?.let { this.score = Score.from(it, 10) }
                 }
             }
         } ?: emptyList()
@@ -135,7 +146,6 @@ class LayarKacaProvider : MainAPI() {
 
         val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
         val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
-        
         val seasonDataString = document.selectFirst("script#season-data")?.data()
 
         if (seasonDataString != null) {
@@ -193,19 +203,20 @@ class LayarKacaProvider : MainAPI() {
         
         serverElements.forEach { element ->
             val serverName = element.attr("data-server").lowercase()
-            val serverId = element.attr("data-url")
+            val encryptedId = element.attr("data-url")      
             
-            if (serverId.isNotBlank() && serverName.isNotBlank()) {
+            if (serverName.isNotBlank() && encryptedId.isNotBlank()) {
+                // TUGAS KITA: Kita butuh mendekripsi encryptedId menjadi ID asli menggunakan kunci dari player.js
+                // Saat ini Cloudstream belum bisa memutar video karena ID-nya masih tergembok.
+                val serverId = encryptedId 
+                
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    // Masuk ke dalam halaman popup untuk mencari link iframe pihak ketiga aslinya
                     val iframeDoc = app.get(iframePopupUrl, referer = data).document
-                    // Konversi secara paksa menjadi string agar tidak terdeteksi sebagai 'Any' oleh compiler
-                    val realIframeSrc: String? = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")?.toString()
+                    val realIframeSrc = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")?.toString()
                     
                     if (!realIframeSrc.isNullOrEmpty()) {
-                        // Memanggil fungsi extractor bawaan dengan penamaan parameter yang jelas
                         loadExtractor(
                             url = realIframeSrc,
                             referer = iframePopupUrl,
@@ -214,7 +225,7 @@ class LayarKacaProvider : MainAPI() {
                         )
                     }
                 } catch (e: Exception) {
-                    // Abaikan jika server down / timeout dan lanjut memproses server berikutnya
+                    // Lanjut ke server berikutnya jika error
                 }
             }
         }
