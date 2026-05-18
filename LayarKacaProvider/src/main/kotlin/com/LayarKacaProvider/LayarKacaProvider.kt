@@ -75,16 +75,23 @@ class LayarKacaProvider : MainAPI() {
             val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
             val link = fixUrl(href)
             val poster = element.selectFirst("img[itemprop=image]")?.attr("src")
+            val qualityStr = element.selectFirst("span.label")?.text()
+            val ratingStr = element.selectFirst("span[itemprop=ratingValue]")?.text()
+
             val episodeStr = element.selectFirst("span.episode")?.text()
             val isTvSeries = episodeStr != null
 
             if (isTvSeries) {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
                     this.posterUrl = poster
+                    addQuality(qualityStr ?: "")
+                    ratingStr?.let { this.score = Score.from(it, 10) }
                 }
             } else {
                 newMovieSearchResponse(title, link, TvType.Movie) {
                     this.posterUrl = poster
+                    addQuality(qualityStr ?: "")
+                    ratingStr?.let { this.score = Score.from(it, 10) }
                 }
             }
         }
@@ -112,10 +119,14 @@ class LayarKacaProvider : MainAPI() {
             if (item.type == "series") {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
                     this.posterUrl = posterUrl
+                    addQuality(item.quality ?: "")
+                    item.rating?.let { this.score = Score.from(it, 10) }
                 }
             } else {
                 newMovieSearchResponse(title, link, TvType.Movie) {
                     this.posterUrl = posterUrl
+                    addQuality(item.quality ?: "")
+                    item.rating?.let { this.score = Score.from(it, 10) }
                 }
             }
         } ?: emptyList()
@@ -134,9 +145,6 @@ class LayarKacaProvider : MainAPI() {
         val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
         val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
         
-        // Konversi rating string (misal: "7.3") ke rating angka Cloudstream
-        val ratingInt = watchData.rating?.toFloatOrNull()?.let { (it * 1000).toInt() }
-
         val seasonDataString = document.selectFirst("script#season-data")?.data()
 
         if (seasonDataString != null) {
@@ -164,7 +172,8 @@ class LayarKacaProvider : MainAPI() {
                 this.year = watchData.year
                 this.plot = plotText
                 this.tags = tagsList
-                this.rating = ratingInt
+                // PERBAIKAN: Menggunakan this.score = Score.from(...)
+                watchData.rating?.toFloatOrNull()?.let { this.score = Score.from(it, 10f) }
             }
         } else {
             return newMovieLoadResponse(
@@ -177,7 +186,8 @@ class LayarKacaProvider : MainAPI() {
                 this.year = watchData.year
                 this.plot = plotText
                 this.tags = tagsList
-                this.rating = ratingInt
+                // PERBAIKAN: Menggunakan this.score = Score.from(...)
+                watchData.rating?.toFloatOrNull()?.let { this.score = Score.from(it, 10f) }
             }
         }
     }
@@ -190,7 +200,6 @@ class LayarKacaProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         
-        // Mengambil daftar server yang ada di layar
         val serverElements = document.select("ul#player-list li a")
         
         serverElements.forEach { element ->
@@ -198,16 +207,13 @@ class LayarKacaProvider : MainAPI() {
             val serverId = element.attr("data-url")      
             
             if (serverName.isNotEmpty() && serverId.isNotEmpty()) {
-                // Membentuk link ke popup iframe rahasia LK21
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
                     val iframeDoc = app.get(iframePopupUrl).document
-                    // Menemukan link asli ke server pihak ke-3 (seperti Abyss/Hydrax/Cast)
                     val realIframeSrc = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")
                     
                     if (realIframeSrc != null) {
-                        // Memanggil Auto-Extractor Cloudstream
                         loadExtractor(
                             realIframeSrc,
                             iframePopupUrl,
@@ -216,7 +222,7 @@ class LayarKacaProvider : MainAPI() {
                         )
                     }
                 } catch (e: Exception) {
-                    // Abaikan jika server down dan lanjut ke server berikutnya
+                    // Jika ada error pada salah satu server, lewati dan coba server lain
                 }
             }
         }
