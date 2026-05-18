@@ -6,8 +6,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 
-// --- DATA CLASSES UNTUK PARSING JSON ---
-
 data class Lk21WatchData(
     @JsonProperty("id") val id: Int?,
     @JsonProperty("title") val title: String?,
@@ -34,10 +32,8 @@ data class Lk21SearchItem(
     @JsonProperty("poster") val poster: String?,
     @JsonProperty("type") val type: String?,
     @JsonProperty("quality") val quality: String?,
-    @JsonProperty("rating") val rating: Double? // Perbaikan nama variabel dari Double ke rating
+    @JsonProperty("rating") val rating: Double?
 )
-
-// --- MAIN PROVIDER CLASS ---
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://mamamas.xyz"
@@ -66,7 +62,12 @@ class LayarKacaProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = if (page == 1) "$mainUrl${request.data}" else "$mainUrl${request.data}/page/$page"
+        val url = if (page == 1) {
+            "$mainUrl${request.data}"
+        } else {
+            "$mainUrl${request.data}/page/$page"
+        }
+
         val document = app.get(url).document
 
         val home = document.select("div.gallery-grid article").mapNotNull { element ->
@@ -99,7 +100,6 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val searchUrl = "https://gudangvape.com/search.php?s=$query&page=$page"
-        // Menggunakan tryParseJson untuk keamanan ekstra agar tidak crash jika JSON tidak valid
         val resText = app.get(searchUrl).text
         val response = tryParseJson<Lk21SearchResponse>(resText) ?: return null
 
@@ -107,7 +107,7 @@ class LayarKacaProvider : MainAPI() {
             val title = item.title ?: return@mapNotNull null
             val slug = item.slug ?: return@mapNotNull null
             val link = "$mainUrl/$slug"
-            val posterUrl = if (item.poster != null) "https://static-jpg.showcdnx.com/wp-content/uploads/${item.poster}" else null
+            val posterUrl = item.poster?.let { "https://static-jpg.showcdnx.com/wp-content/uploads/$it" }
             
             if (item.type == "series") {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
@@ -129,11 +129,13 @@ class LayarKacaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
+
         val jsonString = document.selectFirst("script#watch-history-data")?.data()
         val watchData = jsonString?.let { tryParseJson<Lk21WatchData>(it) } ?: return null
 
         val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
         val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
+        
         val seasonDataString = document.selectFirst("script#season-data")?.data()
 
         if (seasonDataString != null) {
@@ -142,7 +144,8 @@ class LayarKacaProvider : MainAPI() {
 
             seasonData?.forEach { (_, epsList) ->
                 episodes.addAll(epsList.mapNotNull { ep ->
-                    newEpisode("$mainUrl/${ep.slug}") {
+                    val epSlug = ep.slug ?: return@mapNotNull null
+                    newEpisode("$mainUrl/$epSlug") {
                         this.name = ep.title
                         this.season = ep.season
                         this.episode = ep.episode_no
@@ -150,7 +153,12 @@ class LayarKacaProvider : MainAPI() {
                 })
             }
 
-            return newTvSeriesLoadResponse(watchData.title ?: "", url, TvType.TvSeries, episodes) {
+            return newTvSeriesLoadResponse(
+                name = watchData.title ?: "",
+                url = url,
+                type = TvType.TvSeries,
+                episodes = episodes
+            ) {
                 this.posterUrl = watchData.poster
                 this.year = watchData.year
                 this.plot = plotText
@@ -158,7 +166,12 @@ class LayarKacaProvider : MainAPI() {
                 watchData.rating?.let { this.score = Score.from(it, 10) }
             }
         } else {
-            return newMovieLoadResponse(watchData.title ?: "", url, TvType.Movie, url) {
+            return newMovieLoadResponse(
+                name = watchData.title ?: "",
+                url = url,
+                type = TvType.Movie,
+                dataUrl = url 
+            ) {
                 this.posterUrl = watchData.poster
                 this.year = watchData.year
                 this.plot = plotText
@@ -176,25 +189,36 @@ class LayarKacaProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         
-        // Cari semua tombol server
-        document.select("ul#player-list li a").forEach { element ->
+        val serverElements = document.select("ul#player-list li a")
+        
+        serverElements.forEach { element ->
             val serverName = element.attr("data-server").lowercase()
             val serverId = element.attr("data-url")
             
-            if (serverId.isNotEmpty()) {
+            if (serverId.isNotBlank() && serverName.isNotBlank()) {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
-                // Tambahkan User-Agent dan Referer agar tidak diblok oleh playeriframe.sbs
-                val iframeRes = app.get(iframePopupUrl, referer = data).text
-                
-                // Cari link source video di dalam iframe
-                val realIframeSrc = Jsoup.parse(iframeRes).selectFirst("div.embed-container iframe")?.attr("src")
-                
-                if (realIframeSrc != null) {
-                    loadExtractor(realIframeSrc, iframePopupUrl, subtitleCallback, callback)
+                try {
+                    // Masuk ke dalam halaman popup untuk mencari link iframe pihak ketiga aslinya
+                    val iframeDoc = app.get(iframePopupUrl, referer = data).document
+                    // Konversi secara paksa menjadi string agar tidak terdeteksi sebagai 'Any' oleh compiler
+                    val realIframeSrc: String? = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")?.toString()
+                    
+                    if (!realIframeSrc.isNullOrEmpty()) {
+                        // Memanggil fungsi extractor bawaan dengan penamaan parameter yang jelas
+                        loadExtractor(
+                            url = realIframeSrc,
+                            referer = iframePopupUrl,
+                            subtitleCallback = subtitleCallback,
+                            callback = callback
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Abaikan jika server down / timeout dan lanjut memproses server berikutnya
                 }
             }
         }
+
         return true
     }
 }
