@@ -3,8 +3,9 @@ package com.LayarKacaProvider
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 
-// Data class untuk Detail Film/Series
 data class Lk21WatchData(
     @JsonProperty("id") val id: Int?,
     @JsonProperty("title") val title: String?,
@@ -13,7 +14,6 @@ data class Lk21WatchData(
     @JsonProperty("year") val year: Int?
 )
 
-// Data class untuk Episode Series
 data class Lk21Episode(
     @JsonProperty("s") val season: Int?,
     @JsonProperty("episode_no") val episode_no: Int?,
@@ -21,7 +21,6 @@ data class Lk21Episode(
     @JsonProperty("slug") val slug: String?
 )
 
-// Data class untuk Search API
 data class Lk21SearchResponse(
     @JsonProperty("totalPages") val totalPages: Int?,
     @JsonProperty("data") val data: List<Lk21SearchItem>?
@@ -138,7 +137,6 @@ class LayarKacaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // Mengambil JSON Detail Film/Series
         val jsonString = document.selectFirst("script#watch-history-data")?.data()
         val watchData = jsonString?.let { tryParseJson<Lk21WatchData>(it) }
 
@@ -147,15 +145,12 @@ class LayarKacaProvider : MainAPI() {
         val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
         val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
         
-        // Mengecek apakah ini TV Series dengan melihat script season-data
         val seasonDataString = document.selectFirst("script#season-data")?.data()
 
         if (seasonDataString != null) {
-            // PROSES TV SERIES
             val seasonData = tryParseJson<Map<String, List<Lk21Episode>>>(seasonDataString)
             val episodes = mutableListOf<Episode>()
 
-            // Mengurai (parsing) JSON daftar episode dan mengubahnya ke format Cloudstream
             seasonData?.forEach { (_, epsList) ->
                 episodes.addAll(epsList.mapNotNull { ep ->
                     val epSlug = ep.slug ?: return@mapNotNull null
@@ -180,7 +175,6 @@ class LayarKacaProvider : MainAPI() {
                 watchData.rating?.let { this.score = Score.from(it, 10) }
             }
         } else {
-            // PROSES MOVIE
             return newMovieLoadResponse(
                 name = watchData.title,
                 url = url,
@@ -194,5 +188,50 @@ class LayarKacaProvider : MainAPI() {
                 watchData.rating?.let { this.score = Score.from(it, 10) }
             }
         }
+    }
+
+    // Tahap Terakhir: Fungsi loadLinks
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        // Mengunduh halaman (baik itu url film biasa atau url episode)
+        val document = app.get(data).document
+
+        // Mengambil daftar iframe server yang tersedia
+        val serverElements = document.select("ul#player-list li a")
+        
+        serverElements.forEach { element ->
+            val serverName = element.attr("data-server") // Contoh: hydrax, cast
+            val serverId = element.attr("data-url")      // Contoh: L33S7fyKh
+            
+            if (serverName.isNotEmpty() && serverId.isNotEmpty()) {
+                // Membangun URL menuju halaman iframe popup
+                // Contoh jadinya: https://playeriframe.sbs/mobile/hydrax/L33S7fyKh/embed
+                val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
+                
+                try {
+                    // Masuk ke dalam halaman popup untuk mencari link iframe pihak ketiga aslinya
+                    val iframeDoc = app.get(iframePopupUrl).document
+                    val realIframeSrc = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")
+                    
+                    if (realIframeSrc != null) {
+                        // Memanggil fungsi extractor bawaan Cloudstream (Otomatis memproses hydrax, dsb)
+                        loadExtractor(
+                            url = realIframeSrc,
+                            referer = iframePopupUrl, // Seringkali extractor butuh referer
+                            subtitleCallback = subtitleCallback,
+                            callback = callback
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Abaikan server yang error agar lanjut memproses server berikutnya
+                }
+            }
+        }
+
+        return true
     }
 }
