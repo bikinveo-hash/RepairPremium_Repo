@@ -144,7 +144,7 @@ class LayarKacaProvider : MainAPI() {
 
         val plotText = document.selectFirst("div.synopsis")?.text()?.trim()
         val tagsList = document.select("div.tag-list span.tag a").map { it.text() }
-        
+
         val seasonDataString = document.selectFirst("script#season-data")?.data()
 
         if (seasonDataString != null) {
@@ -172,8 +172,8 @@ class LayarKacaProvider : MainAPI() {
                 this.year = watchData.year
                 this.plot = plotText
                 this.tags = tagsList
-                // PERBAIKAN: Menggunakan this.score = Score.from(...)
-                watchData.rating?.toFloatOrNull()?.let { this.score = Score.from(it, 10f) }
+                // PERBAIKAN: Memanggil Score.from dengan parameter String dan Int
+                watchData.rating?.let { this.score = Score.from(it, 10) }
             }
         } else {
             return newMovieLoadResponse(
@@ -186,8 +186,8 @@ class LayarKacaProvider : MainAPI() {
                 this.year = watchData.year
                 this.plot = plotText
                 this.tags = tagsList
-                // PERBAIKAN: Menggunakan this.score = Score.from(...)
-                watchData.rating?.toFloatOrNull()?.let { this.score = Score.from(it, 10f) }
+                // PERBAIKAN: Memanggil Score.from dengan parameter String dan Int
+                watchData.rating?.let { this.score = Score.from(it, 10) }
             }
         }
     }
@@ -222,7 +222,7 @@ class LayarKacaProvider : MainAPI() {
                         )
                     }
                 } catch (e: Exception) {
-                    // Jika ada error pada salah satu server, lewati dan coba server lain
+                    // Abaikan jika server error
                 }
             }
         }
