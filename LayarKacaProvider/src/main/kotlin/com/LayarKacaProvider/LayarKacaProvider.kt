@@ -50,7 +50,6 @@ class LayarKacaProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "/latest" to "Terbaru",
         "/latest-series" to "Series Terbaru",
         "/top-series-today" to "Series Unggulan",
         "/populer" to "Populer",
