@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -44,12 +45,12 @@ data class Lk21SearchItem(
 )
 
 // ==========================================
-// DATA CLASSES BARU (DISESUAIKAN DENGAN DEKRIPSI ABYSS)
+// DATA CLASSES TAMBAHAN UNTUK DEKRIPSI
 // ==========================================
 
 data class AbyssPayload(
     @JsonProperty("slug") val slug: String?,
-    @JsonProperty("md5_id") val md5Id: Any?, // Menggunakan Any? agar angka JSON tidak menyebabkan crash
+    @JsonProperty("md5_id") val md5Id: Any?, // Gunakan Any? agar angka JSON tidak error
     @JsonProperty("user_id") val userId: Any?,
     @JsonProperty("media") val media: String?
 )
@@ -239,7 +240,7 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
-        // Setup Header tiruan Browser WebView agar lolos Cloudflare
+        // Setup Header tiruan Browser WebView Android secara sangat presisi
         val browserHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A415F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/17.0 Chrome/96.0.4664.104 Mobile Safari/537.36",
             "X-Requested-With" to "org.streaming.lk21official",
@@ -256,39 +257,44 @@ class LayarKacaProvider : MainAPI() {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    Log.d("LK21_DEBUG", "Memulai request ke: $iframePopupUrl")
+                    Log.d("LK21_DEBUG", "Memulai request ke popup: $iframePopupUrl")
                     val iframeResponse = app.get(iframePopupUrl, referer = data, headers = browserHeaders)
                     val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
                     
                     if (!realIframeSrc.isNullOrEmpty()) {
                         Log.d("LK21_DEBUG", "Iframe asli ditemukan: $realIframeSrc")
                         
-                        // Ekstraksi ID film langsung dari link Iframe
-                        val id = realIframeSrc.substringAfterLast("/").substringBefore("?")
-                        val directCdnUrl = "https://abysscdn.com/?v=$id"
-                        
-                        Log.d("LK21_DEBUG", "Melompati 302, langsung menembak CDN: $directCdnUrl")
-
-                        // Langkah 1: Request langsung ke abysscdn dengan referer playeriframe.sbs
-                        var abyssHtml = app.get(
-                            url = directCdnUrl,
+                        // LANGKAH CRITICAL 1 (Persis seperti Python Langkah 2): 
+                        // Ambil target redirect dari parent player (abyssplayer.com / f16px.com) secara manual
+                        val checkRedirectResponse = app.get(
+                            url = realIframeSrc,
                             headers = browserHeaders,
-                            referer = "https://playeriframe.sbs/"
-                        ).text
+                            allowRedirects = false
+                        )
 
-                        // Langkah 2: Fallback referer jika diperlukan
-                        if (!abyssHtml.contains("const datas")) {
-                            Log.d("LK21_DEBUG", "datas tidak ditemukan, mencoba fallback referer")
-                            abyssHtml = app.get(
-                                url = directCdnUrl,
-                                headers = browserHeaders,
-                                referer = "https://abyssplayer.com/"
+                        // Ambil URL tujuan redirect dari header 'Location'
+                        val redirectUrl = checkRedirectResponse.headers["Location"] ?: checkRedirectResponse.headers["location"]
+                        
+                        val finalHtmlText = if (!redirectUrl.isNullOrEmpty()) {
+                            Log.d("LK21_DEBUG", "Redirect manual terdeteksi ke: $redirectUrl")
+                            
+                            // LANGKAH CRITICAL 2 (Persis seperti Python Langkah 3):
+                            // Tembak target CDN akhir dengan Referer yang sah dan dipaksa
+                            val cdnHeaders = browserHeaders.toMutableMap()
+                            cdnHeaders["Referer"] = "https://playeriframe.sbs/"
+                            
+                            app.get(
+                                url = redirectUrl,
+                                headers = cdnHeaders
                             ).text
+                        } else {
+                            Log.d("LK21_DEBUG", "Tidak ada redirect manual, memproses HTML mentah.")
+                            checkRedirectResponse.text
                         }
 
                         // REGEX PENYARING DATA ENKRIPSI
                         val datasRegex = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
-                        val base64Data = datasRegex.find(abyssHtml)?.groupValues?.get(1)
+                        val base64Data = datasRegex.find(finalHtmlText)?.groupValues?.get(1)
                         
                         if (base64Data != null) {
                             Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
@@ -296,7 +302,7 @@ class LayarKacaProvider : MainAPI() {
                             // Decode menggunakan Charsets.ISO_8859_1 (Latin-1) agar byte biner tidak corrupt/crash
                             val decodedJsonString = String(
                                 android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), 
-                                Charsets.ISO_8859_1
+                                StandardCharsets.ISO_8859_1
                             )
                             val payload = tryParseJson<AbyssPayload>(decodedJsonString)
                             
@@ -383,22 +389,22 @@ class LayarKacaProvider : MainAPI() {
 
             // 1. Generate Key menggunakan format gabungan
             val rawKey = "$userId:$slug:$md5Id"
-            val md5Bytes = MessageDigest.getInstance("MD5").digest(rawKey.toByteArray(Charsets.UTF_8))
+            val md5Bytes = MessageDigest.getInstance("MD5").digest(rawKey.toByteArray(StandardCharsets.UTF_8))
             val md5Hex = md5Bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
             // 2. Setup Spesifikasi AES-CTR (Key 32-Byte & IV 16-Byte dari Hex)
-            val secretKey = SecretKeySpec(md5Hex.toByteArray(Charsets.UTF_8), "AES")
-            val iv = IvParameterSpec(md5Hex.substring(0, 16).toByteArray(Charsets.UTF_8))
+            val secretKey = SecretKeySpec(md5Hex.toByteArray(StandardCharsets.UTF_8), "AES")
+            val iv = IvParameterSpec(md5Hex.substring(0, 16).toByteArray(StandardCharsets.UTF_8))
 
             // 3. Konversi karakter String Media ke wujud Byte Array murni secara aman (ISO-8859-1)
-            val encryptedBytes = mediaString.toByteArray(Charsets.ISO_8859_1)
+            val encryptedBytes = mediaString.toByteArray(StandardCharsets.ISO_8859_1)
 
             // 4. Eksekusi Dekripsi AES-CTR
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, iv)
             
             val decryptedBytes = cipher.doFinal(encryptedBytes)
-            return String(decryptedBytes, Charsets.UTF_8)
+            return String(decryptedBytes, StandardCharsets.UTF_8)
             
         } catch (e: Exception) {
             e.printStackTrace()
