@@ -45,12 +45,12 @@ data class Lk21SearchItem(
 )
 
 // ==========================================
-// DATA CLASSES TAMBAHAN UNTUK DEKRIPSI
+// DATA CLASSES BARU (SESUAI DENGAN DEKRIPSI ABYSS)
 // ==========================================
 
 data class AbyssPayload(
     @JsonProperty("slug") val slug: String?,
-    @JsonProperty("md5_id") val md5Id: Any?, // Gunakan Any? agar angka JSON tidak error
+    @JsonProperty("md5_id") val md5Id: Any?, // Menggunakan Any? agar angka JSON tidak menyebabkan crash
     @JsonProperty("user_id") val userId: Any?,
     @JsonProperty("media") val media: String?
 )
@@ -66,11 +66,11 @@ data class DecryptedMedia(
 )
 
 data class MediaSource(
+    @JsonProperty("file") val file: String?,
     @JsonProperty("url") val url: String?,
     @JsonProperty("path") val path: String?,
     @JsonProperty("label") val label: String?,
-    @JsonProperty("codec") val codec: String?,
-    @JsonProperty("status") val status: Boolean?
+    @JsonProperty("type") val type: String?
 )
 
 // ==========================================
@@ -240,9 +240,9 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
-        // Setup Header tiruan Browser WebView Android secara sangat presisi
+        // Gunakan USER_AGENT sistem aplikasi agar TLS fingerprint sinkron secara global
         val browserHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A415F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/17.0 Chrome/96.0.4664.104 Mobile Safari/537.36",
+            "User-Agent" to USER_AGENT,
             "X-Requested-With" to "org.streaming.lk21official",
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
@@ -257,29 +257,29 @@ class LayarKacaProvider : MainAPI() {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    Log.d("LK21_DEBUG", "Memulai request ke popup: $iframePopupUrl")
+                    Log.d("LK21_DEBUG", "Menghubungi popup: $iframePopupUrl")
                     val iframeResponse = app.get(iframePopupUrl, referer = data, headers = browserHeaders)
                     val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
                     
                     if (!realIframeSrc.isNullOrEmpty()) {
-                        Log.d("LK21_DEBUG", "Iframe asli ditemukan: $realIframeSrc")
+                        Log.d("LK21_DEBUG", "Gerbang asli ditemukan: $realIframeSrc")
                         
-                        // LANGKAH CRITICAL 1 (Persis seperti Python Langkah 2): 
-                        // Ambil target redirect dari parent player (abyssplayer.com / f16px.com) secara manual
+                        // LANGKAH CRITICAL 1 (Persis seperti Python Hop 2):
+                        // Dapatkan data redirect Location secara manual tanpa memicu auto-redirect dari OkHttp
                         val checkRedirectResponse = app.get(
                             url = realIframeSrc,
                             headers = browserHeaders,
                             allowRedirects = false
                         )
 
-                        // Ambil URL tujuan redirect dari header 'Location'
+                        // Ambil target url redirect dari header manual
                         val redirectUrl = checkRedirectResponse.headers["Location"] ?: checkRedirectResponse.headers["location"]
                         
                         val finalHtmlText = if (!redirectUrl.isNullOrEmpty()) {
-                            Log.d("LK21_DEBUG", "Redirect manual terdeteksi ke: $redirectUrl")
+                            Log.d("LK21_DEBUG", "Mengakses CDN sesungguhnya: $redirectUrl")
                             
-                            // LANGKAH CRITICAL 2 (Persis seperti Python Langkah 3):
-                            // Tembak target CDN akhir dengan Referer yang sah dan dipaksa
+                            // LANGKAH CRITICAL 2 (Persis seperti Python Hop 3):
+                            // Menembak CDN tujuan akhir dengan menyisipkan Header Referer secara paksa
                             val cdnHeaders = browserHeaders.toMutableMap()
                             cdnHeaders["Referer"] = "https://playeriframe.sbs/"
                             
@@ -288,7 +288,7 @@ class LayarKacaProvider : MainAPI() {
                                 headers = cdnHeaders
                             ).text
                         } else {
-                            Log.d("LK21_DEBUG", "Tidak ada redirect manual, memproses HTML mentah.")
+                            Log.d("LK21_DEBUG", "Tidak ada redirect. Memproses teks html gerbang utama.")
                             checkRedirectResponse.text
                         }
 
@@ -297,9 +297,9 @@ class LayarKacaProvider : MainAPI() {
                         val base64Data = datasRegex.find(finalHtmlText)?.groupValues?.get(1)
                         
                         if (base64Data != null) {
-                            Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
+                            Log.d("LK21_DEBUG", "Payload Base64 berhasil disaring!")
                             
-                            // Decode menggunakan Charsets.ISO_8859_1 (Latin-1) agar byte biner tidak corrupt/crash
+                            // Decode menggunakan Latin-1 (ISO_8859_1) agar byte biner media tidak rusak/corrupt
                             val decodedJsonString = String(
                                 android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), 
                                 StandardCharsets.ISO_8859_1
@@ -315,12 +315,18 @@ class LayarKacaProvider : MainAPI() {
                                     
                                     // Ekstrak HLS (.m3u8) jika tersedia
                                     mediaData?.hls?.sources?.forEach { source ->
-                                        if (source.url != null && source.path != null) {
-                                            val baseUrl = source.url.trimEnd('/')
-                                            val path = source.path.trimStart('/')
-                                            val m3u8Url = "$baseUrl/$path"
-                                            
-                                            Log.d("LK21_DEBUG", "HLS ditemukan: $m3u8Url")
+                                        val m3u8Url = when {
+                                            !source.file.isNullOrBlank() -> source.file
+                                            !source.url.isNullOrBlank() && !source.path.isNullOrBlank() -> {
+                                                val baseUrl = source.url.trimEnd('/')
+                                                val path = source.path.trimStart('/')
+                                                "$baseUrl/$path"
+                                            }
+                                            else -> null
+                                        }
+
+                                        if (m3u8Url != null) {
+                                            Log.d("LK21_DEBUG", "HLS berhasil diuraikan: $m3u8Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
@@ -335,14 +341,20 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                     
-                                    // Ekstrak MP4 direct (Seperti hasil uji Termux)
+                                    // Ekstrak MP4 direct (Seperti hasil uji sukses Termux)
                                     mediaData?.mp4?.sources?.forEach { source ->
-                                        if (source.url != null && source.path != null) {
-                                            val baseUrl = source.url.trimEnd('/')
-                                            val path = source.path.trimStart('/')
-                                            val mp4Url = "$baseUrl/$path"
-                                            
-                                            Log.d("LK21_DEBUG", "MP4 ditemukan: $mp4Url")
+                                        val mp4Url = when {
+                                            !source.file.isNullOrBlank() -> source.file
+                                            !source.url.isNullOrBlank() && !source.path.isNullOrBlank() -> {
+                                                val baseUrl = source.url.trimEnd('/')
+                                                val path = source.path.trimStart('/')
+                                                "$baseUrl/$path"
+                                            }
+                                            else -> null
+                                        }
+
+                                        if (mp4Url != null) {
+                                            Log.d("LK21_DEBUG", "MP4 berhasil diuraikan: $mp4Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
@@ -357,17 +369,17 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                 } else {
-                                    Log.e("LK21_DEBUG", "Dekripsi gagal! Key AES-CTR tidak cocok.")
+                                    Log.e("LK21_DEBUG", "Gagal mendekripsi payload Abyss. Kunci AES tidak cocok.")
                                 }
                             }
                         } else {
                             Log.e("LK21_DEBUG", "Gagal menyaring 'const datas' dari HTML CDN!")
                         }
                     } else {
-                        Log.e("LK21_DEBUG", "Iframe kontainer kosong!")
+                        Log.e("LK21_DEBUG", "Kontainer Iframe kosong!")
                     }
                 } catch (e: Exception) {
-                    Log.e("LK21_DEBUG", "Error di loadLinks: ${e.message}")
+                    Log.e("LK21_DEBUG", "Kesalahan pada loadLinks: ${e.message}")
                     e.printStackTrace()
                 }
             }
