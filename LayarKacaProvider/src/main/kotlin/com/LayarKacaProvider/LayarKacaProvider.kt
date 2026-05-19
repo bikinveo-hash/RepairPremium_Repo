@@ -237,7 +237,6 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
-        // Setup Header tiruan Browser WebView agar lolos Cloudflare
         val browserHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A415F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/17.0 Chrome/96.0.4664.104 Mobile Safari/537.36",
             "X-Requested-With" to "org.streaming.lk21official",
@@ -261,7 +260,7 @@ class LayarKacaProvider : MainAPI() {
                     if (!realIframeSrc.isNullOrEmpty()) {
                         Log.d("LK21_DEBUG", "Iframe asli ditemukan: $realIframeSrc")
                         
-                        // EKSTRAKSI ID LANGSUNG (Contoh: https://abyssplayer.com/L33S7fyKh -> L33S7fyKh)
+                        // Ekstrak ID film
                         val id = realIframeSrc.substringAfterLast("/").substringBefore("?")
                         val directCdnUrl = "https://abysscdn.com/?v=$id"
                         
@@ -274,7 +273,7 @@ class LayarKacaProvider : MainAPI() {
                             referer = "https://playeriframe.sbs/"
                         ).text
 
-                        // Langkah 2: Fallback jika 'const datas' tidak langsung ditemukan
+                        // Langkah 2: Fallback referer jika diperlukan
                         if (!abyssHtml.contains("const datas")) {
                             Log.d("LK21_DEBUG", "datas tidak ditemukan, mencoba fallback referer")
                             abyssHtml = app.get(
@@ -290,7 +289,13 @@ class LayarKacaProvider : MainAPI() {
                         
                         if (base64Data != null) {
                             Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
-                            val decodedJsonString = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT))
+                            
+                            // PERBAIKAN UTAMA: Decode Base64 biner menggunakan Charsets.ISO_8859_1 (Latin-1)
+                            // Ini menghentikan crash dikarenakan karakter byte non-UTF-8 pada bagian payload media biner.
+                            val decodedJsonString = String(
+                                android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), 
+                                Charsets.ISO_8859_1
+                            )
                             val payload = tryParseJson<AbyssPayload>(decodedJsonString)
                             
                             if (payload != null) {
@@ -376,6 +381,7 @@ class LayarKacaProvider : MainAPI() {
             val iv = IvParameterSpec(md5Hex.substring(0, 16).toByteArray(Charsets.UTF_8))
 
             // 3. Konversi karakter String Media ke wujud Byte Array murni
+            // Karena string dikodekan dengan ISO-8859-1 di atas, konversi byte-murni ini sekarang bekerja dengan akurat 100%.
             val encryptedBytes = mediaString.map { it.code.toByte() }.toByteArray()
 
             // 4. Eksekusi Dekripsi
