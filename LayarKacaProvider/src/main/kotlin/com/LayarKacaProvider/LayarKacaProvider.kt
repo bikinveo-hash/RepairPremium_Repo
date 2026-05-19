@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.network.WebViewResolver // Diimpor dari berkas utilitas jaringan Cloudstream
 import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
 import javax.crypto.Cipher
@@ -45,7 +46,7 @@ data class Lk21SearchItem(
 )
 
 // ==========================================
-// DATA CLASSES BARU (SESUAI DENGAN DEKRIPSI ABYSS)
+// DATA CLASSES TAMBAHAN UNTUK DEKRIPSI
 // ==========================================
 
 data class AbyssPayload(
@@ -240,7 +241,7 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
-        // Gunakan USER_AGENT sistem aplikasi agar TLS fingerprint sinkron secara global
+        // Gunakan USER_AGENT bawaan Cloudstream agar TLS Fingerprint OkHttp sinkron
         val browserHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "X-Requested-With" to "org.streaming.lk21official",
@@ -257,49 +258,33 @@ class LayarKacaProvider : MainAPI() {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    Log.d("LK21_DEBUG", "Menghubungi popup: $iframePopupUrl")
+                    Log.d("LK21_DEBUG", "Memulai request ke: $iframePopupUrl")
                     val iframeResponse = app.get(iframePopupUrl, referer = data, headers = browserHeaders)
                     val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
                     
                     if (!realIframeSrc.isNullOrEmpty()) {
-                        Log.d("LK21_DEBUG", "Gerbang asli ditemukan: $realIframeSrc")
+                        Log.d("LK21_DEBUG", "Iframe gerbang ditemukan: $realIframeSrc")
                         
-                        // LANGKAH CRITICAL 1 (Persis seperti Python Hop 2):
-                        // Dapatkan data redirect Location secara manual tanpa memicu auto-redirect dari OkHttp
-                        val checkRedirectResponse = app.get(
+                        // SOLUSI MUTLAK: Gunakan WebViewResolver bawaan Cloudstream untuk memuat CDN Abyss.
+                        // Sistem ini secara otomatis memecahkan proteksi Cloudflare dan redirect 302 di latar belakang.
+                        val abyssHtml = app.get(
                             url = realIframeSrc,
                             headers = browserHeaders,
-                            allowRedirects = false
-                        )
-
-                        // Ambil target url redirect dari header manual
-                        val redirectUrl = checkRedirectResponse.headers["Location"] ?: checkRedirectResponse.headers["location"]
-                        
-                        val finalHtmlText = if (!redirectUrl.isNullOrEmpty()) {
-                            Log.d("LK21_DEBUG", "Mengakses CDN sesungguhnya: $redirectUrl")
-                            
-                            // LANGKAH CRITICAL 2 (Persis seperti Python Hop 3):
-                            // Menembak CDN tujuan akhir dengan menyisipkan Header Referer secara paksa
-                            val cdnHeaders = browserHeaders.toMutableMap()
-                            cdnHeaders["Referer"] = "https://playeriframe.sbs/"
-                            
-                            app.get(
-                                url = redirectUrl,
-                                headers = cdnHeaders
-                            ).text
-                        } else {
-                            Log.d("LK21_DEBUG", "Tidak ada redirect. Memproses teks html gerbang utama.")
-                            checkRedirectResponse.text
-                        }
+                            referer = "https://playeriframe.sbs/",
+                            interceptor = WebViewResolver(
+                                interceptUrl = Regex("abysscdn\\.com"),
+                                useOkhttp = false // Paksa gunakan browser WebView murni untuk Cloudflare handshake
+                            )
+                        ).text
 
                         // REGEX PENYARING DATA ENKRIPSI
                         val datasRegex = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
-                        val base64Data = datasRegex.find(finalHtmlText)?.groupValues?.get(1)
+                        val base64Data = datasRegex.find(abyssHtml)?.groupValues?.get(1)
                         
                         if (base64Data != null) {
-                            Log.d("LK21_DEBUG", "Payload Base64 berhasil disaring!")
+                            Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
                             
-                            // Decode menggunakan Latin-1 (ISO_8859_1) agar byte biner media tidak rusak/corrupt
+                            // Decode menggunakan Latin-1 (StandardCharsets.ISO_8859_1) agar byte biner media tidak rusak
                             val decodedJsonString = String(
                                 android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), 
                                 StandardCharsets.ISO_8859_1
@@ -326,7 +311,7 @@ class LayarKacaProvider : MainAPI() {
                                         }
 
                                         if (m3u8Url != null) {
-                                            Log.d("LK21_DEBUG", "HLS berhasil diuraikan: $m3u8Url")
+                                            Log.d("LK21_DEBUG", "HLS ditemukan: $m3u8Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
@@ -354,7 +339,7 @@ class LayarKacaProvider : MainAPI() {
                                         }
 
                                         if (mp4Url != null) {
-                                            Log.d("LK21_DEBUG", "MP4 berhasil diuraikan: $mp4Url")
+                                            Log.d("LK21_DEBUG", "MP4 ditemukan: $mp4Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
@@ -369,17 +354,17 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                 } else {
-                                    Log.e("LK21_DEBUG", "Gagal mendekripsi payload Abyss. Kunci AES tidak cocok.")
+                                    Log.e("LK21_DEBUG", "Dekripsi gagal! Kunci AES tidak cocok.")
                                 }
                             }
                         } else {
                             Log.e("LK21_DEBUG", "Gagal menyaring 'const datas' dari HTML CDN!")
                         }
                     } else {
-                        Log.e("LK21_DEBUG", "Kontainer Iframe kosong!")
+                        Log.e("LK21_DEBUG", "Iframe kontainer kosong!")
                     }
                 } catch (e: Exception) {
-                    Log.e("LK21_DEBUG", "Kesalahan pada loadLinks: ${e.message}")
+                    Log.e("LK21_DEBUG", "Error di loadLinks: ${e.message}")
                     e.printStackTrace()
                 }
             }
