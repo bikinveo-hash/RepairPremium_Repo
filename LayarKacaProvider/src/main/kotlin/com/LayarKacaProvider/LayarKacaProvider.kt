@@ -1,5 +1,6 @@
 package com.LayarKacaProvider
 
+import android.util.Log
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -236,6 +237,14 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
+        // Setup Header tiruan Browser WebView agar lolos Cloudflare
+        val browserHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A415F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/17.0 Chrome/96.0.4664.104 Mobile Safari/537.36",
+            "X-Requested-With" to "org.streaming.lk21official",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+        )
+
         serverElements.forEach { element ->
             val serverName = element.attr("data-server").lowercase()
             val encryptedId = element.attr("data-url")   
@@ -245,28 +254,42 @@ class LayarKacaProvider : MainAPI() {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    val iframeResponse = app.get(iframePopupUrl, referer = data)
-                    val responseUrl = iframeResponse.url
-                    val responseText = iframeResponse.text
+                    Log.d("LK21_DEBUG", "Memulai request ke: $iframePopupUrl")
+                    val iframeResponse = app.get(iframePopupUrl, referer = data, headers = browserHeaders)
+                    val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
                     
-                    var abyssHtml = ""
+                    if (!realIframeSrc.isNullOrEmpty()) {
+                        Log.d("LK21_DEBUG", "Iframe asli ditemukan: $realIframeSrc")
+                        
+                        // EKSTRAKSI ID LANGSUNG (Contoh: https://abyssplayer.com/L33S7fyKh -> L33S7fyKh)
+                        val id = realIframeSrc.substringAfterLast("/").substringBefore("?")
+                        val directCdnUrl = "https://abysscdn.com/?v=$id"
+                        
+                        Log.d("LK21_DEBUG", "Melompati 302, langsung menembak CDN: $directCdnUrl")
 
-                    // CEGAHAN REDIRECT: Cek apakah sudah otomatis diredirect ke abysscdn
-                    if (responseUrl.contains("abysscdn.com") || responseText.contains("const datas =")) {
-                        abyssHtml = responseText
-                    } else {
-                        // Jika belum, cari tag iframe secara manual
-                        val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
-                        if (!realIframeSrc.isNullOrEmpty()) {
-                            abyssHtml = app.get(realIframeSrc, referer = iframePopupUrl).text
+                        // Langkah 1: Request langsung ke abysscdn dengan referer playeriframe.sbs
+                        var abyssHtml = app.get(
+                            url = directCdnUrl,
+                            headers = browserHeaders,
+                            referer = "https://playeriframe.sbs/"
+                        ).text
+
+                        // Langkah 2: Fallback jika 'const datas' tidak langsung ditemukan
+                        if (!abyssHtml.contains("const datas")) {
+                            Log.d("LK21_DEBUG", "datas tidak ditemukan, mencoba fallback referer")
+                            abyssHtml = app.get(
+                                url = directCdnUrl,
+                                headers = browserHeaders,
+                                referer = "https://abyssplayer.com/"
+                            ).text
                         }
-                    }
 
-                    if (abyssHtml.isNotBlank()) {
+                        // REGEX PENYARING DATA ENKRIPSI
                         val datasRegex = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
                         val base64Data = datasRegex.find(abyssHtml)?.groupValues?.get(1)
                         
                         if (base64Data != null) {
+                            Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
                             val decodedJsonString = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT))
                             val payload = tryParseJson<AbyssPayload>(decodedJsonString)
                             
@@ -277,14 +300,15 @@ class LayarKacaProvider : MainAPI() {
                                     val mediaData = tryParseJson<DecryptedMedia>(decryptedJsonStr)
                                     val serverTitle = serverName.uppercase()
                                     
-                                    // Ekstrak HLS (.m3u8) menggunakan API baru Cloudstream (newExtractorLink)
+                                    // Ekstrak HLS (.m3u8)
                                     mediaData?.hls?.sources?.forEach { source ->
-                                        source.file?.let { finalUrl ->
+                                        source.file?.let { m3u8Url ->
+                                            Log.d("LK21_DEBUG", "HLS ditemukan: $m3u8Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
                                                     name = "$providerName - $serverTitle (HLS ${source.label ?: "Auto"})",
-                                                    url = finalUrl,
+                                                    url = m3u8Url,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
                                                     this.referer = "https://abysscdn.com/"
@@ -294,14 +318,15 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                     
-                                    // Ekstrak MP4 direct menggunakan API baru
+                                    // Ekstrak MP4 direct
                                     mediaData?.mp4?.sources?.forEach { source ->
-                                        source.file?.let { finalUrl ->
+                                        source.file?.let { mp4Url ->
+                                            Log.d("LK21_DEBUG", "MP4 ditemukan: $mp4Url")
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = providerName,
                                                     name = "$providerName - $serverTitle (MP4 ${source.label ?: "HD"})",
-                                                    url = finalUrl,
+                                                    url = mp4Url,
                                                     type = ExtractorLinkType.VIDEO
                                                 ) {
                                                     this.referer = "https://abysscdn.com/"
@@ -310,11 +335,18 @@ class LayarKacaProvider : MainAPI() {
                                             )
                                         }
                                     }
+                                } else {
+                                    Log.e("LK21_DEBUG", "Dekripsi gagal! Key AES-CTR tidak cocok.")
                                 }
                             }
+                        } else {
+                            Log.e("LK21_DEBUG", "Gagal menyaring 'const datas' dari HTML CDN!")
                         }
+                    } else {
+                        Log.e("LK21_DEBUG", "Iframe kontainer kosong!")
                     }
                 } catch (e: Exception) {
+                    Log.e("LK21_DEBUG", "Error di loadLinks: ${e.message}")
                     e.printStackTrace()
                 }
             }
@@ -330,7 +362,6 @@ class LayarKacaProvider : MainAPI() {
     private fun decryptAbyssMedia(payload: AbyssPayload): String? {
         try {
             val slug = payload.slug ?: return null
-            // Konversi aman ke String karena di JSON ini tipe-nya Integer/Long
             val md5Id = payload.md5Id?.toString() ?: return null
             val userId = payload.userId?.toString() ?: return null
             val mediaString = payload.media ?: return null
@@ -338,7 +369,6 @@ class LayarKacaProvider : MainAPI() {
             // 1. Generate Key menggunakan format gabungan
             val rawKey = "$userId:$slug:$md5Id"
             val md5Bytes = MessageDigest.getInstance("MD5").digest(rawKey.toByteArray(Charsets.UTF_8))
-            // Pastikan format aman dengan AND 0xFF untuk menghindari sign-extension pada Byte
             val md5Hex = md5Bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
             // 2. Setup Spesifikasi AES-CTR (Key 32-Byte & IV 16-Byte dari Hex)
