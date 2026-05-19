@@ -48,8 +48,8 @@ data class Lk21SearchItem(
 
 data class AbyssPayload(
     @JsonProperty("slug") val slug: String?,
-    @JsonProperty("md5_id") val md5Id: String?,
-    @JsonProperty("user_id") val userId: String?,
+    @JsonProperty("md5_id") val md5Id: Any?, // Gunakan Any? agar angka JSON tidak error
+    @JsonProperty("user_id") val userId: Any?,
     @JsonProperty("media") val media: String?
 )
 
@@ -233,8 +233,8 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        
         val serverElements = document.select("ul#player-list li a")
+        val providerName = this.name
         
         serverElements.forEach { element ->
             val serverName = element.attr("data-server").lowercase()
@@ -245,12 +245,24 @@ class LayarKacaProvider : MainAPI() {
                 val iframePopupUrl = "https://playeriframe.sbs/mobile/$serverName/$serverId/embed"
                 
                 try {
-                    val iframeDoc = app.get(iframePopupUrl, referer = data).document
-                    val realIframeSrc = iframeDoc.selectFirst("div.embed-container iframe")?.attr("src")?.toString()
+                    val iframeResponse = app.get(iframePopupUrl, referer = data)
+                    val responseUrl = iframeResponse.url
+                    val responseText = iframeResponse.text
                     
-                    if (!realIframeSrc.isNullOrEmpty()) {
-                        val abyssHtml = app.get(realIframeSrc, referer = iframePopupUrl).text
-                        
+                    var abyssHtml = ""
+
+                    // CEGAHAN REDIRECT: Cek apakah sudah otomatis diredirect ke abysscdn
+                    if (responseUrl.contains("abysscdn.com") || responseText.contains("const datas =")) {
+                        abyssHtml = responseText
+                    } else {
+                        // Jika belum, cari tag iframe secara manual
+                        val realIframeSrc = iframeResponse.document.selectFirst("div.embed-container iframe")?.attr("src")
+                        if (!realIframeSrc.isNullOrEmpty()) {
+                            abyssHtml = app.get(realIframeSrc, referer = iframePopupUrl).text
+                        }
+                    }
+
+                    if (abyssHtml.isNotBlank()) {
                         val datasRegex = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
                         val base64Data = datasRegex.find(abyssHtml)?.groupValues?.get(1)
                         
@@ -263,14 +275,15 @@ class LayarKacaProvider : MainAPI() {
                                 
                                 if (decryptedJsonStr != null) {
                                     val mediaData = tryParseJson<DecryptedMedia>(decryptedJsonStr)
+                                    val serverTitle = serverName.uppercase()
                                     
-                                    // Ekstrak HLS menggunakan struktur API ExtractorLinkType.M3U8
+                                    // Ekstrak HLS (.m3u8) menggunakan API baru Cloudstream (newExtractorLink)
                                     mediaData?.hls?.sources?.forEach { source ->
                                         source.file?.let { finalUrl ->
                                             callback.invoke(
                                                 newExtractorLink(
-                                                    source = this.name,
-                                                    name = "$name Server (HLS ${source.label ?: "Auto"})",
+                                                    source = providerName,
+                                                    name = "$providerName - $serverTitle (HLS ${source.label ?: "Auto"})",
                                                     url = finalUrl,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
@@ -281,13 +294,13 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                     
-                                    // Ekstrak MP4 menggunakan struktur API ExtractorLinkType.VIDEO
+                                    // Ekstrak MP4 direct menggunakan API baru
                                     mediaData?.mp4?.sources?.forEach { source ->
                                         source.file?.let { finalUrl ->
                                             callback.invoke(
                                                 newExtractorLink(
-                                                    source = this.name,
-                                                    name = "$name Server (MP4 ${source.label ?: "HD"})",
+                                                    source = providerName,
+                                                    name = "$providerName - $serverTitle (MP4 ${source.label ?: "HD"})",
                                                     url = finalUrl,
                                                     type = ExtractorLinkType.VIDEO
                                                 ) {
@@ -311,29 +324,31 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // ==========================================
-    // HELPER FUNCTIONS UNTUK ENGINE DEKRIPSI
+    // ENGINE DEKRIPSI (AES-CTR)
     // ==========================================
 
     private fun decryptAbyssMedia(payload: AbyssPayload): String? {
         try {
             val slug = payload.slug ?: return null
-            val md5Id = payload.md5Id ?: return null
-            val userId = payload.userId ?: return null
+            // Konversi aman ke String karena di JSON ini tipe-nya Integer/Long
+            val md5Id = payload.md5Id?.toString() ?: return null
+            val userId = payload.userId?.toString() ?: return null
             val mediaString = payload.media ?: return null
 
-            // Generate Key menggunakan format gabungan: user_id:slug:md5_id
+            // 1. Generate Key menggunakan format gabungan
             val rawKey = "$userId:$slug:$md5Id"
             val md5Bytes = MessageDigest.getInstance("MD5").digest(rawKey.toByteArray(Charsets.UTF_8))
-            val md5Hex = md5Bytes.joinToString("") { "%02x".format(it) }
+            // Pastikan format aman dengan AND 0xFF untuk menghindari sign-extension pada Byte
+            val md5Hex = md5Bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
-            // Setup Spesifikasi AES-CTR (CTR Mode membutuhkan Key 32-Byte & IV 16-Byte dari MD5)
+            // 2. Setup Spesifikasi AES-CTR (Key 32-Byte & IV 16-Byte dari Hex)
             val secretKey = SecretKeySpec(md5Hex.toByteArray(Charsets.UTF_8), "AES")
             val iv = IvParameterSpec(md5Hex.substring(0, 16).toByteArray(Charsets.UTF_8))
 
-            // Ekstrak karakter kode dari String Media ke wujud Byte Array
+            // 3. Konversi karakter String Media ke wujud Byte Array murni
             val encryptedBytes = mediaString.map { it.code.toByte() }.toByteArray()
 
-            // Eksekusi Decrypt Mode AES/CTR/NoPadding
+            // 4. Eksekusi Dekripsi
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, iv)
             
