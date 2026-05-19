@@ -44,12 +44,12 @@ data class Lk21SearchItem(
 )
 
 // ==========================================
-// DATA CLASSES TAMBAHAN UNTUK DEKRIPSI
+// DATA CLASSES BARU (DISESUAIKAN DENGAN DEKRIPSI ABYSS)
 // ==========================================
 
 data class AbyssPayload(
     @JsonProperty("slug") val slug: String?,
-    @JsonProperty("md5_id") val md5Id: Any?, // Gunakan Any? agar angka JSON tidak error
+    @JsonProperty("md5_id") val md5Id: Any?, // Menggunakan Any? agar angka JSON tidak menyebabkan crash
     @JsonProperty("user_id") val userId: Any?,
     @JsonProperty("media") val media: String?
 )
@@ -65,9 +65,11 @@ data class DecryptedMedia(
 )
 
 data class MediaSource(
-    @JsonProperty("file") val file: String?,
+    @JsonProperty("url") val url: String?,
+    @JsonProperty("path") val path: String?,
     @JsonProperty("label") val label: String?,
-    @JsonProperty("type") val type: String?
+    @JsonProperty("codec") val codec: String?,
+    @JsonProperty("status") val status: Boolean?
 )
 
 // ==========================================
@@ -237,6 +239,7 @@ class LayarKacaProvider : MainAPI() {
         val serverElements = document.select("ul#player-list li a")
         val providerName = this.name
         
+        // Setup Header tiruan Browser WebView agar lolos Cloudflare
         val browserHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A415F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/17.0 Chrome/96.0.4664.104 Mobile Safari/537.36",
             "X-Requested-With" to "org.streaming.lk21official",
@@ -260,7 +263,7 @@ class LayarKacaProvider : MainAPI() {
                     if (!realIframeSrc.isNullOrEmpty()) {
                         Log.d("LK21_DEBUG", "Iframe asli ditemukan: $realIframeSrc")
                         
-                        // Ekstrak ID film
+                        // Ekstraksi ID film langsung dari link Iframe
                         val id = realIframeSrc.substringAfterLast("/").substringBefore("?")
                         val directCdnUrl = "https://abysscdn.com/?v=$id"
                         
@@ -290,8 +293,7 @@ class LayarKacaProvider : MainAPI() {
                         if (base64Data != null) {
                             Log.d("LK21_DEBUG", "Payload Base64 berhasil diekstrak!")
                             
-                            // PERBAIKAN UTAMA: Decode Base64 biner menggunakan Charsets.ISO_8859_1 (Latin-1)
-                            // Ini menghentikan crash dikarenakan karakter byte non-UTF-8 pada bagian payload media biner.
+                            // Decode menggunakan Charsets.ISO_8859_1 (Latin-1) agar byte biner tidak corrupt/crash
                             val decodedJsonString = String(
                                 android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), 
                                 Charsets.ISO_8859_1
@@ -305,9 +307,13 @@ class LayarKacaProvider : MainAPI() {
                                     val mediaData = tryParseJson<DecryptedMedia>(decryptedJsonStr)
                                     val serverTitle = serverName.uppercase()
                                     
-                                    // Ekstrak HLS (.m3u8)
+                                    // Ekstrak HLS (.m3u8) jika tersedia
                                     mediaData?.hls?.sources?.forEach { source ->
-                                        source.file?.let { m3u8Url ->
+                                        if (source.url != null && source.path != null) {
+                                            val baseUrl = source.url.trimEnd('/')
+                                            val path = source.path.trimStart('/')
+                                            val m3u8Url = "$baseUrl/$path"
+                                            
                                             Log.d("LK21_DEBUG", "HLS ditemukan: $m3u8Url")
                                             callback.invoke(
                                                 newExtractorLink(
@@ -323,9 +329,13 @@ class LayarKacaProvider : MainAPI() {
                                         }
                                     }
                                     
-                                    // Ekstrak MP4 direct
+                                    // Ekstrak MP4 direct (Seperti hasil uji Termux)
                                     mediaData?.mp4?.sources?.forEach { source ->
-                                        source.file?.let { mp4Url ->
+                                        if (source.url != null && source.path != null) {
+                                            val baseUrl = source.url.trimEnd('/')
+                                            val path = source.path.trimStart('/')
+                                            val mp4Url = "$baseUrl/$path"
+                                            
                                             Log.d("LK21_DEBUG", "MP4 ditemukan: $mp4Url")
                                             callback.invoke(
                                                 newExtractorLink(
@@ -380,11 +390,10 @@ class LayarKacaProvider : MainAPI() {
             val secretKey = SecretKeySpec(md5Hex.toByteArray(Charsets.UTF_8), "AES")
             val iv = IvParameterSpec(md5Hex.substring(0, 16).toByteArray(Charsets.UTF_8))
 
-            // 3. Konversi karakter String Media ke wujud Byte Array murni
-            // Karena string dikodekan dengan ISO-8859-1 di atas, konversi byte-murni ini sekarang bekerja dengan akurat 100%.
-            val encryptedBytes = mediaString.map { it.code.toByte() }.toByteArray()
+            // 3. Konversi karakter String Media ke wujud Byte Array murni secara aman (ISO-8859-1)
+            val encryptedBytes = mediaString.toByteArray(Charsets.ISO_8859_1)
 
-            // 4. Eksekusi Dekripsi
+            // 4. Eksekusi Dekripsi AES-CTR
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, iv)
             
