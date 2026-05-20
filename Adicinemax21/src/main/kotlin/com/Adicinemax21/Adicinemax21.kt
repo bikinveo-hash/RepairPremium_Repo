@@ -33,11 +33,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
     override val hasMainPage = true
-    
-    // PERBAIKAN: Fitur antrean (sequential) biar TMDB nggak menolak request (Rate Limit)
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 250L
-    
     override var lang = "id"
     override val instantLinkLoading = true
     override val useMetaLoadResponse = true
@@ -88,7 +83,6 @@ open class Adicinemax21 : TmdbProvider() {
         }
     }
 
-    // PERBAIKAN: Mengganti karakter '|' dengan '%7C' biar OkHttp nggak crash
     override val mainPage = mainPageOf(
         "$tmdbAPI/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
@@ -96,7 +90,7 @@ open class Adicinemax21 : TmdbProvider() {
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384%7C1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
@@ -128,54 +122,36 @@ open class Adicinemax21 : TmdbProvider() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val adultQuery =
-            if (settingsForProvider.enableAdult) "" else "&without_keywords=190370%7C13059%7C226161%7C195669"
+            if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
+        // PERBAIKAN UTAMA: Mengembalikan list kosong (emptyList()) saat request terputus/gagal,
+        // sehingga dashboard baris kategori lain tetap termuat sempurna tanpa memicu crash layar hitam.
         val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
             } ?: emptyList()
-            
-        return newHomePageResponse(request, home, hasNext = home.isNotEmpty())
+        return newHomePageResponse(request.name, home)
     }
 
-    private fun Media.toSearchResponse(fallbackType: String? = null): SearchResponse? {
-        val actualType = mediaType ?: fallbackType
-        if (actualType == "person") return null 
-        
-        val titleStr = title ?: name ?: originalTitle ?: return null
-        val dataStr = Data(id = id, type = actualType).toJson()
-        val poster = getImageUrl(posterPath)
-
-        // PERBAIKAN: Parsing manual toString() untuk voteAverage agar aman
-        return if (actualType == "tv") {
-            newTvSeriesSearchResponse(titleStr, dataStr, TvType.TvSeries) {
-                this.posterUrl = poster
-                this.score = Score.from10(voteAverage?.toString()) 
-            }
-        } else {
-            newMovieSearchResponse(titleStr, dataStr, TvType.Movie) {
-                this.posterUrl = poster
-                this.score = Score.from10(voteAverage?.toString())
-            }
+    private fun Media.toSearchResponse(type: String? = null): SearchResponse? {
+        return newMovieSearchResponse(
+            title ?: name ?: originalTitle ?: return null,
+            Data(id = id, type = mediaType ?: type).toJson(),
+            TvType.Movie,
+        ) {
+            this.posterUrl = getImageUrl(posterPath)
+            this.score = Score.from10(voteAverage)
         }
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
+    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
-    override suspend fun search(query: String): List<SearchResponse>? = search(query, 1)?.items
-
-    // PERBAIKAN: URL Encode agar aman kalau mencari judul lebih dari 1 kata
-    override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val urlQuery = java.net.URLEncoder.encode(query, "UTF-8")
-        
-        val url = "$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$urlQuery&page=$page&include_adult=${settingsForProvider.enableAdult}"
-        
-        val results = app.get(url).parsedSafe<Results>()?.results?.mapNotNull { media ->
-            media.toSearchResponse()
-        } ?: emptyList()
-
-        return newSearchResponseList(results, hasNext = results.isNotEmpty())
+    override suspend fun search(query: String): List<SearchResponse>? {
+        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
+            .parsedSafe<Results>()?.results?.mapNotNull { media ->
+                media.toSearchResponse()
+            }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -429,9 +405,7 @@ open class Adicinemax21 : TmdbProvider() {
         @JsonProperty("original_title") val originalTitle: String? = null,
         @JsonProperty("media_type") val mediaType: String? = null,
         @JsonProperty("poster_path") val posterPath: String? = null,
-        
-        // PERBAIKAN: Ubah jadi Any? biar tidak crash saat TMDB ngirim angka bulat (bukan desimal)
-        @JsonProperty("vote_average") val voteAverage: Any? = null,
+        @JsonProperty("vote_average") val voteAverage: Double? = null,
     )
 
     data class Genres(
