@@ -33,6 +33,11 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
     override val hasMainPage = true
+    
+    // PERBAIKAN: Fitur antrean (sequential) biar TMDB nggak menolak request (Rate Limit)
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 250L
+    
     override var lang = "id"
     override val instantLinkLoading = true
     override val useMetaLoadResponse = true
@@ -83,7 +88,7 @@ open class Adicinemax21 : TmdbProvider() {
         }
     }
 
-    // PERBAIKAN: Mengganti karakter '|' dengan '%7C'
+    // PERBAIKAN: Mengganti karakter '|' dengan '%7C' biar OkHttp nggak crash
     override val mainPage = mainPageOf(
         "$tmdbAPI/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
@@ -122,7 +127,6 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // PERBAIKAN: Mengganti '|' menjadi '%7C' pada filter kata kunci dewasa
         val adultQuery =
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370%7C13059%7C226161%7C195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
@@ -132,41 +136,36 @@ open class Adicinemax21 : TmdbProvider() {
                 media.toSearchResponse(type)
             } ?: emptyList()
             
-        // PERBAIKAN: Menggunakan format bawaan MainAPI
         return newHomePageResponse(request, home, hasNext = home.isNotEmpty())
     }
 
     private fun Media.toSearchResponse(fallbackType: String? = null): SearchResponse? {
         val actualType = mediaType ?: fallbackType
-        
-        // Cek agar hasil "Person/Actor" tidak masuk ke list film
         if (actualType == "person") return null 
         
         val titleStr = title ?: name ?: originalTitle ?: return null
         val dataStr = Data(id = id, type = actualType).toJson()
         val poster = getImageUrl(posterPath)
 
-        // PERBAIKAN: Memisahkan respons sesuai tipe media (Movie vs Series)
+        // PERBAIKAN: Parsing manual toString() untuk voteAverage agar aman
         return if (actualType == "tv") {
             newTvSeriesSearchResponse(titleStr, dataStr, TvType.TvSeries) {
                 this.posterUrl = poster
-                this.score = Score.from10(voteAverage)
+                this.score = Score.from10(voteAverage?.toString()) 
             }
         } else {
             newMovieSearchResponse(titleStr, dataStr, TvType.Movie) {
                 this.posterUrl = poster
-                this.score = Score.from10(voteAverage)
+                this.score = Score.from10(voteAverage?.toString())
             }
         }
     }
 
-    // PERBAIKAN: Mengalihkan quickSearch langsung ke search ber-halaman
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
 
-    // Standar lama
     override suspend fun search(query: String): List<SearchResponse>? = search(query, 1)?.items
 
-    // PERBAIKAN: Menggunakan search paginasi dan URL Encoder
+    // PERBAIKAN: URL Encode agar aman kalau mencari judul lebih dari 1 kata
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val urlQuery = java.net.URLEncoder.encode(query, "UTF-8")
         
@@ -430,7 +429,9 @@ open class Adicinemax21 : TmdbProvider() {
         @JsonProperty("original_title") val originalTitle: String? = null,
         @JsonProperty("media_type") val mediaType: String? = null,
         @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("vote_average") val voteAverage: Double? = null,
+        
+        // PERBAIKAN: Ubah jadi Any? biar tidak crash saat TMDB ngirim angka bulat (bukan desimal)
+        @JsonProperty("vote_average") val voteAverage: Any? = null,
     )
 
     data class Genres(
