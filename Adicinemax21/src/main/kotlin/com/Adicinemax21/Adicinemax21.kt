@@ -20,7 +20,6 @@ import com.Adicinemax21.Adicinemax21Extractor.invokeXprime
 import com.Adicinemax21.Adicinemax21Extractor.invokeCinemaOS
 import com.Adicinemax21.Adicinemax21Extractor.invokePlayer4U
 import com.Adicinemax21.Adicinemax21Extractor.invokeRiveStream
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -84,24 +83,20 @@ open class Adicinemax21 : TmdbProvider() {
         const val RiveStreamAPI = "https://rivestream.org"
 
         suspend fun getApiBase(): String {
-            StreamPlayCache.getCachedApiBase()?.let {
-                currentBaseUrl = it
-                return it
-            }
-
+            // Cek in-memory cache, jadi nggak perlu StreamPlayCache
             currentBaseUrl?.let { return it }
+
             return apiMutex.withLock {
                 currentBaseUrl?.let { return it }
 
                 if (checkConnectivity(OFFICIAL_TMDB_URL)) {
                     currentBaseUrl = OFFICIAL_TMDB_URL
-                    StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = true)
                     return OFFICIAL_TMDB_URL
                 }
 
                 val proxies = fetchProxyList()
                 if (proxies.isEmpty()) {
-                    StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = false)
+                    currentBaseUrl = OFFICIAL_TMDB_URL
                     return OFFICIAL_TMDB_URL
                 }
 
@@ -116,12 +111,10 @@ open class Adicinemax21 : TmdbProvider() {
 
                 if (workingProxy != null) {
                     currentBaseUrl = workingProxy
-                    StreamPlayCache.cacheApiBase(workingProxy, success = true)
                     return workingProxy
                 }
 
                 currentBaseUrl = OFFICIAL_TMDB_URL
-                StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = false)
                 return OFFICIAL_TMDB_URL
             }
         }
