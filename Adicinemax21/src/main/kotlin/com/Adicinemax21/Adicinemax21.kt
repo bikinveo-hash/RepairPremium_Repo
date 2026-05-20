@@ -29,6 +29,7 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import java.net.URLEncoder
 
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
@@ -41,6 +42,10 @@ open class Adicinemax21 : TmdbProvider() {
         TvType.Movie,
         TvType.TvSeries,
     )
+
+    // Fitur anti-spam ke server agar kategori selalu muncul perlahan tapi pasti
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 250L
 
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
@@ -103,7 +108,6 @@ open class Adicinemax21 : TmdbProvider() {
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
@@ -125,8 +129,6 @@ open class Adicinemax21 : TmdbProvider() {
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
-        // PERBAIKAN UTAMA: Mengembalikan list kosong (emptyList()) saat request terputus/gagal,
-        // sehingga dashboard baris kategori lain tetap termuat sempurna tanpa memicu crash layar hitam.
         val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
@@ -135,20 +137,32 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     private fun Media.toSearchResponse(type: String? = null): SearchResponse? {
-        return newMovieSearchResponse(
-            title ?: name ?: originalTitle ?: return null,
-            Data(id = id, type = mediaType ?: type).toJson(),
-            TvType.Movie,
-        ) {
-            this.posterUrl = getImageUrl(posterPath)
-            this.score = Score.from10(voteAverage)
+        val titleText = title ?: name ?: originalTitle ?: return null
+        val actualType = mediaType ?: type
+        val isTv = actualType == "tv"
+        val dataJson = Data(id = id, type = actualType).toJson()
+        
+        // Memisahkan response berdasarkan TvType agar pencarian tidak error
+        return if (isTv) {
+            newTvSeriesSearchResponse(titleText, dataJson, TvType.TvSeries) {
+                this.posterUrl = getImageUrl(posterPath)
+                this.score = Score.from10(voteAverage)
+            }
+        } else {
+            newMovieSearchResponse(titleText, dataJson, TvType.Movie) {
+                this.posterUrl = getImageUrl(posterPath)
+                this.score = Score.from10(voteAverage)
+            }
         }
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
+        // Encode spasi dan karakter khusus agar URL pencarian aman dikirim
+        val encodedQuery = URLEncoder.encode(query, "utf-8").replace("+", "%20")
+        
+        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$encodedQuery&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
             }
@@ -181,8 +195,8 @@ open class Adicinemax21 : TmdbProvider() {
             "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         }
         
-        val res = app.get(resUrlId).parsedSafe<MediaDetail>()
-            ?: throw ErrorLoadingException("Invalid Json Response")
+        // Memakai null (bukan Item) agar terhindar dari Unresolved reference
+        val res = app.get(resUrlId).parsedSafe<MediaDetail>() ?: return null
 
         var plot = res.overview
         if (plot.isNullOrBlank()) {
