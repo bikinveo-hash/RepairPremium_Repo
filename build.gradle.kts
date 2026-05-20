@@ -1,7 +1,9 @@
-import com.android.build.gradle.BaseExtension
+import com.android.build.api.dsl.LibraryExtension
 import com.lagradost.cloudstream3.gradle.CloudstreamExtension
+import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.kotlin.dsl.register
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 buildscript {
@@ -12,9 +14,17 @@ buildscript {
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:8.13.2")
+        classpath("com.android.tools.build:gradle:9.1.1")
         classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.21")
+    }
+}
+
+subprojects {
+    tasks.withType<KotlinCompile>().configureEach {
+        compilerOptions {
+            freeCompilerArgs.add("-Xannotation-default-target=param-property")
+        }
     }
 }
 
@@ -28,11 +38,22 @@ allprojects {
 
 fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
 
-fun Project.android(configuration: BaseExtension.() -> Unit) = extensions.getByName<BaseExtension>("android").configuration()
+fun Project.android(configuration: LibraryExtension.() -> Unit) {
+    extensions.getByName<LibraryExtension>("android").apply {
+        project.extensions.findByType(JavaPluginExtension::class.java)?.apply {
+            // Use Java 17 toolchain even if a higher JDK runs the build.
+            // We still use Java 8 for now which higher JDKs have deprecated.
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(17))
+            }
+        }
+
+        configuration()
+    }
+}
 
 subprojects {
     apply(plugin = "com.android.library")
-    apply(plugin = "kotlin-android")
     apply(plugin = "com.lagradost.cloudstream3.gradle")
 
     cloudstream {
@@ -42,19 +63,20 @@ subprojects {
 
     android {
         namespace = "com.phisher98"
+        compileSdk = 36
 
         defaultConfig {
             minSdk = 21
-            compileSdkVersion(35)
-            targetSdk = 35
+        }
 
+        lint {
+            targetSdk = 36
         }
 
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_1_8
             targetCompatibility = JavaVersion.VERSION_1_8
         }
-
 
         tasks.withType<KotlinJvmCompile> {
             compilerOptions {
@@ -63,7 +85,7 @@ subprojects {
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
                     "-Xno-receiver-assertions",
-                    "-Xannotation-default-target=param-property" // <--- INI TAMBAHANNYA
+                    "-Xannotation-default-target=param-property"
                 )
             }
         }
@@ -76,18 +98,19 @@ subprojects {
 
         // Other dependencies
         implementation(kotlin("stdlib"))
-        implementation("com.github.Blatzar:NiceHttp:0.4.16")
-        implementation("org.jsoup:jsoup:1.22.1")
-        implementation("androidx.annotation:annotation:1.9.1")
-        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.1")
-        implementation("com.fasterxml.jackson.core:jackson-databind:2.20.1")
+        implementation("com.github.Blatzar:NiceHttp:0.4.18")
+        implementation("org.jsoup:jsoup:1.22.2")
+        implementation("androidx.annotation:annotation:1.10.0")
+        // Do not bump above 2.13.1
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.13.1")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-        implementation("org.mozilla:rhino:1.9.0")
+        // Do not bump above 1.8.1
+        implementation("org.mozilla:rhino:1.8.1")
         implementation("me.xdrop:fuzzywuzzy:1.4.0")
-        implementation("com.google.code.gson:gson:2.13.2")
-        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
-        implementation("com.github.vidstige:jadb:v1.2.1")
-        implementation("org.bouncycastle:bcpkix-jdk15on:1.70")
+        implementation("com.google.code.gson:gson:2.14.0")
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+        implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
     }
 }
 
