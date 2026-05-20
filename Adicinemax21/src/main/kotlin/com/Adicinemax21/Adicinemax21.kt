@@ -55,7 +55,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://z1.idlixku.com" // Update domain baru
+        const val idlixAPI = "https://z1.idlixku.com"
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -125,10 +125,12 @@ open class Adicinemax21 : TmdbProvider() {
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
+        // PERBAIKAN UTAMA: Mengembalikan list kosong (emptyList()) saat request terputus/gagal,
+        // sehingga dashboard baris kategori lain tetap termuat sempurna tanpa memicu crash layar hitam.
         val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
-            } ?: throw ErrorLoadingException("Invalid Json reponse")
+            } ?: emptyList()
         return newHomePageResponse(request.name, home)
     }
 
@@ -209,7 +211,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         val actors = res.credits?.cast?.mapNotNull { cast ->
              ActorData(
-               Actor(
+                Actor(
                     cast.name ?: cast.originalName ?: return@mapNotNull null, 
                     getImageUrl(cast.profilePath)
                 ), roleString = cast.character
@@ -360,6 +362,7 @@ open class Adicinemax21 : TmdbProvider() {
         return true
     }
 
+    // --- DATA CLASSES ---
     data class LinkData(
         val id: Int? = null,
         val imdbId: String? = null,
