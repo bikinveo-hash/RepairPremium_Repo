@@ -83,6 +83,7 @@ open class Adicinemax21 : TmdbProvider() {
         }
     }
 
+    // PERBAIKAN: Mengganti karakter '|' dengan '%7C'
     override val mainPage = mainPageOf(
         "$tmdbAPI/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
@@ -90,7 +91,7 @@ open class Adicinemax21 : TmdbProvider() {
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384%7C1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
@@ -121,37 +122,61 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // PERBAIKAN: Mengganti '|' menjadi '%7C' pada filter kata kunci dewasa
         val adultQuery =
-            if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
+            if (settingsForProvider.enableAdult) "" else "&without_keywords=190370%7C13059%7C226161%7C195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
-        // PERBAIKAN UTAMA: Mengembalikan list kosong (emptyList()) saat request terputus/gagal,
-        // sehingga dashboard baris kategori lain tetap termuat sempurna tanpa memicu crash layar hitam.
         val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
             } ?: emptyList()
-        return newHomePageResponse(request.name, home)
+            
+        // PERBAIKAN: Menggunakan format bawaan MainAPI
+        return newHomePageResponse(request, home, hasNext = home.isNotEmpty())
     }
 
-    private fun Media.toSearchResponse(type: String? = null): SearchResponse? {
-        return newMovieSearchResponse(
-            title ?: name ?: originalTitle ?: return null,
-            Data(id = id, type = mediaType ?: type).toJson(),
-            TvType.Movie,
-        ) {
-            this.posterUrl = getImageUrl(posterPath)
-            this.score = Score.from10(voteAverage)
+    private fun Media.toSearchResponse(fallbackType: String? = null): SearchResponse? {
+        val actualType = mediaType ?: fallbackType
+        
+        // Cek agar hasil "Person/Actor" tidak masuk ke list film
+        if (actualType == "person") return null 
+        
+        val titleStr = title ?: name ?: originalTitle ?: return null
+        val dataStr = Data(id = id, type = actualType).toJson()
+        val poster = getImageUrl(posterPath)
+
+        // PERBAIKAN: Memisahkan respons sesuai tipe media (Movie vs Series)
+        return if (actualType == "tv") {
+            newTvSeriesSearchResponse(titleStr, dataStr, TvType.TvSeries) {
+                this.posterUrl = poster
+                this.score = Score.from10(voteAverage)
+            }
+        } else {
+            newMovieSearchResponse(titleStr, dataStr, TvType.Movie) {
+                this.posterUrl = poster
+                this.score = Score.from10(voteAverage)
+            }
         }
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
+    // PERBAIKAN: Mengalihkan quickSearch langsung ke search ber-halaman
+    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
 
-    override suspend fun search(query: String): List<SearchResponse>? {
-        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
-            .parsedSafe<Results>()?.results?.mapNotNull { media ->
-                media.toSearchResponse()
-            }
+    // Standar lama
+    override suspend fun search(query: String): List<SearchResponse>? = search(query, 1)?.items
+
+    // PERBAIKAN: Menggunakan search paginasi dan URL Encoder
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val urlQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        
+        val url = "$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$urlQuery&page=$page&include_adult=${settingsForProvider.enableAdult}"
+        
+        val results = app.get(url).parsedSafe<Results>()?.results?.mapNotNull { media ->
+            media.toSearchResponse()
+        } ?: emptyList()
+
+        return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     override suspend fun load(url: String): LoadResponse? {
