@@ -20,6 +20,7 @@ import com.Adicinemax21.Adicinemax21Extractor.invokeXprime
 import com.Adicinemax21.Adicinemax21Extractor.invokeCinemaOS
 import com.Adicinemax21.Adicinemax21Extractor.invokePlayer4U
 import com.Adicinemax21.Adicinemax21Extractor.invokeRiveStream
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -29,6 +30,13 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
@@ -45,17 +53,20 @@ open class Adicinemax21 : TmdbProvider() {
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
     companion object {
-        private const val tmdbAPI = "https://api.themoviedb.org/3"
+        private const val OFFICIAL_TMDB_URL = "https://api.themoviedb.org/3"
+        private const val REMOTE_PROXY_LIST = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Proxylist.txt"
         const val gdbot = "https://gdtot.pro"
         const val anilistAPI = "https://graphql.anilist.co"
         const val malsyncAPI = "https://api.malsync.moe"
         const val jikanAPI = "https://api.jikan.moe/v4"
 
         private const val apiKey = "b030404650f279792a8d3287232358e3"
+        private var currentBaseUrl: String? = null
+        private val apiMutex = Mutex()
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://z1.idlixku.com" // Update domain baru
+        const val idlixAPI = "https://z1.idlixku.com" 
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -72,6 +83,75 @@ open class Adicinemax21 : TmdbProvider() {
         const val Player4uApi = "https://player4u.xyz"
         const val RiveStreamAPI = "https://rivestream.org"
 
+        suspend fun getApiBase(): String {
+            StreamPlayCache.getCachedApiBase()?.let {
+                currentBaseUrl = it
+                return it
+            }
+
+            currentBaseUrl?.let { return it }
+            return apiMutex.withLock {
+                currentBaseUrl?.let { return it }
+
+                if (checkConnectivity(OFFICIAL_TMDB_URL)) {
+                    currentBaseUrl = OFFICIAL_TMDB_URL
+                    StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = true)
+                    return OFFICIAL_TMDB_URL
+                }
+
+                val proxies = fetchProxyList()
+                if (proxies.isEmpty()) {
+                    StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = false)
+                    return OFFICIAL_TMDB_URL
+                }
+
+                val workingProxy = coroutineScope {
+                    val deferredChecks = proxies.map { proxy ->
+                        async {
+                            if (checkConnectivity(proxy)) proxy else null
+                        }
+                    }
+                    deferredChecks.awaitAll().firstOrNull { it != null }
+                }
+
+                if (workingProxy != null) {
+                    currentBaseUrl = workingProxy
+                    StreamPlayCache.cacheApiBase(workingProxy, success = true)
+                    return workingProxy
+                }
+
+                currentBaseUrl = OFFICIAL_TMDB_URL
+                StreamPlayCache.cacheApiBase(OFFICIAL_TMDB_URL, success = false)
+                return OFFICIAL_TMDB_URL
+            }
+        }
+
+        private suspend fun checkConnectivity(url: String): Boolean {
+            val testUrl = "$url/configuration?api_key=$apiKey"
+            return withTimeoutOrNull(2000) { 
+                try {
+                    val response = app.get(
+                        testUrl,
+                        timeout = 1500, 
+                        headers = mapOf("Cache-Control" to "no-cache")
+                    )
+                    response.code == 200 || response.code == 304
+                } catch (_: Exception) {
+                    false
+                }
+            } ?: false
+        }
+
+        private suspend fun fetchProxyList(): List<String> = try {
+            val response = app.get(REMOTE_PROXY_LIST, timeout = 5000).text
+            val json = JSONObject(response)
+            val arr = json.getJSONArray("proxies")
+            (0 until arr.length()).map { arr.getString(it).trim().removeSuffix("/") }
+                .filter { it.isNotEmpty() }
+        } catch (e: Exception) {
+            emptyList()
+        }
+
         fun getType(t: String?): TvType = when (t) {
             "movie" -> TvType.Movie
             else -> TvType.TvSeries
@@ -84,30 +164,30 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override val mainPage = mainPageOf(
-        "$tmdbAPI/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Popular TV Shows (2020+)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Korean Dramas (2020+)",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=zh&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Chinese Dramas (2020+)",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=28&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Action Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=878&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Sci-Fi Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=27&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Horror Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Romance Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=80&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Crime Movies",
+        "/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
+        "/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
+        "/discover/tv?api_key=$apiKey&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Popular TV Shows (2020+)",
+        "/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
+        "/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
+        "/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
+        "/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
+        "/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
+        "/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
+        "/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
+        "/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Korean Dramas (2020+)",
+        "/discover/tv?api_key=$apiKey&with_original_language=zh&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Chinese Dramas (2020+)",
+        "/discover/movie?api_key=$apiKey&with_genres=28&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Action Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=878&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Sci-Fi Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=27&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Horror Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=10749&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Romance Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
+        "/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
+        "/discover/movie?api_key=$apiKey&with_genres=80&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Crime Movies",
     )
 
     private fun getImageUrl(link: String?): String? {
@@ -121,11 +201,12 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val tmdbAPI = getApiBase()
         val adultQuery =
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
-        val home = app.get("${request.data}$adultQuery&page=$page")
+        val home = app.get("$tmdbAPI${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
             } ?: throw ErrorLoadingException("Invalid Json reponse")
@@ -146,6 +227,7 @@ open class Adicinemax21 : TmdbProvider() {
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
+        val tmdbAPI = getApiBase()
         return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
@@ -153,6 +235,7 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        val tmdbAPI = getApiBase()
         val data = try {
             if (url.startsWith("https://www.themoviedb.org/")) {
                 val segments = url.removeSuffix("/").split("/")
@@ -209,7 +292,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         val actors = res.credits?.cast?.mapNotNull { cast ->
              ActorData(
-               Actor(
+                Actor(
                     cast.name ?: cast.originalName ?: return@mapNotNull null, 
                     getImageUrl(cast.profilePath)
                 ), roleString = cast.character
