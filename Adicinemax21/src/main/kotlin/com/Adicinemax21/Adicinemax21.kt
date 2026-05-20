@@ -42,13 +42,6 @@ open class Adicinemax21 : TmdbProvider() {
         TvType.TvSeries,
     )
 
-    // ==========================================
-    // KUNCI PERBAIKAN: Load kategori satu per satu 
-    // agar tidak terkena limit / drop koneksi dari TMDB / ISP
-    // ==========================================
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 250L 
-
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
     companion object {
@@ -110,6 +103,7 @@ open class Adicinemax21 : TmdbProvider() {
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
@@ -131,6 +125,8 @@ open class Adicinemax21 : TmdbProvider() {
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
+        // PERBAIKAN UTAMA: Mengembalikan list kosong (emptyList()) saat request terputus/gagal,
+        // sehingga dashboard baris kategori lain tetap termuat sempurna tanpa memicu crash layar hitam.
         val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
@@ -186,7 +182,7 @@ open class Adicinemax21 : TmdbProvider() {
         }
         
         val res = app.get(resUrlId).parsedSafe<MediaDetail>()
-            ?: return LoadResponse.Item()
+            ?: throw ErrorLoadingException("Invalid Json Response")
 
         var plot = res.overview
         if (plot.isNullOrBlank()) {
