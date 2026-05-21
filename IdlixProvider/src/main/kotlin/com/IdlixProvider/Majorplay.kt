@@ -1,6 +1,7 @@
 package com.IdlixProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -30,7 +31,6 @@ class Majorplay : ExtractorApi() {
             val rawJsonString = "{\"claim\":\"$claimToken\"}"
             val requestBody = rawJsonString.toRequestBody("text/plain;charset=UTF-8".toMediaTypeOrNull())
 
-            // Jubah Gaib Lengkap Anti-Blokir
             val safeHeaders = mapOf(
                 "Origin" to actualOrigin,
                 "Referer" to actualReferer,
@@ -45,16 +45,19 @@ class Majorplay : ExtractorApi() {
                 "sec-fetch-site" to "cross-site"
             )
 
-            // Menukar Tiket di Majorplay
+            // 1. Menukar Token di Majorplay
             val response = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders,
                 requestBody = requestBody
             ).parsedSafe<NewMajorplayResponse>() ?: return
 
-            val videoUrl = response.url ?: return
+            // 2. MENGHINDARI JEBAKAN BATMAN (KUNCI KEMENANGAN)
+            // Hapus jebakan 'config-xxxx.json' dan ganti paksa ke 'master.m3u8'
+            val rawUrl = response.url ?: return
+            val videoUrl = rawUrl.replace(Regex("""config-\d+\.json"""), "master.m3u8")
 
-            // Panggil subtitle
+            // 3. Panggil subtitle
             response.subtitles?.forEach { sub ->
                 val subUrl = sub.path ?: return@forEach
                 val subLang = sub.label ?: sub.lang ?: "Unknown"
@@ -63,12 +66,7 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // ==========================================
-            // KUNCI KEMENANGAN MUTLAK
-            // Serahkan link Master Playlist mentah-mentah agar Cloudstream 
-            // menugaskan ExoPlayer membedahnya secara otomatis. 
-            // Jika muncul "Trek 0, 1, 2", abaikan saja! Itu cacat server dari Majorplay.
-            // ==========================================
+            // 4. Lemparkan Playlist Asli ke ExoPlayer
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -87,12 +85,15 @@ class Majorplay : ExtractorApi() {
         }
     }
 
+    // WAJIB pakai JsonIgnoreProperties agar tidak crash saat Majorplay nambahin variabel baru
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorplayResponse(
         @JsonProperty("code") val code: String? = null,
         @JsonProperty("url") val url: String? = null, 
         @JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null
     )
     
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorSubtitle(
         @JsonProperty("lang") val lang: String? = null, 
         @JsonProperty("label") val label: String? = null, 
