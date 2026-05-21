@@ -29,14 +29,6 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
-import kotlin.random.Random
 
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
@@ -53,20 +45,17 @@ open class Adicinemax21 : TmdbProvider() {
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
     companion object {
-        private const val OFFICIAL_TMDB_URL = "https://api.themoviedb.org/3"
-        private const val REMOTE_PROXY_LIST = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Proxylist.txt"
+        private const val tmdbAPI = "https://api.themoviedb.org/3"
         const val gdbot = "https://gdtot.pro"
         const val anilistAPI = "https://graphql.anilist.co"
         const val malsyncAPI = "https://api.malsync.moe"
         const val jikanAPI = "https://api.jikan.moe/v4"
 
         private const val apiKey = "b030404650f279792a8d3287232358e3"
-        private var currentBaseUrl: String? = null
-        private val apiMutex = Mutex()
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://z1.idlixku.com" 
+        const val idlixAPI = "https://z1.idlixku.com" // Update domain baru
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -83,68 +72,6 @@ open class Adicinemax21 : TmdbProvider() {
         const val Player4uApi = "https://player4u.xyz"
         const val RiveStreamAPI = "https://rivestream.org"
 
-        suspend fun getApiBase(): String {
-            currentBaseUrl?.let { return it }
-
-            return apiMutex.withLock {
-                currentBaseUrl?.let { return it }
-
-                if (checkConnectivity(OFFICIAL_TMDB_URL)) {
-                    currentBaseUrl = OFFICIAL_TMDB_URL
-                    return OFFICIAL_TMDB_URL
-                }
-
-                val proxies = fetchProxyList()
-                if (proxies.isEmpty()) {
-                    currentBaseUrl = OFFICIAL_TMDB_URL
-                    return OFFICIAL_TMDB_URL
-                }
-
-                val workingProxy = coroutineScope {
-                    val deferredChecks = proxies.map { proxy ->
-                        async {
-                            if (checkConnectivity(proxy)) proxy else null
-                        }
-                    }
-                    deferredChecks.awaitAll().firstOrNull { it != null }
-                }
-
-                if (workingProxy != null) {
-                    currentBaseUrl = workingProxy
-                    return workingProxy
-                }
-
-                currentBaseUrl = OFFICIAL_TMDB_URL
-                return OFFICIAL_TMDB_URL
-            }
-        }
-
-        private suspend fun checkConnectivity(url: String): Boolean {
-            val testUrl = "$url/configuration?api_key=$apiKey"
-            return withTimeoutOrNull(3000) { 
-                try {
-                    val response = app.get(
-                        testUrl,
-                        timeout = 2500, 
-                        headers = mapOf("Cache-Control" to "no-cache")
-                    )
-                    response.code == 200 || response.code == 304
-                } catch (_: Exception) {
-                    false
-                }
-            } ?: false
-        }
-
-        private suspend fun fetchProxyList(): List<String> = try {
-            val response = app.get(REMOTE_PROXY_LIST, timeout = 5000).text
-            val json = JSONObject(response)
-            val arr = json.getJSONArray("proxies")
-            (0 until arr.length()).map { arr.getString(it).trim().removeSuffix("/") }
-                .filter { it.isNotEmpty() }
-        } catch (e: Exception) {
-            emptyList()
-        }
-
         fun getType(t: String?): TvType = when (t) {
             "movie" -> TvType.Movie
             else -> TvType.TvSeries
@@ -157,30 +84,30 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override val mainPage = mainPageOf(
-        "/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
-        "/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
-        "/discover/tv?api_key=$apiKey&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Popular TV Shows (2020+)",
-        "/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
-        "/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
-        "/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
-        "/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
-        "/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
-        "/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
-        "/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
-        "/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Korean Dramas (2020+)",
-        "/discover/tv?api_key=$apiKey&with_original_language=zh&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Chinese Dramas (2020+)",
-        "/discover/movie?api_key=$apiKey&with_genres=28&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Action Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=878&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Sci-Fi Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=27&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Horror Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=10749&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Romance Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
-        "/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
-        "/discover/movie?api_key=$apiKey&with_genres=80&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Crime Movies",
+        "$tmdbAPI/trending/movie/day?api_key=$apiKey&region=US&without_genres=16" to "Trending Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Popular Movies (2020+)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Popular TV Shows (2020+)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=213&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "Netflix Originals (New)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=8&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "Netflix Movies (New)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=49&sort_by=popularity.desc&first_air_date.gte=2020-01-01&without_genres=16" to "HBO Originals (New)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_watch_providers=384|1899&watch_region=US&sort_by=popularity.desc&primary_release_date.gte=2020-01-01&without_genres=16" to "HBO Movies (New)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=id&sort_by=popularity.desc&first_air_date.gte=2020-01-01" to "Indonesian Series (2020+)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&without_genres=16,27&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Movies (2020+)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=id&with_genres=27&without_genres=16&sort_by=popularity.desc&primary_release_date.gte=2020-01-01" to "Indonesian Horror (2020+)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Korean Dramas (2020+)",
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=zh&sort_by=popularity.desc&without_genres=16&first_air_date.gte=2020-01-01" to "Chinese Dramas (2020+)",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=28&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Action Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=878&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Sci-Fi Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=27&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Horror Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Romance Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=35&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Comedy Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=53&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Thriller Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=18&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Movies Lagi",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=12&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Adventure Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=9648&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Mystery Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=14&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Fantasy Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10752&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "War Movies",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=80&sort_by=popularity.desc&without_genres=16&primary_release_date.gte=2020-01-01" to "Crime Movies",
     )
 
     private fun getImageUrl(link: String?): String? {
@@ -194,17 +121,14 @@ open class Adicinemax21 : TmdbProvider() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val tmdbAPI = getApiBase()
-        val adultQuery = if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
+        val adultQuery =
+            if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
         
-        // Cache Buster & Timeout Diterapkan Di Sini
-        val url = "$tmdbAPI${request.data}$adultQuery&page=$page&random=${Random.nextInt()}"
-        val home = app.get(url, timeout = 10000, interceptor = wpRedisInterceptor)
+        val home = app.get("${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
-            } ?: throw ErrorLoadingException("Invalid Json reponse dari TMDB bro")
-            
+            } ?: throw ErrorLoadingException("Invalid Json reponse")
         return newHomePageResponse(request.name, home)
     }
 
@@ -222,17 +146,13 @@ open class Adicinemax21 : TmdbProvider() {
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        val tmdbAPI = getApiBase()
-        val url = "$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}&random=${Random.nextInt()}"
-        
-        return app.get(url, timeout = 10000, interceptor = wpRedisInterceptor)
+        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
             }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val tmdbAPI = getApiBase()
         val data = try {
             if (url.startsWith("https://www.themoviedb.org/")) {
                 val segments = url.removeSuffix("/").split("/")
@@ -254,18 +174,18 @@ open class Adicinemax21 : TmdbProvider() {
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         
         val resUrlId = if (type == TvType.Movie) {
-            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID&random=${Random.nextInt()}"
+            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         } else {
-            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID&random=${Random.nextInt()}"
+            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
         }
         
-        val res = app.get(resUrlId, timeout = 10000, interceptor = wpRedisInterceptor).parsedSafe<MediaDetail>()
-            ?: throw ErrorLoadingException("Invalid Json Response dari TMDB bro")
+        val res = app.get(resUrlId).parsedSafe<MediaDetail>()
+            ?: throw ErrorLoadingException("Invalid Json Response")
 
         var plot = res.overview
         if (plot.isNullOrBlank()) {
             val resUrlEn = resUrlId.replace("&language=id-ID", "&language=en-US")
-            val enRes = app.get(resUrlEn, timeout = 10000, interceptor = wpRedisInterceptor).parsedSafe<MediaDetail>()
+            val enRes = app.get(resUrlEn).parsedSafe<MediaDetail>()
             if (enRes != null && !enRes.overview.isNullOrBlank()) {
                 plot = enRes.overview
             }
@@ -289,7 +209,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         val actors = res.credits?.cast?.mapNotNull { cast ->
              ActorData(
-                Actor(
+               Actor(
                     cast.name ?: cast.originalName ?: return@mapNotNull null, 
                     getImageUrl(cast.profilePath)
                 ), roleString = cast.character
@@ -306,12 +226,12 @@ open class Adicinemax21 : TmdbProvider() {
         return if (type == TvType.TvSeries) {
             val lastSeason = res.lastEpisodeToAir?.seasonNumber
             val episodes = res.seasons?.mapNotNull { season ->
-                val seasonUrlId = "$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=id-ID&random=${Random.nextInt()}"
-                var seasonRes = app.get(seasonUrlId, timeout = 10000, interceptor = wpRedisInterceptor).parsedSafe<MediaDetailEpisodes>()
+                val seasonUrlId = "$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=id-ID"
+                var seasonRes = app.get(seasonUrlId).parsedSafe<MediaDetailEpisodes>()
                 
                 if (seasonRes?.episodes?.firstOrNull()?.overview.isNullOrBlank()) {
                     val seasonUrlEn = seasonUrlId.replace("&language=id-ID", "&language=en-US")
-                    val enSeasonRes = app.get(seasonUrlEn, timeout = 10000, interceptor = wpRedisInterceptor).parsedSafe<MediaDetailEpisodes>()
+                    val enSeasonRes = app.get(seasonUrlEn).parsedSafe<MediaDetailEpisodes>()
                     if (enSeasonRes != null) {
                         seasonRes = enSeasonRes
                     }
@@ -472,132 +392,132 @@ open class Adicinemax21 : TmdbProvider() {
     )
 
     data class Results(
-        @param:JsonProperty("results") val results: ArrayList<Media>? = arrayListOf(),
+        @JsonProperty("results") val results: ArrayList<Media>? = arrayListOf(),
     )
 
     data class Media(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
-        @param:JsonProperty("title") val title: String? = null,
-        @param:JsonProperty("original_title") val originalTitle: String? = null,
-        @param:JsonProperty("media_type") val mediaType: String? = null,
-        @param:JsonProperty("poster_path") val posterPath: String? = null,
-        @param:JsonProperty("vote_average") val voteAverage: Double? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("original_title") val originalTitle: String? = null,
+        @JsonProperty("media_type") val mediaType: String? = null,
+        @JsonProperty("poster_path") val posterPath: String? = null,
+        @JsonProperty("vote_average") val voteAverage: Double? = null,
     )
 
     data class Genres(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
     )
 
     data class Keywords(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
     )
 
     data class KeywordResults(
-        @param:JsonProperty("results") val results: ArrayList<Keywords>? = arrayListOf(),
-        @param:JsonProperty("keywords") val keywords: ArrayList<Keywords>? = arrayListOf(),
+        @JsonProperty("results") val results: ArrayList<Keywords>? = arrayListOf(),
+        @JsonProperty("keywords") val keywords: ArrayList<Keywords>? = arrayListOf(),
     )
 
     data class Seasons(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
-        @param:JsonProperty("season_number") val seasonNumber: Int? = null,
-        @param:JsonProperty("air_date") val airDate: String? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("season_number") val seasonNumber: Int? = null,
+        @JsonProperty("air_date") val airDate: String? = null,
     )
 
     data class Cast(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
-        @param:JsonProperty("original_name") val originalName: String? = null,
-        @param:JsonProperty("character") val character: String? = null,
-        @param:JsonProperty("known_for_department") val knownForDepartment: String? = null,
-        @param:JsonProperty("profile_path") val profilePath: String? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("original_name") val originalName: String? = null,
+        @JsonProperty("character") val character: String? = null,
+        @JsonProperty("known_for_department") val knownForDepartment: String? = null,
+        @JsonProperty("profile_path") val profilePath: String? = null,
     )
 
     data class Episodes(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("name") val name: String? = null,
-        @param:JsonProperty("overview") val overview: String? = null,
-        @param:JsonProperty("air_date") val airDate: String? = null,
-        @param:JsonProperty("still_path") val stillPath: String? = null,
-        @param:JsonProperty("vote_average") val voteAverage: Double? = null,
-        @param:JsonProperty("episode_number") val episodeNumber: Int? = null,
-        @param:JsonProperty("season_number") val seasonNumber: Int? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("air_date") val airDate: String? = null,
+        @JsonProperty("still_path") val stillPath: String? = null,
+        @JsonProperty("vote_average") val voteAverage: Double? = null,
+        @JsonProperty("episode_number") val episodeNumber: Int? = null,
+        @JsonProperty("season_number") val seasonNumber: Int? = null,
     )
 
     data class MediaDetailEpisodes(
-        @param:JsonProperty("episodes") val episodes: ArrayList<Episodes>? = arrayListOf(),
+        @JsonProperty("episodes") val episodes: ArrayList<Episodes>? = arrayListOf(),
     )
 
     data class Trailers(
-        @param:JsonProperty("key") val key: String? = null,
-        @param:JsonProperty("site") val site: String? = null,
-        @param:JsonProperty("type") val type: String? = null,
+        @JsonProperty("key") val key: String? = null,
+        @JsonProperty("site") val site: String? = null,
+        @JsonProperty("type") val type: String? = null,
     )
 
     data class ResultsTrailer(
-        @param:JsonProperty("results") val results: List<Trailers>? = null,
+        @JsonProperty("results") val results: List<Trailers>? = null,
     )
 
     data class AltTitles(
-        @param:JsonProperty("iso_3166_1") val iso31661: String? = null,
-        @param:JsonProperty("title") val title: String? = null,
-        @param:JsonProperty("type") val type: String? = null,
+        @JsonProperty("iso_3166_1") val iso31661: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("type") val type: String? = null,
     )
 
     data class ResultsAltTitles(
-        @param:JsonProperty("results") val results: ArrayList<AltTitles>? = arrayListOf(),
+        @JsonProperty("results") val results: ArrayList<AltTitles>? = arrayListOf(),
     )
 
     data class ExternalIds(
-        @param:JsonProperty("imdb_id") val imdbId: String? = null,
-        @param:JsonProperty("tvdb_id") val tvdbId: Int? = null,
+        @JsonProperty("imdb_id") val imdbId: String? = null,
+        @JsonProperty("tvdb_id") val tvdbId: Int? = null,
     )
 
     data class Credits(
-        @param:JsonProperty("cast") val cast: ArrayList<Cast>? = arrayListOf(),
+        @JsonProperty("cast") val cast: ArrayList<Cast>? = arrayListOf(),
     )
 
     data class ResultsRecommendations(
-        @param:JsonProperty("results") val results: ArrayList<Media>? = arrayListOf(),
+        @JsonProperty("results") val results: ArrayList<Media>? = arrayListOf(),
     )
 
     data class LastEpisodeToAir(
-        @param:JsonProperty("episode_number") val episodeNumber: Int? = null,
-        @param:JsonProperty("season_number") val seasonNumber: Int? = null,
+        @JsonProperty("episode_number") val episodeNumber: Int? = null,
+        @JsonProperty("season_number") val seasonNumber: Int? = null,
     )
 
     data class ProductionCountries(
-        @param:JsonProperty("name") val name: String? = null,
+        @JsonProperty("name") val name: String? = null,
     )
 
     data class MediaDetail(
-        @param:JsonProperty("id") val id: Int? = null,
-        @param:JsonProperty("imdb_id") val imdbId: String? = null,
-        @param:JsonProperty("title") val title: String? = null,
-        @param:JsonProperty("name") val name: String? = null,
-        @param:JsonProperty("original_title") val originalTitle: String? = null,
-        @param:JsonProperty("original_name") val originalName: String? = null,
-        @param:JsonProperty("poster_path") val posterPath: String? = null,
-        @param:JsonProperty("backdrop_path") val backdropPath: String? = null,
-        @param:JsonProperty("release_date") val releaseDate: String? = null,
-        @param:JsonProperty("first_air_date") val firstAirDate: String? = null,
-        @param:JsonProperty("overview") val overview: String? = null,
-        @param:JsonProperty("runtime") val runtime: Int? = null,
-        @param:JsonProperty("vote_average") val voteAverage: Any? = null,
-        @param:JsonProperty("original_language") val originalLanguage: String? = null,
-        @param:JsonProperty("status") val status: String? = null,
-        @param:JsonProperty("genres") val genres: ArrayList<Genres>? = arrayListOf(),
-        @param:JsonProperty("keywords") val keywords: KeywordResults? = null,
-        @param:JsonProperty("last_episode_to_air") val lastEpisodeToAir: LastEpisodeToAir? = null,
-        @param:JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf(),
-        @param:JsonProperty("videos") val videos: ResultsTrailer? = null,
-        @param:JsonProperty("external_ids") val externalIds: ExternalIds? = null,
-        @param:JsonProperty("credits") val credits: Credits? = null,
-        @param:JsonProperty("recommendations") val recommendations: ResultsRecommendations? = null,
-        @param:JsonProperty("alternative_titles") val alternativeTitles: ResultsAltTitles? = null,
-        @param:JsonProperty("production_countries") val productionCountries: ArrayList<ProductionCountries>? = arrayListOf(),
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("imdb_id") val imdbId: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("original_title") val originalTitle: String? = null,
+        @JsonProperty("original_name") val originalName: String? = null,
+        @JsonProperty("poster_path") val posterPath: String? = null,
+        @JsonProperty("backdrop_path") val backdropPath: String? = null,
+        @JsonProperty("release_date") val releaseDate: String? = null,
+        @JsonProperty("first_air_date") val firstAirDate: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("runtime") val runtime: Int? = null,
+        @JsonProperty("vote_average") val voteAverage: Any? = null,
+        @JsonProperty("original_language") val originalLanguage: String? = null,
+        @JsonProperty("status") val status: String? = null,
+        @JsonProperty("genres") val genres: ArrayList<Genres>? = arrayListOf(),
+        @JsonProperty("keywords") val keywords: KeywordResults? = null,
+        @JsonProperty("last_episode_to_air") val lastEpisodeToAir: LastEpisodeToAir? = null,
+        @JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf(),
+        @JsonProperty("videos") val videos: ResultsTrailer? = null,
+        @JsonProperty("external_ids") val externalIds: ExternalIds? = null,
+        @JsonProperty("credits") val credits: Credits? = null,
+        @JsonProperty("recommendations") val recommendations: ResultsRecommendations? = null,
+        @JsonProperty("alternative_titles") val alternativeTitles: ResultsAltTitles? = null,
+        @JsonProperty("production_countries") val productionCountries: ArrayList<ProductionCountries>? = arrayListOf(),
     )
 }
