@@ -14,6 +14,7 @@ import com.lagradost.nicehttp.RequestBodyTypes
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
@@ -30,10 +31,11 @@ import javax.crypto.spec.SecretKeySpec
 import java.security.MessageDigest
 import android.net.Uri
 import android.annotation.SuppressLint
+import java.util.UUID
 
 object Adicinemax21Extractor : Adicinemax21() {
 
-    // ================== IDLIX SOURCE (NEW UPDATED & BULLETPROOF) ==================
+    // ================== IDLIX SOURCE (REVOLUTIONARY AUTOMATION BYPASS) ==================
     suspend fun invokeIdlix(
         title: String? = null,
         year: Int? = null,
@@ -43,17 +45,32 @@ object Adicinemax21Extractor : Adicinemax21() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // KUNCI UTAMA 1: Kita paksa pakai domain baru (z1), mengabaikan variabel lama (tv10)
             val idlixApi = "https://z1.idlixku.com" 
-            
             val encodedQuery = URLEncoder.encode(title ?: return, "utf-8")
-            val searchResText = app.get("$idlixApi/api/search?q=$encodedQuery").text
+            
+            // Generate did cookie tiruan browser secara dinamis dari hulu
+            val randomDid = UUID.randomUUID().toString().replace("-", "")
+            val headers = mapOf(
+                "Referer" to "$idlixApi/",
+                "Origin" to idlixApi,
+                "Cookie" to "did=$randomDid; NEXT_LOCALE=id",
+                "Accept" to "text/html,application/xhtml+xml,application/json,text/plain,*/*",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            )
+
+            // PING UTAMA: Ketuk kontainer web film agar internal CookieJar OkHttp tersinkronisasi
+            try {
+                app.get(url = "$idlixApi/", headers = headers)
+            } catch (e: Exception) {
+                Log.e("adixtream", "Gagal melakukan pre-load cookie ping: ${e.message}")
+            }
+
+            val searchResText = app.get("$idlixApi/api/search?q=$encodedQuery", headers = headers).text
             val searchRes = tryParseJson<IdlixSearchResponse>(searchResText)
             val items = searchRes?.data ?: searchRes?.results ?: return
             
             val isSeries = season != null
 
-            // 1. Cari film/series yang cocok (Filter nama dan tipe kontennya)
             val matchedItem = items.find { 
                 val titleMatch = it.title.equals(title, true) || it.originalTitle.equals(title, true)
                 val typeMatch = if (isSeries) it.contentType?.contains("series", true) == true else it.contentType?.contains("movie", true) == true
@@ -61,86 +78,64 @@ object Adicinemax21Extractor : Adicinemax21() {
             } ?: items.firstOrNull() ?: return
 
             val slug = matchedItem.slug ?: return
-
             var contentType = "movie"
             var contentId = ""
 
-            // 2. Ambil ID unik konten dari API
             if (!isSeries) {
-                val detailResText = app.get("$idlixApi/api/movies/$slug").text
+                val detailResText = app.get("$idlixApi/api/movies/$slug", headers = headers).text
                 val detailRes = tryParseJson<IdlixDetailResponse>(detailResText)
                 contentId = detailRes?.id ?: slug
             } else {
                 contentType = "episode"
-                val seasonResText = app.get("$idlixApi/api/series/$slug/season/$season").text
+                val seasonResText = app.get("$idlixApi/api/series/$slug/season/$season", headers = headers).text
                 val seasonRes = tryParseJson<IdlixSeasonApiResponse>(seasonResText)
                 val ep = seasonRes?.season?.episodes?.find { it.episodeNumber == episode }
                 contentId = ep?.id ?: return
             }
 
-            // KUNCI UTAMA 2: Ubah payload menjadi RequestBody murni agar tidak gagal di Cloudstream
-            val challengeBody = mapOf("contentType" to contentType, "contentId" to contentId).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-            
-            // 3. Minta Tantangan (Challenge) Keamanan
-            val challengeResText = app.post(
-                url = "$idlixApi/api/watch/challenge",
-                requestBody = challengeBody,
-                headers = mapOf("Origin" to idlixApi, "Content-Type" to "application/json", "Accept" to "application/json, text/plain, */*", "Referer" to "$idlixApi/")
+            // TAHAP 1 HANDSHAKE: Mengambil gateToken dengan kuki did terikat aman
+            val playInfoResText = app.get(
+                url = "$idlixApi/api/watch/play-info/$contentType/$contentId",
+                headers = headers
             ).text
-            val challengeRes = tryParseJson<ChallengeResponse>(challengeResText)
+            val playInfoRes = parseJson<NewPlayInfoResponse>(playInfoResText)
+            val gateToken = playInfoRes.gateToken ?: return
 
-            val challenge = challengeRes?.challenge ?: return
-            val signature = challengeRes.signature ?: return
-            val difficulty = challengeRes.difficulty ?: 3
+            // TAHAP 2 BYPASS TIME-LOCK: Hitung hitung mundur proteksi iklan dinamis server
+            val serverNow = playInfoRes.serverNow ?: 0L
+            val unlockAt = playInfoRes.unlockAt ?: 0L
+            val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
+            
+            val diffTimeMs = unlockAt - serverNow
+            val baseWaitMs = countdownSec * 1000L
+            val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
+            
+            delay(finalWaitMs)
 
-            // 4. Tambang Nonce (Solve SHA-256 PoW)
-            val nonce = mineNonce(challenge, difficulty) ?: return
-
-            val solveBody = mapOf("challenge" to challenge, "signature" to signature, "nonce" to nonce).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-
-            // 5. Kirim Jawaban dan Dapatkan Embed URL
-            val solveResText = app.post(
-                url = "$idlixApi/api/watch/solve",
-                requestBody = solveBody,
-                headers = mapOf("Origin" to idlixApi, "Content-Type" to "application/json", "Accept" to "application/json, text/plain, */*", "Referer" to "$idlixApi/")
+            // TAHAP 3 HANDSHAKE: Tukar gateToken menjadi string claim yang sah
+            val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
+            val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
+            
+            val claimResText = app.post(
+                url = "$idlixApi/api/watch/session/claim",
+                headers = headers,
+                requestBody = requestBodyData
             ).text
-            val solveRes = tryParseJson<SolveResponse>(solveResText)
+            
+            val claimParsed = parseJson<NewSessionClaimResponse>(claimResText)
+            val claim = claimParsed.claim ?: return
 
-            val embedPath = solveRes?.embedUrl ?: return
-            val fullEmbedUrl = if (embedPath.startsWith("/")) "$idlixApi$embedPath" else embedPath
+            // TAHAP 4 COMPASS PASS: Direct Instantiation memanggil kelas Majorplay melewati saringan global registry
+            val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
+            Majorplay().getUrl(fakeUrl, "$idlixApi/", subtitleCallback, callback)
 
-            // 6. 🔥 GUNAKAN WEBVIEW RESOLVER UNTUK MENEMBUS CLOUDFLARE DI EMBED
-            val playerRegex = """((?:majorplay\.net|jeniusplay\.com)/(?:embed|video|player)/[a-zA-Z0-9]+)""".toRegex()
-            
-            val embedResponse = app.get(
-                fullEmbedUrl, 
-                headers = mapOf("Referer" to "$idlixApi/"),
-                interceptor = WebViewResolver(playerRegex)
-            )
-            
-            val finalUrl = embedResponse.url
-            
-            // Panggil Majorplay
-            if (finalUrl.contains("majorplay.net") || finalUrl.contains("jeniusplay.com")) {
-                Majorplay().getUrl(finalUrl, fullEmbedUrl, subtitleCallback, callback)
-            } else {
-                // Fallback kalau pakai iframe biasa
-                var iframeSrc = embedResponse.document.selectFirst("iframe")?.attr("src")
-                if (!iframeSrc.isNullOrEmpty()) {
-                    if (iframeSrc.startsWith("//")) iframeSrc = "https:$iframeSrc"
-                    if (iframeSrc.contains("majorplay.net") || iframeSrc.contains("jeniusplay.com")) {
-                        Majorplay().getUrl(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                    } else {
-                        loadExtractor(iframeSrc, fullEmbedUrl, subtitleCallback, callback)
-                    }
-                }
-            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun mineNonce(challenge: String, difficulty: Int): Int? {
+    private fun mineNonce(challenge: String, difficulty: Int): Int?
+    {
         val md = MessageDigest.getInstance("SHA-256")
         for (nonce in 0..2000000) {
             val text = challenge + nonce
@@ -292,7 +287,8 @@ object Adicinemax21Extractor : Adicinemax21() {
         val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return
         val matchedMedia = items.find { item ->
             val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-            (item.title.equals(title, true)) || (item.title?.contains(title, true) == true && itemYear == year)
+            (item.title.equals(title, true)) ||
+            (item.title?.contains(title, true) == true && itemYear == year)
         } ?: return
         val subjectId = matchedMedia.subjectId ?: return
         val detailPath = matchedMedia.detailPath
@@ -321,7 +317,7 @@ object Adicinemax21Extractor : Adicinemax21() {
     suspend fun invokeGomovies(
         title: String? = null, year: Int? = null, season: Int? = null, episode: Int? = null, callback: (ExtractorLink) -> Unit,
     ) {
-        invokeGpress(title, year, season, episode, callback, Adicinemax21.gomoviesAPI, "Gomovies", base64Decode("X3NtUWFtQlFzRVRi"), base64Decode("X3NCV2NxYlRCTWFU"))
+        invokeGpress(title, year, season, episode, callback, Adicinemax21.gomoviesAPI, "Gomovies", base64Decode("X3SmUWFtQlFzRVRi"), base64Decode("X3NCV2NxYlRCTWFU"))
     }
     private suspend fun invokeGpress(
         title: String? = null, year: Int? = null, season: Int? = null, episode: Int? = null,
@@ -355,7 +351,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
     }
 
-    // ================== VIDSRCCC SOURCE ==================
+    // ================== VIDSRC_CC SOURCE ==================
     suspend fun invokeVidsrccc(
         tmdbId: Int?, imdbId: String?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
@@ -492,7 +488,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         val res = app.get(url).document.selectFirst("script:containsData(window.masterPlaylist)")?.data() ?: return
         val video1 = Regex("""'token':\s*'(\w+)'[\S\s]+'expires':\s*'(\w+)'[\S\s]+url:\s*'(\S+)'""").find(res)?.let {
                     val (token, expires, path) = it.destructured
-                "$path?token=$token&expires=$expires&h=1&lang=en"
+                    "$path?token=$token&expires=$expires&h=1&lang=en"
                 } ?: return
         val video2 = "$proxy/p/${base64Encode("$proxy/api/proxy/m3u8?url=${encode(video1)}&source=sakura|ananananananananaBatman!".toByteArray())}"
         listOf(VixsrcSource("Vixsrc [Alpha]", video1, url), VixsrcSource("Vixsrc [Beta]", video2, "${Adicinemax21.mappleAPI}/")).map {
@@ -545,7 +541,7 @@ object Adicinemax21Extractor : Adicinemax21() {
             subtitleCallback.invoke(newSubtitleFile(subtitle.label?.replace(Regex("\\d"), "")?.replace(Regex("\\s+Hi"), "")?.trim() ?: return@map, subtitle.file ?: return@map))
         }
     }
-        // ================== CINEMAOS SOURCE ==================
+    // ================== CINEMAOS SOURCE ==================
     suspend fun invokeCinemaOS(
         imdbId: String? = null, tmdbId: Int? = null, title: String? = null, season: Int? = null, episode: Int? = null, year: Int? = null,
         callback: (ExtractorLink) -> Unit, subtitleCallback: (SubtitleFile) -> Unit,
@@ -626,7 +622,6 @@ object Adicinemax21Extractor : Adicinemax21() {
         val apiUrl = "https://api3.aoneroom.com"
         val (brand, model) = Adimoviebox2Helper.randomBrandModel()
 
-        // 1. Search
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$title"}"""
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -641,8 +636,6 @@ object Adicinemax21Extractor : Adicinemax21() {
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
-        
-        // 2. Fetch Detail to get Languages/Dubs
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
@@ -670,7 +663,6 @@ object Adicinemax21Extractor : Adicinemax21() {
         val s = season ?: 0
         val e = episode ?: 0
 
-        // 3. Loop through all language versions
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
             val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
@@ -686,19 +678,17 @@ object Adicinemax21Extractor : Adicinemax21() {
 
                 val sourceName = "Adimoviebox2 ($languageName)"
                 callback.invoke(newExtractorLink(sourceName, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
-                    this.quality = quality; this.headers = baseHeaders
+                    this.quality = quality;
+                    this.headers = baseHeaders
                 })
 
                 if (stream.id != null) {
-                    // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
                         val lang = cap.language ?: cap.lanName ?: cap.lan ?: "Unknown"
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
-                    
-                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -738,7 +728,6 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
         
         private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
-        
         private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" }
         
         @SuppressLint("UseKtx")
