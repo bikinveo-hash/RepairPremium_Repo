@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -226,7 +227,6 @@ class IdlixProvider : MainAPI() {
             val seasonNamesList = mutableListOf<SeasonData>()
             val totalSeasons = response.numberOfSeasons ?: 1 
             
-            // MENGGUNAKAN COROUTINES STANDAR KOTLIN UNTUK PROSES PARALEL (Bebas Error Deprecated)
             coroutineScope {
                 (1..totalSeasons).map { seasonNum ->
                     async {
@@ -264,7 +264,7 @@ class IdlixProvider : MainAPI() {
                             Log.e("adixtream", "Error season $seasonNum: ${e.message}")
                         }
                     }
-                }.awaitAll() // Tunggu semua proses asinkronus selesai
+                }.awaitAll()
             }
 
             episodes.sortBy { it.episode }
@@ -331,7 +331,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // 1. Ambil Gate Token
+            // 1. Ambil Gate Token (Gerbang Keamanan)
             val playInfo = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -339,13 +339,27 @@ class IdlixProvider : MainAPI() {
 
             val token = playInfo.gateToken ?: playInfo.claim ?: return false
 
-            // 2. Tukar menjadi Claim Token
+            // 2. Kalkulasi Jeda Waktu & Tukar Token
             val finalClaim = if (playInfo.kind == "gate" && !playInfo.gateToken.isNullOrEmpty()) {
+                
+                // Mencegah error "Tautan tidak ditemukan" dengan memastikan kita menunggu gerbang terbuka
+                val serverNow = playInfo.serverNow ?: System.currentTimeMillis()
+                val unlockAt = playInfo.unlockAt ?: serverNow
+                val waitTime = unlockAt - serverNow
+                
+                if (waitTime in 1..25000) { 
+                    delay(waitTime + 500L) // Jeda aman
+                } else if (waitTime > 25000) {
+                    delay(15000L) // Fallback limit maksimal
+                }
+
+                // Setelah jeda, baru kita kirim permintaan claim token
                 val sessionRes = app.post(
                     url = "$mainUrl/api/watch/session/claim",
                     headers = headers,
-                    json = mapOf("gateToken" to playInfo.gateToken)
+                    json = mapOf("gateToken" to token)
                 ).parsedSafe<SessionClaimResponse>()
+                
                 sessionRes?.claim
             } else {
                 playInfo.claim
