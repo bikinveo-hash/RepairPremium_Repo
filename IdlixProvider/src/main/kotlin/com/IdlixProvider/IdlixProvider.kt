@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson // WAJIB DIREK: Guna memicu pemanggilan ekpansi .toJson()
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -294,9 +295,6 @@ class IdlixProvider : MainAPI() {
         }
     }
 
-    // =========================================================================
-    // IMPLEMENTASI TETAP PATUH KEPADA SIGNATURE MAINAPI
-    // =========================================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -334,7 +332,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // 1. Jemput gateToken untuk membuka pos keamanan pertama
+            // 1. Ambil gateToken dari play-info
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -342,7 +340,7 @@ class IdlixProvider : MainAPI() {
 
             val gateToken = playInfoRes.gateToken ?: return false
             
-            // 2. BYPASS PROTEKSI GERBANG WAKTU IKLAN (TIME-LOCK)
+            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -353,7 +351,7 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Kirim gateToken secara sah lewat penengah OkHttp RequestBody
+            // 3. Handshake Tahap 2: Konversi payload Map memakai extension .toJson() yang sah
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
@@ -366,7 +364,7 @@ class IdlixProvider : MainAPI() {
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Integrasikan token claim ke dalam alamat virtual menuju pengekstrak Majorplay
+            // 4. Kirim token claim sah ke Majorplay Extractor
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
