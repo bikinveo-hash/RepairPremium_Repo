@@ -2,9 +2,9 @@ package com.IdlixProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.cloudstream3.* 
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson 
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -39,7 +39,7 @@ class Majorplay : ExtractorApi() {
 
         val masterConfigUrl = response.url ?: return
         
-        // Pemuatan file subtitle resmi bawaan web secara tradisional
+        // Parsing berkas subtitle bawaan menggunakan standard loop
         val subtitles = response.subtitles
         if (subtitles != null) {
             for (sub in subtitles) {
@@ -51,9 +51,10 @@ class Majorplay : ExtractorApi() {
             }
         }
         
-        // TRIK FINISH: Menambahkan &.m3u8 di akhir agar lolos dari penyaringan Cloudstream
+        // Trik ekstensi palsu untuk memuaskan filter Cloudstream core
         val finalPlayableUrl = "$masterConfigUrl&.m3u8"
         
+        // FIX BERDASARKAN BLUEPRINT EXTRACTOR-LINK: Mengisi properti quality secara manual
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -63,6 +64,7 @@ class Majorplay : ExtractorApi() {
             ) {
                 this.headers = safeHeaders
                 this.referer = "https://z1.idlixku.com/"
+                this.quality = Qualities.Unknown.value // Mencegah Cloudstream membuang paket link akibat uninitialized value
             }
         )
     }
