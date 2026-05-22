@@ -31,15 +31,16 @@ class Majorplay : ExtractorApi() {
         val textMediaType = "text/plain".toMediaTypeOrNull()
         val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
 
-        val response = app.post(
+        val responseText = app.post(
             url = "$mainUrl/api/play",
             headers = safeHeaders.plus("Content-Type" to "text/plain"),
             requestBody = requestBodyData
-        ).parsedSafe<NewMajorplayResponse>() ?: return
+        ).text
+        val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
 
         val masterConfigUrl = response.url ?: return
         
-        // Pemuatan data file subtitle bawaan resmi
+        // Pemuatan file subtitle resmi bawaan web secara loop tradisional
         val subtitles = response.subtitles
         if (subtitles != null) {
             for (sub in subtitles) {
