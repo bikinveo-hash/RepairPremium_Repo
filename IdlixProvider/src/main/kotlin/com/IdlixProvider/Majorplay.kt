@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class Majorplay : ExtractorApi() {
     override var name = "Majorplay"
@@ -23,15 +25,17 @@ class Majorplay : ExtractorApi() {
         val safeHeaders = mapOf(
             "Origin" to "https://z1.idlixku.com",
             "Referer" to "https://z1.idlixku.com/",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-            "Content-Type" to "text/plain" // WAJIB ada agar dikenali sebagai fetch normal
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
         )
+
+        // Membuat RequestBody bertipe text/plain sesuai standar request asli web-nya
+        val reqBody = "{\"claim\":\"$claimToken\"}".toRequestBody("text/plain; charset=utf-8".toMediaTypeOrNull())
 
         // LANGKAH 1: Validasi API Play & Ambil Subtitle
         val playRes = app.post(
             url = "$mainUrl/api/play",
             headers = safeHeaders,
-            data = "{\"claim\":\"$claimToken\"}" // Paksa kirim string JSON
+            requestBody = reqBody
         ).parsedSafe<NewMajorplayResponse>() ?: return
 
         // Injeksi semua subtitle langsung ke player
