@@ -21,7 +21,7 @@ class Majorplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit, 
         callback: (ExtractorLink) -> Unit
     ) {
-        // Mengambil Claim Token dari URL yang dihasilkan oleh Adicinemax21Extractor
+        // Ekstrak claim token dari URL palsu yang dibuat di invokeIdlix
         val claimToken = url.substringAfter("claim=").substringBefore("&")
         if (claimToken.isEmpty()) return
 
@@ -32,10 +32,10 @@ class Majorplay : ExtractorApi() {
         )
 
         try {
+            // Menggunakan RequestBody bertipe text/plain sesuai protokol Majorplay terbaru
             val textMediaType = "text/plain".toMediaTypeOrNull()
             val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
 
-            // POST claim token ke API Majorplay sesuai IdlixProvider baru
             val responseText = app.post(
                 url = "$mainUrl/api/play",
                 headers = safeHeaders.plus("Content-Type" to "text/plain"),
@@ -45,16 +45,16 @@ class Majorplay : ExtractorApi() {
             val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
             val masterConfigUrl = response.url ?: return
             
-            // Ekstraksi subtitle resmi
+            // Perbaikan error 'newSubtitleFile': Menggunakan constructor SubtitleFile secara langsung
             response.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
                 subtitleCallback.invoke(
-                    newSubtitleFile(lang, subUrl)
+                    SubtitleFile(lang, subUrl)
                 )
             }
 
-            // Menambahkan suffix .m3u8 agar dikenali oleh core engine Cloudstream sebagai manifest HLS
+            // Menambahkan suffix .m3u8 agar dideteksi sebagai manifest HLS oleh Cloudstream Core
             val finalPlayableUrl = "$masterConfigUrl&.m3u8"
             
             callback.invoke(
@@ -83,8 +83,8 @@ class Majorplay : ExtractorApi() {
     
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorSubtitle(
-        @JsonProperty("lang") val lang: String? = null,
-        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("lang") val lang: String? = null, 
+        @JsonProperty("label") val label: String? = null, 
         @JsonProperty("path") val path: String? = null
     )
 }
