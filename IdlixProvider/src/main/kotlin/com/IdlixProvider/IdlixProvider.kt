@@ -332,13 +332,11 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            // =========================================================================
-            // SOLUSI KRUSIAL KEMENANGAN: PING CONTAINER UTAMA UNTUK MENANAMKAN COOKIE
-            // =========================================================================
+            // Mengetuk halaman referer film utama agar Cookie Jar NiceHTTP terisi
             try {
                 app.get(url = refererUrl, headers = headers)
             } catch (e: Exception) {
-                Log.e("adixtream", "Gagal menginisialisasi session cookie: ${e.message}")
+                Log.e("adixtream", "Gagal sync session cookie: ${e.message}")
             }
 
             // 1. Ambil gateToken dari play-info
@@ -360,7 +358,7 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Menukarkan gateToken dengan Cookie Session menetap
+            // 3. Handshake Tahap 2: Menukarkan gateToken dengan Payload JSON
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
@@ -373,9 +371,9 @@ class IdlixProvider : MainAPI() {
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Kirim token claim sah ke Majorplay Extractor
+            // 4. FIX MUTLAK WORKAROUND: Memanggil Extractor secara langsung bypass global lookup registry
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
-            loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
+            Majorplay().getUrl(fakeUrl, refererUrl, subtitleCallback, callback)
             
             return true
         } catch (e: Exception) {
