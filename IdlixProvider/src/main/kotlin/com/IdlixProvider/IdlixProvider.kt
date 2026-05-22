@@ -6,6 +6,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -223,41 +226,45 @@ class IdlixProvider : MainAPI() {
             val seasonNamesList = mutableListOf<SeasonData>()
             val totalSeasons = response.numberOfSeasons ?: 1 
             
-            // Proses season secara paralel agar tidak lambat, toList() ditambahkan untuk menghindari error
-            (1..totalSeasons).toList().apmap { seasonNum ->
-                val seasonApiUrl = "$mainUrl/api/series/$slug/season/$seasonNum"
-                try {
-                    val seasonResText = app.get(seasonApiUrl).text
-                    val parsedSeason = AppUtils.parseJson<IdlixSeasonApiResponse>(seasonResText)
-                    val epList = parsedSeason.season?.episodes
-                    
-                    if (!epList.isNullOrEmpty()) {
-                        synchronized(seasonNamesList) {
-                            seasonNamesList.add(SeasonData(seasonNum, "Season $seasonNum"))
-                        }
-                        epList.forEach { ep ->
-                            if (ep.hasVideo == true) {
-                                val epId = ep.id ?: return@forEach
-                                val still = ep.stillPath
-                                val epPoster = if (still.isNullOrEmpty() || still == "null") null else "https://image.tmdb.org/t/p/w500$still"
-                                val loadData = "episode|$epId|$url"
+            // MENGGUNAKAN COROUTINES STANDAR KOTLIN UNTUK PROSES PARALEL (Bebas Error Deprecated)
+            coroutineScope {
+                (1..totalSeasons).map { seasonNum ->
+                    async {
+                        val seasonApiUrl = "$mainUrl/api/series/$slug/season/$seasonNum"
+                        try {
+                            val seasonResText = app.get(seasonApiUrl).text
+                            val parsedSeason = AppUtils.parseJson<IdlixSeasonApiResponse>(seasonResText)
+                            val epList = parsedSeason.season?.episodes
                             
-                                val episodeObj = newEpisode(loadData) {
-                                    this.name = ep.name
-                                    this.season = seasonNum
-                                    this.episode = ep.episodeNumber
-                                    this.posterUrl = epPoster
-                                    this.description = ep.overview
+                            if (!epList.isNullOrEmpty()) {
+                                synchronized(seasonNamesList) {
+                                    seasonNamesList.add(SeasonData(seasonNum, "Season $seasonNum"))
                                 }
-                                synchronized(episodes) {
-                                    episodes.add(episodeObj)
+                                epList.forEach { ep ->
+                                    if (ep.hasVideo == true) {
+                                        val epId = ep.id ?: return@forEach
+                                        val still = ep.stillPath
+                                        val epPoster = if (still.isNullOrEmpty() || still == "null") null else "https://image.tmdb.org/t/p/w500$still"
+                                        val loadData = "episode|$epId|$url"
+                                    
+                                        val episodeObj = newEpisode(loadData) {
+                                            this.name = ep.name
+                                            this.season = seasonNum
+                                            this.episode = ep.episodeNumber
+                                            this.posterUrl = epPoster
+                                            this.description = ep.overview
+                                        }
+                                        synchronized(episodes) {
+                                            episodes.add(episodeObj)
+                                        }
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            Log.e("adixtream", "Error season $seasonNum: ${e.message}")
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e("adixtream", "Error season $seasonNum: ${e.message}")
-                }
+                }.awaitAll() // Tunggu semua proses asinkronus selesai
             }
 
             episodes.sortBy { it.episode }
