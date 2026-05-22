@@ -51,7 +51,7 @@ class Majorplay : ExtractorApi() {
             }
         }
         
-        // Trik parameter m3u8 palsu agar lolos sensor filter Cloudstream core
+        // Trik parameter m3u8 palsu agar lolos dari saringan ketat Cloudstream core
         val finalPlayableUrl = "$masterConfigUrl&.m3u8"
         
         // Daftarkan link ke callback, pastikan nilai quality terdefinisi penuh
@@ -64,7 +64,7 @@ class Majorplay : ExtractorApi() {
             ) {
                 this.headers = safeHeaders
                 this.referer = "https://z1.idlixku.com/"
-                this.quality = Qualities.Unknown.value // Wajib diinisialisasi agar core tidak membuang link
+                this.quality = Qualities.Unknown.value // Wajib diinisialisasi agar core tidak menyaring link keluar
             }
         )
     }
