@@ -33,7 +33,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
     override val hasMainPage = true
-    override var lang = "id"
+    override var lang = "en"
     override val instantLinkLoading = true
     override val useMetaLoadResponse = true
     override val hasQuickSearch = true
@@ -146,7 +146,7 @@ open class Adicinemax21 : TmdbProvider() {
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=id-ID&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
+        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=en-US&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
             }
@@ -173,23 +173,16 @@ open class Adicinemax21 : TmdbProvider() {
         val type = getType(data.type)
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         
-        val resUrlId = if (type == TvType.Movie) {
-            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
+        val resUrlEn = if (type == TvType.Movie) {
+            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en&language=en-US"
         } else {
-            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en,id&language=id-ID"
+            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append&include_video_language=en&language=en-US"
         }
         
-        val res = app.get(resUrlId).parsedSafe<MediaDetail>()
+        val res = app.get(resUrlEn).parsedSafe<MediaDetail>()
             ?: throw ErrorLoadingException("Invalid Json Response")
 
-        var plot = res.overview
-        if (plot.isNullOrBlank()) {
-            val resUrlEn = resUrlId.replace("&language=id-ID", "&language=en-US")
-            val enRes = app.get(resUrlEn).parsedSafe<MediaDetail>()
-            if (enRes != null && !enRes.overview.isNullOrBlank()) {
-                plot = enRes.overview
-            }
-        }
+        val plot = res.overview
 
         val title = res.title ?: res.name ?: return null
         val poster = getOriImageUrl(res.posterPath)
@@ -209,7 +202,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         val actors = res.credits?.cast?.mapNotNull { cast ->
              ActorData(
-               Actor(
+                Actor(
                     cast.name ?: cast.originalName ?: return@mapNotNull null, 
                     getImageUrl(cast.profilePath)
                 ), roleString = cast.character
@@ -226,16 +219,8 @@ open class Adicinemax21 : TmdbProvider() {
         return if (type == TvType.TvSeries) {
             val lastSeason = res.lastEpisodeToAir?.seasonNumber
             val episodes = res.seasons?.mapNotNull { season ->
-                val seasonUrlId = "$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=id-ID"
-                var seasonRes = app.get(seasonUrlId).parsedSafe<MediaDetailEpisodes>()
-                
-                if (seasonRes?.episodes?.firstOrNull()?.overview.isNullOrBlank()) {
-                    val seasonUrlEn = seasonUrlId.replace("&language=id-ID", "&language=en-US")
-                    val enSeasonRes = app.get(seasonUrlEn).parsedSafe<MediaDetailEpisodes>()
-                    if (enSeasonRes != null) {
-                        seasonRes = enSeasonRes
-                    }
-                }
+                val seasonUrlEn = "$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=en-US"
+                val seasonRes = app.get(seasonUrlEn).parsedSafe<MediaDetailEpisodes>()
 
                 seasonRes?.episodes?.map { eps ->
                     newEpisode(
