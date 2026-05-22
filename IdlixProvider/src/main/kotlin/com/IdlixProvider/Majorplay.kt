@@ -25,20 +25,23 @@ class Majorplay : ExtractorApi() {
         val safeHeaders = mapOf(
             "Origin" to "https://z1.idlixku.com",
             "Referer" to "https://z1.idlixku.com/",
+            "Accept" to "*/*",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
         )
 
-        // Membuat RequestBody bertipe text/plain sesuai standar request asli web-nya
+        // Ubah string JSON menjadi RequestBody bertipe text/plain sesuai sistem webnya
         val reqBody = "{\"claim\":\"$claimToken\"}".toRequestBody("text/plain; charset=utf-8".toMediaTypeOrNull())
 
-        // LANGKAH 1: Validasi API Play & Ambil Subtitle
-        val playRes = app.post(
+        // Gunakan .text dan tryParseJson untuk menghindari error parsing yang ditelan secara diam-diam
+        val playResText = app.post(
             url = "$mainUrl/api/play",
             headers = safeHeaders,
             requestBody = reqBody
-        ).parsedSafe<NewMajorplayResponse>() ?: return
+        ).text
 
-        // Injeksi semua subtitle langsung ke player
+        val playRes = AppUtils.tryParseJson<NewMajorplayResponse>(playResText) ?: return
+
+        // Ekstrak semua file subtitle dan berikan ke callback
         playRes.subtitles?.forEach { sub ->
             val lang = sub.label ?: sub.lang ?: "Unknown"
             val subUrl = sub.path ?: return@forEach
@@ -47,32 +50,19 @@ class Majorplay : ExtractorApi() {
 
         val configUrl = playRes.url ?: return
         
-        // LANGKAH 2: Tarik file M3U8 Master Playlist (yang disamarkan sebagai file JSON)
-        val playlistContent = app.get(configUrl, headers = safeHeaders).text
-        
-        // LANGKAH 3: Parsing HLS secara manual
-        val lines = playlistContent.split("\n")
-        
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
-                val finalUrl = if (trimmed.startsWith("http")) trimmed else {
-                    // Karena URL di dalam m3u8 relatif (/v/z6/...), gabungkan dengan host utama
-                    "$mainUrl$trimmed"
-                }
-                
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "Majorplay Premium",
-                        url = "$finalUrl&.m3u8", // Trik bypass ekstensi
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.headers = safeHeaders
-                    }
-                )
+        // Memastikan Cloudstream mengenalinya sebagai format streaming tanpa gagal di ExoPlayer
+        val streamUrl = if (configUrl.contains(".m3u8")) configUrl else "$configUrl&ext=.m3u8"
+
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = "Majorplay Premium",
+                url = streamUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.headers = safeHeaders
             }
-        }
+        )
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
