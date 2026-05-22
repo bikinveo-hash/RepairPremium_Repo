@@ -81,7 +81,6 @@ class IdlixProvider : MainAPI() {
                                 newTvSeriesSearchResponse(displayTitle, href, TvType.TvSeries) {
                                     this.posterUrl = posterUrl
                                     this.quality = getQualityFromString(content.quality ?: "")
-                                    this.score = Score.from10(content.voteAverage)
                                 }
                             )
                         } else {
@@ -89,7 +88,6 @@ class IdlixProvider : MainAPI() {
                                 newMovieSearchResponse(displayTitle, href, TvType.Movie) {
                                     this.posterUrl = posterUrl
                                     this.quality = getQualityFromString(content.quality ?: "")
-                                    this.score = Score.from10(content.voteAverage)
                                 }
                             )
                         }
@@ -132,7 +130,6 @@ class IdlixProvider : MainAPI() {
                             newTvSeriesSearchResponse(displayTitle, href, TvType.TvSeries) {
                                 this.posterUrl = posterUrl
                                 this.quality = getQualityFromString(item.quality ?: "")
-                                this.score = Score.from10(item.voteAverage)
                             }
                         )
                     } else {
@@ -140,7 +137,6 @@ class IdlixProvider : MainAPI() {
                             newMovieSearchResponse(displayTitle, href, TvType.Movie) {
                                 this.posterUrl = posterUrl
                                 this.quality = getQualityFromString(item.quality ?: "")
-                                this.score = Score.from10(item.voteAverage)
                             }
                         )
                     }
@@ -169,7 +165,7 @@ class IdlixProvider : MainAPI() {
                 
                 val typeRaw = item.contentType ?: ""
                 val isSeries = typeRaw.contains("series", true)
-            
+                
                 val displayTitle = formatTitle(rawTitle, item.numberOfSeasons)
                 val href = "$mainUrl/${if (isSeries) "series" else "movie"}/$slug"
                 val posterPath = item.posterPath
@@ -181,7 +177,6 @@ class IdlixProvider : MainAPI() {
                         newTvSeriesSearchResponse(displayTitle, href, TvType.TvSeries) {
                             this.posterUrl = posterUrl
                             this.quality = getQualityFromString(item.quality ?: "")
-                            this.score = Score.from10(item.voteAverage)
                         }
                     )
                 } else {
@@ -189,7 +184,6 @@ class IdlixProvider : MainAPI() {
                         newMovieSearchResponse(displayTitle, href, TvType.Movie) {
                             this.posterUrl = posterUrl
                             this.quality = getQualityFromString(item.quality ?: "")
-                            this.score = Score.from10(item.voteAverage)
                         }
                     )
                 }
@@ -214,7 +208,6 @@ class IdlixProvider : MainAPI() {
         val plot = response.overview
         val year = (response.releaseDate ?: response.firstAirDate)?.split("-")?.firstOrNull()?.toIntOrNull()
         
-        val ratingStr = response.voteAverage?.toFloatOrNull()?.times(10)?.toInt()?.toString()
         val trailer = response.trailerUrl
         val tags = response.genres?.mapNotNull { it.name }
         
@@ -230,7 +223,8 @@ class IdlixProvider : MainAPI() {
             val seasonNamesList = mutableListOf<SeasonData>()
             val totalSeasons = response.numberOfSeasons ?: 1 
             
-            for (seasonNum in 1..totalSeasons) {
+            // Proses season secara paralel agar tidak lambat
+            (1..totalSeasons).apmap { seasonNum ->
                 val seasonApiUrl = "$mainUrl/api/series/$slug/season/$seasonNum"
                 try {
                     val seasonResText = app.get(seasonApiUrl).text
@@ -238,7 +232,9 @@ class IdlixProvider : MainAPI() {
                     val epList = parsedSeason.season?.episodes
                     
                     if (!epList.isNullOrEmpty()) {
-                        seasonNamesList.add(SeasonData(seasonNum, "Season $seasonNum"))
+                        synchronized(seasonNamesList) {
+                            seasonNamesList.add(SeasonData(seasonNum, "Season $seasonNum"))
+                        }
                         epList.forEach { ep ->
                             if (ep.hasVideo == true) {
                                 val epId = ep.id ?: return@forEach
@@ -246,20 +242,28 @@ class IdlixProvider : MainAPI() {
                                 val epPoster = if (still.isNullOrEmpty() || still == "null") null else "https://image.tmdb.org/t/p/w500$still"
                                 val loadData = "episode|$epId|$url"
                             
-                                episodes.add(newEpisode(loadData) {
+                                val episodeObj = newEpisode(loadData) {
                                     this.name = ep.name
                                     this.season = seasonNum
                                     this.episode = ep.episodeNumber
                                     this.posterUrl = epPoster
                                     this.description = ep.overview
-                                })
+                                }
+                                synchronized(episodes) {
+                                    episodes.add(episodeObj)
+                                }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("adixtream", "Error: ${e.message}")
+                    Log.e("adixtream", "Error season $seasonNum: ${e.message}")
                 }
             }
+
+            // Urutkan episode setelah apmap selesai
+            episodes.sortBy { it.episode }
+            episodes.sortBy { it.season }
+            seasonNamesList.sortBy { it.season }
 
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
@@ -267,7 +271,6 @@ class IdlixProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                this.score = Score.from10(ratingStr)
                 addSeasonNames(seasonNamesList) 
                 if (actors != null) addActors(actors)
                 addTrailer(trailer)
@@ -282,7 +285,6 @@ class IdlixProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                this.score = Score.from10(ratingStr)
                 if (actors != null) addActors(actors)
                 addTrailer(trailer)
             }
@@ -300,23 +302,19 @@ class IdlixProvider : MainAPI() {
             var contentId = data
             var refererUrl = "$mainUrl/"
 
-            // Sistem Fallback: Mengecek apakah 'data' berupa format "tipe|id|url" atau hanya URL mentah karena Cache
+            // Sistem Fallback
             if (data.contains("|")) {
                 val parts = data.split("|")
-                val rawContentType = parts.getOrNull(0) ?: "movie"
-                contentType = rawContentType.substringAfterLast("/")
+                contentType = parts.getOrNull(0)?.substringAfterLast("/") ?: "movie"
                 contentId = parts.getOrNull(1) ?: data 
                 refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
             } else if (data.startsWith("http")) {
-                // Jika aplikasi mengirimkan URL mentah (sering terjadi jika movie dibuka dari Cache)
                 refererUrl = data
                 val isSeries = data.contains("/series/")
                 val slug = data.split("/").last()
                 val apiUrl = "$mainUrl/api/${if (isSeries) "series" else "movies"}/$slug"
                 
-                val responseText = app.get(apiUrl).text
-                val detail = AppUtils.parseJson<IdlixDetailResponse>(responseText)
-                
+                val detail = app.get(apiUrl).parsedSafe<IdlixDetailResponse>() ?: return false
                 contentId = detail.id ?: slug
                 contentType = if (isSeries) "episode" else "movie"
             }
@@ -324,23 +322,40 @@ class IdlixProvider : MainAPI() {
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
-                "Accept" to "application/json, text/plain, */*",
+                "Accept" to "application/json",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // Meminta token claim dari endpoint play-info terbaru
-            val playInfoRes = app.get(
+            // LANGKAH 1: Ambil play-info (Gerbang)
+            val playInfo = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
             ).parsedSafe<PlayInfoResponse>() ?: return false
 
-            val claim = playInfoRes.claim ?: return false
+            val token = playInfo.gateToken ?: playInfo.claim ?: return false
+
+            // Jika server menolak token secara instan, kamu bisa mengaktifkan delay ini
+            // val waitTime = (playInfo.unlockAt ?: 0L) - (playInfo.serverNow ?: 0L)
+            // if (waitTime > 0) kotlinx.coroutines.delay(waitTime) 
+
+            // LANGKAH 2: Tukar gateToken menjadi Claim yang sah
+            val finalClaim = if (playInfo.kind == "gate") {
+                val sessionRes = app.post(
+                    url = "$mainUrl/api/watch/session/claim",
+                    headers = headers,
+                    json = mapOf("gateToken" to token)
+                ).parsedSafe<SessionClaimResponse>()
+                sessionRes?.claim
+            } else {
+                token
+            }
+
+            if (finalClaim.isNullOrEmpty()) return false
             
-            // Melempar URL palsu berisi token claim ke file Majorplay.kt
-            val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
-            loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
+            // LANGKAH 3: Lempar ke Extractor Majorplay
+            val fakeUrl = "https://e2e.majorplay.net/play?claim=$finalClaim"
+            return loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
-            return true
         } catch (e: Exception) {
             Log.e("adixtream", "Error di loadLinks: ${e.message}")
             return false
@@ -351,6 +366,18 @@ class IdlixProvider : MainAPI() {
 // ============================================================================
 // DATA CLASSES 
 // ============================================================================
+
+data class SessionClaimResponse(
+    @JsonProperty("claim") val claim: String? = null
+)
+
+data class PlayInfoResponse(
+    @JsonProperty("kind") val kind: String? = null,
+    @JsonProperty("gateToken") val gateToken: String? = null,
+    @JsonProperty("claim") val claim: String? = null,
+    @JsonProperty("serverNow") val serverNow: Long? = null,
+    @JsonProperty("unlockAt") val unlockAt: Long? = null
+)
 
 data class IdlixPaginatedResponse(
     @JsonProperty("data") val data: List<ContentData>? = null,
@@ -455,10 +482,4 @@ data class Genre(@JsonProperty("name") val name: String? = null)
 data class Cast(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("profilePath") val profilePath: String? = null
-)
-
-data class PlayInfoResponse(
-    @JsonProperty("claim") val claim: String? = null,
-    @JsonProperty("redeemUrl") val redeemUrl: String? = null,
-    @JsonProperty("videoId") val videoId: String? = null
 )
