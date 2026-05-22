@@ -6,6 +6,12 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.nicehttp.RequestBodyTypes
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.delay
+import java.util.UUID
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -68,7 +74,8 @@ class IdlixProvider : MainAPI() {
                         val slug = content.slug ?: continue
                         
                         val typeRaw = item.contentType ?: content.contentType ?: ""
-                        val isSeries = typeRaw.contains("series", true) || typeRaw.contains("episode", true)
+                        val isSeries = typeRaw.contains("series", true) ||
+                                typeRaw.contains("episode", true)
                         
                         val displayTitle = formatTitle(rawTitle, item.numberOfSeasons ?: content.numberOfSeasons)
                         val href = "$mainUrl/${if (isSeries) "series" else "movie"}/$slug"
@@ -275,7 +282,7 @@ class IdlixProvider : MainAPI() {
         } else {
             val movieId = response.id ?: slug
             val loadData = "movie|$movieId|$url"
-            
+             
             return newMovieLoadResponse(title, url, TvType.Movie, loadData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -300,7 +307,6 @@ class IdlixProvider : MainAPI() {
             var contentId = data
             var refererUrl = "$mainUrl/"
 
-            // Sistem Fallback: Mengecek apakah 'data' berupa format "tipe|id|url" atau hanya URL mentah karena Cache
             if (data.contains("|")) {
                 val parts = data.split("|")
                 val rawContentType = parts.getOrNull(0) ?: "movie"
@@ -308,7 +314,6 @@ class IdlixProvider : MainAPI() {
                 contentId = parts.getOrNull(1) ?: data 
                 refererUrl = parts.getOrNull(2) ?: "$mainUrl/"
             } else if (data.startsWith("http")) {
-                // Jika aplikasi mengirimkan URL mentah (sering terjadi jika movie dibuka dari Cache)
                 refererUrl = data
                 val isSeries = data.contains("/series/")
                 val slug = data.split("/").last()
@@ -321,24 +326,53 @@ class IdlixProvider : MainAPI() {
                 contentType = if (isSeries) "episode" else "movie"
             }
 
+            // REKAYASA GENERATOR DID COOKIE SECARA MANDIRI AGAR TIDAK ANULIR BACKEND
+            val randomDid = UUID.randomUUID().toString().replace("-", "")
+            
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
+                "Cookie" to "did=$randomDid; NEXT_LOCALE=id",
                 "Accept" to "application/json, text/plain, */*",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
             )
 
-            // Meminta token claim dari endpoint play-info terbaru
-            val playInfoRes = app.get(
+            // 1. Ambil gateToken dari play-info menggunakan Rest JSON Parser eksplisit
+            val playInfoResText = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
-            ).parsedSafe<PlayInfoResponse>() ?: return false
+            ).text
+            val playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoResText)
 
-            val claim = playInfoRes.claim ?: return false
+            val gateToken = playInfoRes.gateToken ?: return false
             
-            // Melempar URL palsu berisi token claim ke file Majorplay.kt
+            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
+            val serverNow = playInfoRes.serverNow ?: 0L
+            val unlockAt = playInfoRes.unlockAt ?: 0L
+            val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
+            
+            val diffTimeMs = unlockAt - serverNow
+            val baseWaitMs = countdownSec * 1000L
+            
+            val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
+            delay(finalWaitMs)
+
+            // 3. Handshake Tahap 2: Klaim token streaming dengan menyertakan kuki Device ID buatan kita
+            val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
+            val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
+            
+            val claimResText = app.post(
+                url = "$mainUrl/api/watch/session/claim",
+                headers = headers,
+                requestBody = requestBodyData
+            ).text
+            
+            val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
+            val claim = claimParsed.claim ?: return false
+            
+            // 4. Potong kompas panggil Extractor secara direct melewati batasan Registry Core
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
-            loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
+            Majorplay().getUrl(fakeUrl, refererUrl, subtitleCallback, callback)
             
             return true
         } catch (e: Exception) {
@@ -349,7 +383,7 @@ class IdlixProvider : MainAPI() {
 }
 
 // ============================================================================
-// DATA CLASSES 
+// DATA CLASSES
 // ============================================================================
 
 data class IdlixPaginatedResponse(
@@ -458,6 +492,17 @@ data class Cast(
 )
 
 data class PlayInfoResponse(
+    @JsonProperty("gateToken") val gateToken: String? = null,
+    @JsonProperty("serverNow") val serverNow: Long? = null,
+    @JsonProperty("unlockAt") val unlockAt: Long? = null,
+    @JsonProperty("preroll") val preroll: PrerollData? = null
+)
+
+data class PrerollData(
+    @JsonProperty("countdownSec") val countdownSec: Long? = null
+)
+
+data class SessionClaimResponse(
     @JsonProperty("claim") val claim: String? = null,
     @JsonProperty("redeemUrl") val redeemUrl: String? = null,
     @JsonProperty("videoId") val videoId: String? = null
