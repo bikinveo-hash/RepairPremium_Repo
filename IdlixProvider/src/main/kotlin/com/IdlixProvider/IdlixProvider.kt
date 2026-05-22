@@ -325,15 +325,23 @@ class IdlixProvider : MainAPI() {
                 contentType = if (isSeries) "episode" else "movie"
             }
 
-            // PENYELARASAN USER-AGENT SECARA MUTLAK AGAR PETA SESSION COOKIE TIDAKANULIR SERVER
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
-                "Accept" to "application/json, text/plain, */*",
+                "Accept" to "text/html,application/xhtml+xml,application/json,text/plain,*/*",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            // 1. Meminta token awal (gateToken)
+            // =========================================================================
+            // SOLUSI KRUSIAL KEMENANGAN: PING CONTAINER UTAMA UNTUK MENANAMKAN COOKIE
+            // =========================================================================
+            try {
+                app.get(url = refererUrl, headers = headers)
+            } catch (e: Exception) {
+                Log.e("adixtream", "Gagal menginisialisasi session cookie: ${e.message}")
+            }
+
+            // 1. Ambil gateToken dari play-info
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -341,7 +349,7 @@ class IdlixProvider : MainAPI() {
 
             val gateToken = playInfoRes.gateToken ?: return false
             
-            // 2. BYPASS PROTEKSI GERBANG HITUNG MUNDUR (TIME-LOCK BYPASS)
+            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -352,20 +360,20 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Menukarkan gateToken menjadi string claim yang sah
+            // 3. Handshake Tahap 2: Menukarkan gateToken dengan Cookie Session menetap
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
             val claimResText = app.post(
                 url = "$mainUrl/api/watch/session/claim",
-                headers = headers.plus("Content-Type" to "application/json"),
+                headers = headers,
                 requestBody = requestBodyData
             ).text
             
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Oper data menuju Majorplay Extractor
+            // 4. Kirim token claim sah ke Majorplay Extractor
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
