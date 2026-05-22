@@ -23,8 +23,16 @@ class Majorplay : ExtractorApi() {
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
 
+        // Harus text/plain persis seperti script Bash
         val reqBody = "{\"claim\":\"$claimToken\"}".toRequestBody("text/plain; charset=utf-8".toMediaTypeOrNull())
-        val playRes = app.post("$mainUrl/api/play", headers = safeHeaders, requestBody = reqBody).parsedSafe<NewMajorplayResponse>() ?: return
+        
+        val playResText = app.post(
+            url = "$mainUrl/api/play", 
+            headers = safeHeaders, 
+            requestBody = reqBody
+        ).text
+        
+        val playRes = AppUtils.tryParseJson<NewMajorplayResponse>(playResText) ?: return
 
         playRes.subtitles?.forEach { sub ->
             subtitleCallback.invoke(SubtitleFile(sub.label ?: sub.lang ?: "Unknown", sub.path ?: return@forEach))
@@ -36,15 +44,15 @@ class Majorplay : ExtractorApi() {
         playlistContent.split("\n").forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
-                // Bingo: Gabungkan path relatif dengan domain Majorplay
                 val finalUrl = if (trimmed.startsWith("http")) trimmed else "$mainUrl$trimmed"
-                callback.invoke(newExtractorLink(name, "Majorplay Premium", finalUrl, ExtractorLinkType.M3U8) { this.headers = safeHeaders })
+                callback.invoke(newExtractorLink(name, "Majorplay Stream", "$finalUrl&.m3u8", ExtractorLinkType.M3U8) { this.headers = safeHeaders })
             }
         }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorplayResponse(@JsonProperty("url") val url: String? = null, @JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null)
+    
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorSubtitle(@JsonProperty("lang") val lang: String? = null, @JsonProperty("label") val label: String? = null, @JsonProperty("path") val path: String? = null)
 }
