@@ -1,6 +1,7 @@
 package com.IdlixProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
@@ -327,42 +328,43 @@ class IdlixProvider : MainAPI() {
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
-                "Accept" to "application/json",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                "Accept" to "application/json, text/plain, */*",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+                "Cache-Control" to "no-cache", // Memastikan kita tidak mendapat token kadaluarsa
+                "X-Requested-With" to "XMLHttpRequest"
             )
 
             // 1. Ambil Gate Token (Gerbang Keamanan)
-            val playInfo = app.get(
+            val playInfoText = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
-            ).parsedSafe<PlayInfoResponse>() ?: return false
-
+            ).text
+            
+            val playInfo = AppUtils.tryParseJson<PlayInfoResponse>(playInfoText) ?: return false
             val token = playInfo.gateToken ?: playInfo.claim ?: return false
 
             // 2. Kalkulasi Jeda Waktu & Tukar Token
             val finalClaim = if (playInfo.kind == "gate" && !playInfo.gateToken.isNullOrEmpty()) {
-                
-                // Mencegah error "Tautan tidak ditemukan" dengan memastikan kita menunggu gerbang terbuka
                 val serverNow = playInfo.serverNow ?: System.currentTimeMillis()
                 val unlockAt = playInfo.unlockAt ?: serverNow
                 val waitTime = unlockAt - serverNow
                 
-                if (waitTime in 1..25000) { 
-                    delay(waitTime + 500L) // Jeda aman
-                } else if (waitTime > 25000) {
-                    delay(15000L) // Fallback limit maksimal
+                if (waitTime > 0) {
+                    // Tambahan 1.5 detik (1500L) untuk memastikan gerbang 100% sudah terbuka
+                    delay(waitTime + 1500L) 
                 }
 
-                // Setelah jeda, baru kita kirim permintaan claim token
-                val sessionRes = app.post(
+                // Kita pakai tryParseJson langsung dari .text agar tidak error jika ada field aneh
+                val sessionResText = app.post(
                     url = "$mainUrl/api/watch/session/claim",
                     headers = headers,
                     json = mapOf("gateToken" to token)
-                ).parsedSafe<SessionClaimResponse>()
-                
-                sessionRes?.claim
+                ).text
+
+                val sessionRes = AppUtils.tryParseJson<SessionClaimResponse>(sessionResText)
+                sessionRes?.claim ?: AppUtils.tryParseJson<PlayInfoResponse>(sessionResText)?.claim
             } else {
-                playInfo.claim
+                token
             }
 
             if (finalClaim.isNullOrEmpty()) return false
@@ -379,13 +381,15 @@ class IdlixProvider : MainAPI() {
 }
 
 // ============================================================================
-// DATA CLASSES 
+// DATA CLASSES (Semua diproteksi dengan JsonIgnoreProperties)
 // ============================================================================
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SessionClaimResponse(
     @JsonProperty("claim") val claim: String? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class PlayInfoResponse(
     @JsonProperty("kind") val kind: String? = null,
     @JsonProperty("gateToken") val gateToken: String? = null,
@@ -394,27 +398,32 @@ data class PlayInfoResponse(
     @JsonProperty("unlockAt") val unlockAt: Long? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class IdlixPaginatedResponse(
     @JsonProperty("data") val data: List<ContentData>? = null,
     @JsonProperty("pagination") val pagination: PaginationData? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class PaginationData(
     @JsonProperty("page") val page: Int? = null,
     @JsonProperty("totalPages") val totalPages: Int? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class IdlixHomepageResponse(
     @JsonProperty("above") val above: List<HomepageSection>? = null,
     @JsonProperty("below") val below: List<HomepageSection>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class HomepageSection(
     @JsonProperty("type") val type: String? = null,
     @JsonProperty("title") val title: String? = null,
     @JsonProperty("data") val data: List<HomepageItem>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class HomepageItem(
     @JsonProperty("contentType") val contentType: String? = null,
     @JsonProperty("content") val content: ContentData? = null,
@@ -441,6 +450,7 @@ data class HomepageItem(
     }
 }
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ContentData(
     @JsonProperty("id") val id: String? = null,
     @JsonProperty("title") val title: String? = null,
@@ -453,11 +463,13 @@ data class ContentData(
     @JsonProperty("numberOfSeasons") val numberOfSeasons: Int? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class IdlixSearchResponse(
     @JsonProperty("data") val data: List<ContentData>? = null,
     @JsonProperty("results") val results: List<ContentData>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class IdlixDetailResponse(
     @JsonProperty("id") val id: String? = null,
     @JsonProperty("title") val title: String? = null,
@@ -474,15 +486,18 @@ data class IdlixDetailResponse(
     @JsonProperty("cast") val cast: List<Cast>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class IdlixSeasonApiResponse(
     @JsonProperty("season") val season: SeasonDetail? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SeasonDetail(
     @JsonProperty("seasonNumber") val seasonNumber: Int? = null,
     @JsonProperty("episodes") val episodes: List<EpisodeDetail>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class EpisodeDetail(
     @JsonProperty("id") val id: String? = null,
     @JsonProperty("episodeNumber") val episodeNumber: Int? = null,
@@ -492,8 +507,10 @@ data class EpisodeDetail(
     @JsonProperty("hasVideo") val hasVideo: Boolean? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class Genre(@JsonProperty("name") val name: String? = null)
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class Cast(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("profilePath") val profilePath: String? = null
