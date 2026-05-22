@@ -1,10 +1,12 @@
 package com.Adicinemax21
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class Majorplay : ExtractorApi() {
     override var name = "Majorplay"
@@ -18,63 +20,65 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val videoId = url.split("/").lastOrNull() ?: return
-            
-            val response = app.get(
-                url = "$mainUrl/api/token/viewer?videoId=$videoId", 
-                referer = url, 
-                headers = mapOf("Origin" to mainUrl)
-            ).parsedSafe<MajorplayResponse>()
-            
-            response?.subtitles?.forEach { sub ->
-                val lang = sub.label ?: sub.lang ?: "Indonesian"
-                val subUrl = sub.path ?: return@forEach
-                subtitleCallback.invoke(SubtitleFile(lang, subUrl))
-            }
+            // Menangkap token klaim dari URL yang dikirim oleh provider utama
+            val claimToken = url.substringAfter("claim=").substringBefore("&")
+            if (claimToken.isEmpty()) return
 
-            val videoUrl = response?.hlsUrl ?: response?.primaryUrl ?: return
-            
-            val streamHeaders = mapOf(
-                "Origin" to mainUrl,
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-                "Accept" to "*/*"
+            val safeHeaders = mapOf(
+                "Origin" to "https://z1.idlixku.com",
+                "Referer" to "https://z1.idlixku.com/",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            if (videoUrl.contains(".m3u8")) {
-                M3u8Helper.generateM3u8(
-                    source = name,
-                    streamUrl = videoUrl,
-                    referer = url,
-                    headers = streamHeaders
-                ).forEach { parsedLink ->
-                    callback.invoke(parsedLink)
-                }
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                        this.headers = streamHeaders
-                    }
-                )
+            // Mengirim payload POST dengan tipe text/plain yang ketat
+            val textMediaType = "text/plain".toMediaTypeOrNull()
+            val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
+
+            val responseText = app.post(
+                url = "$mainUrl/api/play",
+                headers = safeHeaders.plus("Content-Type" to "text/plain"),
+                requestBody = requestBodyData
+            ).text
+            
+            val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
+            val masterConfigUrl = response.url ?: return
+            
+            // Parsing subtitle bawaan Majorplay
+            response.subtitles?.forEach { sub ->
+                val lang = sub.label ?: sub.lang ?: "Indonesian"
+                val subUrl = sub.path ?: return@forEach
+                subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
             }
-        } catch (e: Exception) { 
-            Log.e("adixtream", "Majorplay Error: ${e.message}") 
+
+            // Trik & .m3u8 agar lolos saringan filter Cloudstream Core
+            val finalPlayableUrl = "$masterConfigUrl&.m3u8"
+            
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "Majorplay Auto Quality",
+                    url = finalPlayableUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.headers = safeHeaders
+                    this.referer = "https://z1.idlixku.com/"
+                    this.quality = Qualities.Unknown.value // Wajib diinisialisasi
+                }
+            )
+        } catch (e: Exception) {
+            Log.e("adixtream", "Majorplay Error: ${e.message}")
         }
     }
 
-    data class MajorplayResponse(
-        @JsonProperty("hlsUrl") val hlsUrl: String? = null, 
-        @JsonProperty("primaryUrl") val primaryUrl: String? = null, 
-        @JsonProperty("subtitles") val subtitles: List<MajorSubtitle>? = null
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class NewMajorplayResponse(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null,
+        @JsonProperty("label") val label: String? = null
     )
     
-    data class MajorSubtitle(
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class NewMajorSubtitle(
         @JsonProperty("lang") val lang: String? = null, 
         @JsonProperty("label") val label: String? = null, 
         @JsonProperty("path") val path: String? = null
