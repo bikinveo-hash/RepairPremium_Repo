@@ -325,45 +325,29 @@ class IdlixProvider : MainAPI() {
                 contentType = if (isSeries) "episode" else "movie"
             }
 
-            val baseHeaders = mapOf(
+            val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
                 "Accept" to "text/html,application/xhtml+xml,application/json,text/plain,*/*",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            val liveHeaders = baseHeaders.toMutableMap()
-
-            // TAHAP 0: Ketuk halaman utama & tangkap session cookie secara manual
+            // LANGKAH UTAMA: Mengetuk halaman referer secara bersih guna memicu kuki internal OkHttp
             try {
-                val initResponse = app.get(url = refererUrl, headers = baseHeaders)
-                val setCookies = initResponse.headers.values("Set-Cookie")
-                if (setCookies.isNotEmpty()) {
-                    val cookieString = setCookies.map { it.substringBefore(";") }.joinToString("; ")
-                    liveHeaders["Cookie"] = cookieString
-                }
+                app.get(url = refererUrl, headers = headers)
             } catch (e: Exception) {
-                Log.e("adixtream", "Gagal mengamankan initial session cookie: ${e.message}")
+                Log.e("adixtream", "Gagal melakukan pre-load cookie ping: ${e.message}")
             }
 
-            // TAHAP 1: Kirim request play-info dengan session cookie terpasang
-            val playInfoResponse = app.get(
+            // 1. Ambil gateToken dari play-info (OkHttp otomatis mengirimkan kuki session di sini)
+            val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
-                headers = liveHeaders
-            )
+                headers = headers
+            ).parsedSafe<PlayInfoResponse>() ?: return false
 
-            // Perbarui penampung cookie jika server memberikan token Next.js tambahan
-            val playInfoCookies = playInfoResponse.headers.values("Set-Cookie")
-            if (playInfoCookies.isNotEmpty()) {
-                val newCookies = playInfoCookies.map { it.substringBefore(";") }.joinToString("; ")
-                val currentCookie = liveHeaders["Cookie"]
-                liveHeaders["Cookie"] = if (currentCookie != null) "$currentCookie; $newCookies" else newCookies
-            }
-
-            val playInfoRes = playInfoResponse.parsedSafe<PlayInfoResponse>() ?: return false
             val gateToken = playInfoRes.gateToken ?: return false
             
-            // TAHAP 2: BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK BYPASS)
+            // 2. BYPASS PROTEKSI GERBANG HITUNG MUNDUR (TIME-LOCK BYPASS)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -374,20 +358,20 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // TAHAP 3: Handshake Tahap 2 -> Eksekusi /claim dengan Cookie Sinkron
+            // 3. Handshake Tahap 2: Menukarkan gateToken tanpa memutus rantai kuki bawaan OkHttp
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
             val claimResText = app.post(
                 url = "$mainUrl/api/watch/session/claim",
-                headers = liveHeaders,
+                headers = headers,
                 requestBody = requestBodyData
             ).text
             
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // TAHAP 4: Oper langsung token claim menuju Majorplay Extractor (Bypass Registry Core)
+            // 4. Dorong langsung token menuju Majorplay Extractor secara direct
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             Majorplay().getUrl(fakeUrl, refererUrl, subtitleCallback, callback)
             
