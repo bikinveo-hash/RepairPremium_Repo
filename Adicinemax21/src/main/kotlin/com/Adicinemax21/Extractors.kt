@@ -3,8 +3,7 @@ package com.Adicinemax21
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.api.Log
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -21,18 +20,16 @@ class Majorplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit, 
         callback: (ExtractorLink) -> Unit
     ) {
-        // Ambil Claim Token dari URL palsu yang dibuat oleh Adicinemax21Extractor
-        val claimToken = url.substringAfter("claim=").substringBefore("&")
-        if (claimToken.isEmpty()) return
-
-        val safeHeaders = mapOf(
-            "Origin" to "https://z1.idlixku.com",
-            "Referer" to "https://z1.idlixku.com/",
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
-        )
-
         try {
-            // Menggunakan RequestBody bertipe text/plain sesuai kebutuhan backend Majorplay yang baru
+            val claimToken = url.substringAfter("claim=").substringBefore("&")
+            if (claimToken.isEmpty()) return
+
+            val safeHeaders = mapOf(
+                "Origin" to "https://z1.idlixku.com",
+                "Referer" to "https://z1.idlixku.com/",
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+            )
+
             val textMediaType = "text/plain".toMediaTypeOrNull()
             val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
 
@@ -45,16 +42,18 @@ class Majorplay : ExtractorApi() {
             val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
             val masterConfigUrl = response.url ?: return
             
-            // Perbaikan: Menggunakan constructor SubtitleFile secara langsung untuk menghindari Unresolved Reference
-            response.subtitles?.forEach { sub ->
-                val lang = sub.label ?: sub.lang ?: "Indonesian"
-                val subUrl = sub.path ?: return@forEach
-                subtitleCallback.invoke(
-                    SubtitleFile(lang, subUrl)
-                )
+            val subtitles = response.subtitles
+            if (subtitles != null) {
+                for (sub in subtitles) {
+                    val subUrl = sub.path ?: continue
+                    val lang = sub.label ?: sub.lang ?: "Indonesian"
+                    subtitleCallback.invoke(
+                        SubtitleFile(lang, subUrl)
+                    )
+                }
             }
-
-            // Trik menyamarkan ujung tautan manifest agar lolos filter seleksi Cloudstream Core
+            
+            // Trik menyamarkan ujung tautan manifest
             val finalPlayableUrl = "$masterConfigUrl&.m3u8"
             
             callback.invoke(
