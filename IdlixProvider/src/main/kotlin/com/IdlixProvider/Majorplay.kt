@@ -39,7 +39,7 @@ class Majorplay : ExtractorApi() {
 
         val masterConfigUrl = response.url ?: return
         
-        // Parsing berkas subtitle bawaan menggunakan standard loop
+        // Pemuatan data file subtitle bawaan resmi
         val subtitles = response.subtitles
         if (subtitles != null) {
             for (sub in subtitles) {
@@ -51,10 +51,10 @@ class Majorplay : ExtractorApi() {
             }
         }
         
-        // Trik ekstensi palsu untuk memuaskan filter Cloudstream core
+        // Trik parameter m3u8 palsu agar lolos sensor filter Cloudstream core
         val finalPlayableUrl = "$masterConfigUrl&.m3u8"
         
-        // FIX BERDASARKAN BLUEPRINT EXTRACTOR-LINK: Mengisi properti quality secara manual
+        // Daftarkan link ke callback, pastikan nilai quality terdefinisi penuh
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -64,7 +64,7 @@ class Majorplay : ExtractorApi() {
             ) {
                 this.headers = safeHeaders
                 this.referer = "https://z1.idlixku.com/"
-                this.quality = Qualities.Unknown.value // Mencegah Cloudstream membuang paket link akibat uninitialized value
+                this.quality = Qualities.Unknown.value // Wajib diinisialisasi agar core tidak membuang link
             }
         )
     }
