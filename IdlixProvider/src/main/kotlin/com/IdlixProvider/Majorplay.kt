@@ -23,55 +23,51 @@ class Majorplay : ExtractorApi() {
         val safeHeaders = mapOf(
             "Origin" to "https://z1.idlixku.com",
             "Referer" to "https://z1.idlixku.com/",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+            "Content-Type" to "text/plain" // WAJIB ada agar dikenali sebagai fetch normal
         )
 
-        val response = app.post(
+        // LANGKAH 1: Validasi API Play & Ambil Subtitle
+        val playRes = app.post(
             url = "$mainUrl/api/play",
             headers = safeHeaders,
-            data = mapOf("claim" to claimToken)
+            data = "{\"claim\":\"$claimToken\"}" // Paksa kirim string JSON
         ).parsedSafe<NewMajorplayResponse>() ?: return
 
-        val videoUrl = response.url ?: return
+        // Injeksi semua subtitle langsung ke player
+        playRes.subtitles?.forEach { sub ->
+            val lang = sub.label ?: sub.lang ?: "Unknown"
+            val subUrl = sub.path ?: return@forEach
+            subtitleCallback.invoke(SubtitleFile(lang, subUrl))
+        }
+
+        val configUrl = playRes.url ?: return
         
-        // Ambil isi playlist
-        val playlist = app.get(videoUrl, headers = safeHeaders).text
+        // LANGKAH 2: Tarik file M3U8 Master Playlist (yang disamarkan sebagai file JSON)
+        val playlistContent = app.get(configUrl, headers = safeHeaders).text
         
-        // FILTER: Ambil hanya baris yang mengandung .m3u8 atau link video asli
-        // Abaikan semua .js, .css, .jpg, .webp, .html
-        val lines = playlist.split("\n")
-        var extracted = false
+        // LANGKAH 3: Parsing HLS secara manual
+        val lines = playlistContent.split("\n")
         
         for (line in lines) {
             val trimmed = line.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
-            
-            // Hanya ambil link yang valid untuk streaming
-            if (trimmed.contains(".m3u8") || trimmed.contains("chunk")) {
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
                 val finalUrl = if (trimmed.startsWith("http")) trimmed else {
-                    videoUrl.substringBeforeLast("/") + "/" + trimmed
+                    // Karena URL di dalam m3u8 relatif (/v/z6/...), gabungkan dengan host utama
+                    "$mainUrl$trimmed"
                 }
-
+                
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name = "Majorplay Stream",
-                        url = "$finalUrl&.m3u8", // Trik agar Cloudstream percaya ini M3U8
+                        name = "Majorplay Premium",
+                        url = "$finalUrl&.m3u8", // Trik bypass ekstensi
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.headers = safeHeaders
                     }
                 )
-                extracted = true
             }
-        }
-        
-        if (!extracted) {
-             callback.invoke(
-                newExtractorLink(source = name, name = "Fallback", url = videoUrl, type = ExtractorLinkType.M3U8) {
-                    this.headers = safeHeaders
-                }
-            )
         }
     }
 
@@ -84,6 +80,7 @@ class Majorplay : ExtractorApi() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class NewMajorSubtitle(
         @JsonProperty("lang") val lang: String? = null, 
+        @JsonProperty("label") val label: String? = null, 
         @JsonProperty("path") val path: String? = null
     )
 }
