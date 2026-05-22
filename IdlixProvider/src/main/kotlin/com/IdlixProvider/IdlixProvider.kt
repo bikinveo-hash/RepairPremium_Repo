@@ -11,6 +11,7 @@ import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.delay
+import java.util.UUID
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = "https://z1.idlixku.com"
@@ -325,21 +326,18 @@ class IdlixProvider : MainAPI() {
                 contentType = if (isSeries) "episode" else "movie"
             }
 
+            // REKAYASA GENERATOR DID COOKIE SECARA MANDIRI AGAR TIDAK ANULIR BACKEND
+            val randomDid = UUID.randomUUID().toString().replace("-", "")
+            
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
-                "Accept" to "text/html,application/xhtml+xml,application/json,text/plain,*/*",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                "Cookie" to "did=$randomDid; NEXT_LOCALE=id",
+                "Accept" to "application/json, text/plain, */*",
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
             )
 
-            // LANGKAH UTAMA: Jalankan PING murni tanpa memodifikasi / menginterupsi CookieJar OkHttp internal
-            try {
-                app.get(url = refererUrl, headers = headers)
-            } catch (e: Exception) {
-                Log.e("adixtream", "Gagal memicu otomatisasi cookie jar: ${e.message}")
-            }
-
-            // 1. Ambil gateToken dari play-info (OkHttp secara native mengirimkan kuki session di sini)
+            // 1. Ambil gateToken dari play-info menggunakan Rest JSON Parser eksplisit
             val playInfoResText = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -348,7 +346,7 @@ class IdlixProvider : MainAPI() {
 
             val gateToken = playInfoRes.gateToken ?: return false
             
-            // 2. BYPASS PROTEKSI GERBANG HITUNG MUNDUR (TIME-LOCK)
+            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -359,7 +357,7 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Tukar token klaim dengan OkHttp RequestBody standard
+            // 3. Handshake Tahap 2: Klaim token streaming dengan menyertakan kuki Device ID buatan kita
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
@@ -372,7 +370,7 @@ class IdlixProvider : MainAPI() {
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Oper data ke berkas kustom Majorplay (Bypass Registry Core)
+            // 4. Potong kompas panggil Extractor secara direct melewati batasan Registry Core
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             Majorplay().getUrl(fakeUrl, refererUrl, subtitleCallback, callback)
             
