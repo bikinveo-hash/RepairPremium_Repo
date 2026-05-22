@@ -223,8 +223,8 @@ class IdlixProvider : MainAPI() {
             val seasonNamesList = mutableListOf<SeasonData>()
             val totalSeasons = response.numberOfSeasons ?: 1 
             
-            // Proses season secara paralel agar tidak lambat
-            (1..totalSeasons).apmap { seasonNum ->
+            // Proses season secara paralel agar tidak lambat, toList() ditambahkan untuk menghindari error
+            (1..totalSeasons).toList().apmap { seasonNum ->
                 val seasonApiUrl = "$mainUrl/api/series/$slug/season/$seasonNum"
                 try {
                     val seasonResText = app.get(seasonApiUrl).text
@@ -260,7 +260,6 @@ class IdlixProvider : MainAPI() {
                 }
             }
 
-            // Urutkan episode setelah apmap selesai
             episodes.sortBy { it.episode }
             episodes.sortBy { it.season }
             seasonNamesList.sortBy { it.season }
@@ -302,7 +301,6 @@ class IdlixProvider : MainAPI() {
             var contentId = data
             var refererUrl = "$mainUrl/"
 
-            // Sistem Fallback
             if (data.contains("|")) {
                 val parts = data.split("|")
                 contentType = parts.getOrNull(0)?.substringAfterLast("/") ?: "movie"
@@ -326,7 +324,7 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             )
 
-            // LANGKAH 1: Ambil play-info (Gerbang)
+            // 1. Ambil Gate Token
             val playInfo = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -334,25 +332,21 @@ class IdlixProvider : MainAPI() {
 
             val token = playInfo.gateToken ?: playInfo.claim ?: return false
 
-            // Jika server menolak token secara instan, kamu bisa mengaktifkan delay ini
-            // val waitTime = (playInfo.unlockAt ?: 0L) - (playInfo.serverNow ?: 0L)
-            // if (waitTime > 0) kotlinx.coroutines.delay(waitTime) 
-
-            // LANGKAH 2: Tukar gateToken menjadi Claim yang sah
-            val finalClaim = if (playInfo.kind == "gate") {
+            // 2. Tukar menjadi Claim Token
+            val finalClaim = if (playInfo.kind == "gate" && !playInfo.gateToken.isNullOrEmpty()) {
                 val sessionRes = app.post(
                     url = "$mainUrl/api/watch/session/claim",
                     headers = headers,
-                    json = mapOf("gateToken" to token)
+                    json = mapOf("gateToken" to playInfo.gateToken)
                 ).parsedSafe<SessionClaimResponse>()
                 sessionRes?.claim
             } else {
-                token
+                playInfo.claim
             }
 
             if (finalClaim.isNullOrEmpty()) return false
             
-            // LANGKAH 3: Lempar ke Extractor Majorplay
+            // 3. Kirim ke Majorplay
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$finalClaim"
             return loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
