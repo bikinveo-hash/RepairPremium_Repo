@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson // WAJIB DIREK: Guna memicu pemanggilan ekpansi .toJson()
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -325,14 +325,15 @@ class IdlixProvider : MainAPI() {
                 contentType = if (isSeries) "episode" else "movie"
             }
 
+            // PENYELARASAN USER-AGENT SECARA MUTLAK AGAR PETA SESSION COOKIE TIDAKANULIR SERVER
             val headers = mapOf(
                 "Referer" to refererUrl, 
                 "Origin" to mainUrl, 
                 "Accept" to "application/json, text/plain, */*",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            // 1. Ambil gateToken dari play-info
+            // 1. Meminta token awal (gateToken)
             val playInfoRes = app.get(
                 url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
                 headers = headers
@@ -340,7 +341,7 @@ class IdlixProvider : MainAPI() {
 
             val gateToken = playInfoRes.gateToken ?: return false
             
-            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
+            // 2. BYPASS PROTEKSI GERBANG HITUNG MUNDUR (TIME-LOCK BYPASS)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -351,20 +352,20 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Konversi payload Map memakai extension .toJson() yang sah
+            // 3. Handshake Tahap 2: Menukarkan gateToken menjadi string claim yang sah
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
             val claimResText = app.post(
                 url = "$mainUrl/api/watch/session/claim",
-                headers = headers,
+                headers = headers.plus("Content-Type" to "application/json"),
                 requestBody = requestBodyData
             ).text
             
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Kirim token claim sah ke Majorplay Extractor
+            // 4. Oper data menuju Majorplay Extractor
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             loadExtractor(fakeUrl, refererUrl, subtitleCallback, callback)
             
