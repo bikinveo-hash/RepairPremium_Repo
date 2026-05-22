@@ -21,7 +21,7 @@ class Majorplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit, 
         callback: (ExtractorLink) -> Unit
     ) {
-        // Ekstrak claim token dari URL palsu yang dibuat di invokeIdlix
+        // Ambil Claim Token dari URL palsu yang dibuat oleh Adicinemax21Extractor
         val claimToken = url.substringAfter("claim=").substringBefore("&")
         if (claimToken.isEmpty()) return
 
@@ -32,7 +32,7 @@ class Majorplay : ExtractorApi() {
         )
 
         try {
-            // Menggunakan RequestBody bertipe text/plain sesuai protokol Majorplay terbaru
+            // Menggunakan RequestBody bertipe text/plain sesuai kebutuhan backend Majorplay yang baru
             val textMediaType = "text/plain".toMediaTypeOrNull()
             val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
 
@@ -45,7 +45,7 @@ class Majorplay : ExtractorApi() {
             val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
             val masterConfigUrl = response.url ?: return
             
-            // Perbaikan error 'newSubtitleFile': Menggunakan constructor SubtitleFile secara langsung
+            // Perbaikan: Menggunakan constructor SubtitleFile secara langsung untuk menghindari Unresolved Reference
             response.subtitles?.forEach { sub ->
                 val lang = sub.label ?: sub.lang ?: "Indonesian"
                 val subUrl = sub.path ?: return@forEach
@@ -54,7 +54,7 @@ class Majorplay : ExtractorApi() {
                 )
             }
 
-            // Menambahkan suffix .m3u8 agar dideteksi sebagai manifest HLS oleh Cloudstream Core
+            // Trik menyamarkan ujung tautan manifest agar lolos filter seleksi Cloudstream Core
             val finalPlayableUrl = "$masterConfigUrl&.m3u8"
             
             callback.invoke(
