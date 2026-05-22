@@ -25,7 +25,7 @@ class Majorplay : ExtractorApi() {
         val safeHeaders = mapOf(
             "Origin" to "https://z1.idlixku.com",
             "Referer" to "https://z1.idlixku.com/",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
         )
 
         val textMediaType = "text/plain".toMediaTypeOrNull()
@@ -40,7 +40,7 @@ class Majorplay : ExtractorApi() {
 
         val masterConfigUrl = response.url ?: return
         
-        // Pemuatan file subtitle resmi bawaan web secara loop tradisional
+        // Memuat subtitle resmi menggunakan top-level builder 'newSubtitleFile' secara sah
         val subtitles = response.subtitles
         if (subtitles != null) {
             for (sub in subtitles) {
@@ -52,10 +52,10 @@ class Majorplay : ExtractorApi() {
             }
         }
         
-        // Trik parameter m3u8 palsu agar lolos dari saringan ketat Cloudstream core
+        // Trik menyamarkan ujung tautan manifest agar lolos filter seleksi Cloudstream Core
         val finalPlayableUrl = "$masterConfigUrl&.m3u8"
         
-        // Daftarkan link ke callback, pastikan nilai quality terdefinisi penuh
+        // Daftarkan link paket secara komplit mematuhi blueprint ExtractorLink asli
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -65,7 +65,7 @@ class Majorplay : ExtractorApi() {
             ) {
                 this.headers = safeHeaders
                 this.referer = "https://z1.idlixku.com/"
-                this.quality = Qualities.Unknown.value // Wajib diinisialisasi agar core tidak menyaring link keluar
+                this.quality = Qualities.Unknown.value // Inisialisasi wajib agar paket tidak dibuang core engine
             }
         )
     }
