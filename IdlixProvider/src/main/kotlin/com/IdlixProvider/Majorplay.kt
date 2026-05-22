@@ -2,9 +2,9 @@ package com.IdlixProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.* // Ganti ke wildcard agar otomatis mengimpor top-level 'newSubtitleFile'
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson // WAJIB DIREK: Guna memicu pemanggilan ekpansi .toJson()
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -13,9 +13,6 @@ class Majorplay : ExtractorApi() {
     override var mainUrl = "https://e2e.majorplay.net"
     override val requiresReferer = true
 
-    // =========================================================================
-    // SEPAKAT DENGAN BLUEPRINT EXTRACTORAPI & MAINAPI SECARA MUTLAK
-    // =========================================================================
     override suspend fun getUrl(
         url: String, 
         referer: String?, 
@@ -31,7 +28,7 @@ class Majorplay : ExtractorApi() {
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
 
-        // Memaksa pengiriman dengan tipe Media text/plain terenkripsi melalui parameter RequestBody
+        // Bungkus payload memakai text/plain terenkripsi melalui parameter RequestBody
         val textMediaType = "text/plain".toMediaTypeOrNull()
         val requestBodyData = mapOf("claim" to claimToken).toJson().toRequestBody(textMediaType)
 
@@ -43,7 +40,7 @@ class Majorplay : ExtractorApi() {
 
         val masterConfigUrl = response.url ?: return
         
-        // AMBIL JALUR SUBTITLE: Diproduksi lewat metode pembuatan internal 'newSubtitleFile' yang sah
+        // Memasukkan jalur file subtitle .vtt menggunakan top-level builder 'newSubtitleFile' secara legal
         response.subtitles?.forEach { sub ->
             val subUrl = sub.path ?: return@forEach
             val lang = sub.label ?: sub.lang ?: "Indo"
@@ -52,7 +49,7 @@ class Majorplay : ExtractorApi() {
             )
         }
         
-        // PENGIRIMAN STREAMING: Menyisipkan konfigurasi header dan referer di dalam blok inisialisasi lambda
+        // Melempar URL manifest config bulat-bulat ke player
         callback.invoke(
             newExtractorLink(
                 source = name,
