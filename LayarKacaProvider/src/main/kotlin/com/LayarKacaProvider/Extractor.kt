@@ -1,76 +1,92 @@
 package com.LayarKacaProvider
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import android.util.Base64
+import java.security.KeyPairGenerator
+import java.security.spec.ECGenParameterSpec
+import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import android.util.Base64
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-// ============================================================================
-// DATA MODELS (TOP-LEVEL untuk mencegah Syntax Error)
-// ============================================================================
-data class AttestToken(val token: String?)
-data class PlaybackOuter(val playback: PlaybackData?)
-data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
-data class StreamContainer(val sources: List<StreamItem>?)
-data class StreamItem(val url: String, val label: String)
-data class HownetworkResponse(val file: String?, val link: String?)
+// Data class untuk API
+data class ChallengeResponse(val challenge_id: String, val nonce: String, val viewer_hint: String)
+data class AttestRequest(
+    val viewer_id: String,
+    val device_id: String,
+    val challenge_id: String,
+    val nonce: String,
+    val signature: String,
+    val public_key: Map<String, Any>,
+    val client: Map<String, Any>,
+    val storage: Map<String, String>,
+    val attributes: Map<String, String>
+)
+data class AttestResponse(val token: String, val viewer_id: String, val device_id: String)
+data class PlaybackOuter(val playback: PlaybackData)
+data class PlaybackData(
+    val iv: String,
+    val payload: String,
+    val key_parts: List<String>
+)
+data class StreamContainer(val sources: List<StreamItem>)
+data class StreamItem(val url: String, val label: String, val quality: String? = null)
 
-// ============================================================================
-// 1. TURBOVIP EXTRACTOR
-// ============================================================================
-open class EmturbovidExtractor : ExtractorApi() {
-    override var name = "TurboVIP"
-    override var mainUrl = "https://turbovidhls.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
-        try {
-            val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                "Referer" to "https://playeriframe.sbs/"
-            )
-            val response = app.get(url, headers = headers, interceptor = WebViewResolver(Regex("(?i)m3u8")))
-            
-            if (response.url.contains("m3u8", true)) {
-                sources.add(
-                    newExtractorLink(
-                        source = "TurboVIP",
-                        name = "TurboVIP HD",
-                        url = response.url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (e: Exception) { 
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            e.printStackTrace() 
-        }
-        return sources
-    }
-}
-
-// ============================================================================
-// 2. CAST / F16PX EXTRACTOR (PURE HTTP DECRYPTION)
-// ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "Cast"
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = true
 
-    private val deviceId = "e72a8c5bd3da49bea2797f79cf6a363b"
+    // Data statis dari browser (bisa di-hardcode)
     private val viewerId = "1993fdbe30bc4b35949faa647e5dc696"
+    private val deviceId = "e72a8c5bd3da49bea2797f79cf6a363b"
+    private val cookie = "$viewerId;$deviceId" // Cookie: byse_viewer_id=...; byse_device_id=...
+
+    private val clientData = mapOf(
+        "user_agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "platform" to "Android",
+        "platform_version" to "13.0.0",
+        "model" to "CPH2235",
+        "ua_full_version" to "137.0.7337.0",
+        "brand_full_versions" to listOf(
+            mapOf("brand" to "Chromium", "version" to "137.0.7337.0"),
+            mapOf("brand" to "Not/A)Brand", "version" to "24.0.0.0")
+        ),
+        "pixel_ratio" to 3,
+        "screen_width" to 360,
+        "screen_height" to 800,
+        "color_depth" to 24,
+        "languages" to listOf("id-ID", "id", "en-US", "en"),
+        "timezone" to "Asia/Jayapura",
+        "hardware_concurrency" to 8,
+        "device_memory" to 8,
+        "touch_points" to 5,
+        "webgl_vendor" to "Google Inc. (Qualcomm)",
+        "webgl_renderer" to "ANGLE (Qualcomm, Adreno (TM) 618, OpenGL ES 3.2)",
+        "canvas_hash" to "NqM1SjPxaPA42KL3TDIfbzaTumFLWcJOzn0TJvJ1xcA",
+        "audio_hash" to "_VRYiH6_cygtD14eUnkys7AF3r7zCf769syVkS3GVGU",
+        "pointer_type" to "coarse,touch",
+        "extra" to mapOf(
+            "vendor" to "Google Inc.",
+            "appVersion" to "5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        )
+    )
+    private val storageData = mapOf(
+        "cookie" to viewerId,
+        "local_storage" to viewerId,
+        "indexed_db" to "$viewerId:$deviceId",
+        "cache_storage" to "$viewerId:$deviceId"
+    )
+    private val attributesData = mapOf("entropy" to "high")
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
@@ -78,46 +94,63 @@ open class F16Extractor : ExtractorApi() {
         val embedUrl = "$mainUrl/e/$videoId"
 
         val commonHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to clientData["user_agent"].toString(),
             "X-Embed-Origin" to "playeriframe.sbs",
             "X-Embed-Parent" to embedUrl,
             "X-Embed-Referer" to "https://playeriframe.sbs/",
             "Origin" to mainUrl,
-            "Referer" to embedUrl
+            "Referer" to embedUrl,
+            "Cookie" to "byse_viewer_id=$viewerId; byse_device_id=$deviceId"
         )
 
         try {
-            // 1. Ambil Token via API Attest
-            val attestData = mapOf(
+            // 1. Dapatkan challenge
+            val challengeRes = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders).text
+            val challenge = tryParseJson<ChallengeResponse>(challengeRes)
+                ?: return sources.also { println("F16Extractor: Gagal parse challenge") }
+
+            // 2. Generate ECDSA key pair
+            val (publicKeyJwk, privateKey) = generateEcdsaKeyPair()
+
+            // 3. Buat signature
+            val dataToSign = "${challenge.challenge_id}${challenge.nonce}${viewerId}${deviceId}"
+            val signature = signData(dataToSign.toByteArray(), privateKey)
+
+            // 4. Attest
+            val attestPayload = mapOf(
                 "viewer_id" to viewerId,
                 "device_id" to deviceId,
-                "challenge_id" to "ZG1VcdAXnln4k3-9E9a4s4d_",
-                "nonce" to "OafveDoyo4EL24yEVnZAK_3cUaOxGQaDScjvVHqMHYg",
-                "signature" to "K2ALbVOD6cZd67WTWSsaciQIwo4ALrWb5YuuMFxTTW_z4f0GlmtQ68f9u5P_P-5Wfi9VsNJngRYN1sP_8sIDaA",
-                "client" to mapOf("platform" to "Android", "model" to "CPH2235")
+                "challenge_id" to challenge.challenge_id,
+                "nonce" to challenge.nonce,
+                "signature" to signature,
+                "public_key" to publicKeyJwk,
+                "client" to clientData,
+                "storage" to storageData,
+                "attributes" to attributesData
             )
+            val attestRes = app.post("$mainUrl/api/videos/access/attest", json = attestPayload, headers = commonHeaders).text
+            val attestData = tryParseJson<AttestResponse>(attestRes)
+                ?: return sources.also { println("F16Extractor: Gagal attest") }
 
-            val attestResponse = app.post("$mainUrl/api/videos/access/attest", json = attestData, headers = commonHeaders).text
-            val token = tryParseJson<AttestToken>(attestResponse)?.token ?: return emptyList()
-
-            // 2. Request Playback Data
-            val playbackRequest = mapOf(
+            // 5. Playback request
+            val playbackPayload = mapOf(
                 "fingerprint" to mapOf(
-                    "token" to token,
+                    "token" to attestData.token,
                     "viewer_id" to viewerId,
                     "device_id" to deviceId,
-                    "confidence" to 0.91
+                    "confidence" to 0.93
                 )
             )
+            val playbackRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", json = playbackPayload, headers = commonHeaders).text
+            val playback = tryParseJson<PlaybackOuter>(playbackRes)?.playback
+                ?: return sources.also { println("F16Extractor: Gagal playback") }
 
-            val playbackResponse = app.post("$mainUrl/api/videos/$videoId/embed/playback", json = playbackRequest, headers = commonHeaders).text
-            val playback = tryParseJson<PlaybackOuter>(playbackResponse)?.playback ?: return emptyList()
+            // 6. Dekripsi (seperti di skrip Termux)
+            val decrypted = decryptAesGcm(playback)
+            val streamData = tryParseJson<StreamContainer>(decrypted)
+                ?: return sources.also { println("F16Extractor: Gagal parse stream") }
 
-            // 3. Dekripsi AES-256-GCM
-            val decryptedJson = decryptAesGcm(playback)
-            val streamData = tryParseJson<StreamContainer>(decryptedJson)
-
-            streamData?.sources?.forEach { source ->
+            streamData.sources.forEach { source ->
                 sources.add(
                     newExtractorLink(
                         source = "Cast VIP",
@@ -141,75 +174,51 @@ open class F16Extractor : ExtractorApi() {
         return sources
     }
 
+    private fun generateEcdsaKeyPair(): Pair<Map<String, Any>, java.security.PrivateKey> {
+        val keyPairGenerator = KeyPairGenerator.getInstance("EC")
+        val ecSpec = ECGenParameterSpec("secp256r1") // P-256
+        keyPairGenerator.initialize(ecSpec)
+        val keyPair = keyPairGenerator.genKeyPair()
+        val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
+        val privateKey = keyPair.private
+
+        // Konversi ke JWK
+        val w = publicKey.w
+        val x = Base64.encodeToString(w.affineX.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+        val y = Base64.encodeToString(w.affineY.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+        val jwk = mapOf<String, Any>(
+            "crv" to "P-256",
+            "ext" to true,
+            "key_ops" to listOf("verify"),
+            "kty" to "EC",
+            "x" to x,
+            "y" to y
+        )
+        return jwk to privateKey
+    }
+
+    private fun signData(data: ByteArray, privateKey: java.security.PrivateKey): String {
+        val signature = Signature.getInstance("SHA256withECDSA")
+        signature.initSign(privateKey)
+        signature.update(data)
+        val sig = signature.sign()
+        return Base64.encodeToString(sig, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    }
+
     private fun decryptAesGcm(data: PlaybackData): String {
-        // Gabungkan semua key_parts
-        val masterKey = data.key_parts
+        val keyMaterial = data.key_parts
             .map { Base64.decode(it, Base64.URL_SAFE) }
             .reduce { acc, bytes -> acc + bytes }
-
         val iv = Base64.decode(data.iv, Base64.URL_SAFE)
-        val encryptedPayload = Base64.decode(data.payload, Base64.URL_SAFE)
+        val payloadWithTag = Base64.decode(data.payload, Base64.URL_SAFE)
 
-        // Di Java, doFinal secara otomatis akan memproses auth tag di akhir payload
+        // Pisahkan tag (16 byte terakhir)
+        val tag = payloadWithTag.copyOfRange(payloadWithTag.size - 16, payloadWithTag.size)
+        val ciphertext = payloadWithTag.copyOfRange(0, payloadWithTag.size - 16)
+
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val spec = GCMParameterSpec(128, iv)
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(masterKey, "AES"), spec)
-        
-        return String(cipher.doFinal(encryptedPayload), Charsets.UTF_8)
-    }
-}
-
-// ============================================================================
-// 3. P2P EXTRACTOR (Dikembalikan seperti semula)
-// ============================================================================
-open class P2PExtractor : ExtractorApi() {
-    override var name = "P2P"
-    override var mainUrl = "https://cloud.hownetwork.xyz"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
-        val id = url.substringAfter("id=").substringBefore("&")
-        val apiUrl = "$mainUrl/api2.php?id=$id"
-        val bridgeUrl = "https://playeriframe.sbs/"
-        
-        val initHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-            "Referer" to bridgeUrl
-        )
-
-        val apiHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-            "Referer" to url,
-            "Origin" to mainUrl,
-            "Content-Type" to "application/x-www-form-urlencoded"
-        )
-        
-        val formBody = mapOf("r" to bridgeUrl, "d" to "cloud.hownetwork.xyz")
-        
-        try {
-            app.get(url, headers = initHeaders)
-            val response = app.post(apiUrl, headers = apiHeaders, data = formBody).text
-            val json = tryParseJson<HownetworkResponse>(response)
-            val videoUrl = json?.file ?: json?.link
-   
-            if (!videoUrl.isNullOrBlank()) {
-                sources.add(
-                    newExtractorLink(
-                        source = "LK21 P2P", 
-                        name = "P2P Player (480p)", 
-                        url = videoUrl, 
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.P480.value
-                    }
-                )
-            }
-        } catch (e: Exception) { 
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            e.printStackTrace() 
-        }
-        return sources
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyMaterial, "AES"), spec)
+        return String(cipher.doFinal(ciphertext + tag), Charsets.UTF_8) // di sini kita gabungkan lagi karena doFinal butuh ciphertext + tag
     }
 }
