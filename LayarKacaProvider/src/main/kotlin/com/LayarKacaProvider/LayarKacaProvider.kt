@@ -260,7 +260,6 @@ class LayarKacaProvider : MainAPI() {
             val epNos = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
             val sNos = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
             
-            // Ekstraksi tambahan untuk UI yang lebih detail (opsional, jika web menyediakan di JSON)
             val posters = Regex("\"poster\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val plots = Regex("\"description\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val dates = Regex("\"release_date\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
@@ -270,8 +269,6 @@ class LayarKacaProvider : MainAPI() {
                     this.name = titles.getOrNull(i) ?: "Episode ${i + 1}"
                     this.season = sNos.getOrNull(i)
                     this.episode = epNos.getOrNull(i)
-                    
-                    // --- SETTING UI TAMPILAN DETAIL ---
                     this.posterUrl = posters.getOrNull(i)?.takeIf { it.isNotBlank() } ?: fallbackPoster
                     this.description = plots.getOrNull(i)
                     addDate(dates.getOrNull(i), format = "yyyy-MM-dd")
@@ -286,8 +283,6 @@ class LayarKacaProvider : MainAPI() {
                     episodes.add(newEpisode(fixUrl(href)) {
                         this.name = it.text().trim().ifEmpty { "Play Episode" }
                         this.episode = Regex("(?i)Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
-                        
-                        // --- SETTING UI TAMPILAN DETAIL ---
                         this.posterUrl = fallbackPoster 
                     })
                 }
@@ -384,7 +379,7 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
-        // 1. TANGKAP RC4 (Daftar Key Super Lengkap agar Anti-Gagal)
+        // 1. Tangkap dari player-list (RC4)
         val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
         val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
         val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
@@ -413,14 +408,12 @@ class LayarKacaProvider : MainAPI() {
             if (decoded.isNotBlank()) rawSources.add(decoded)
         }
 
-        // 2. TANGKAP PAKAI WEBVIEWRESOLVER SEBAGAI BACKUP
+        // 2. Fallback: WebViewResolver
         if (rawSources.isEmpty()) {
             try {
-                // Berkat cURL-mu, kita tahu semua bermuara ke playeriframe.sbs/iframe!
                 val interceptorRegex = Regex("(?i)playeriframe\\.sbs/iframe")
                 val webResponse = app.get(currentUrl, interceptor = WebViewResolver(interceptorRegex))
                 val interceptedUrl = webResponse.url
-                
                 if (interceptedUrl.isNotBlank() && interceptorRegex.containsMatchIn(interceptedUrl)) {
                     rawSources.add(interceptedUrl)
                 }
@@ -430,44 +423,29 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
-            var finalUrl = url
-            
-            // 3. BYPASS SEMUA SERVER (P2P, TurboVIP, Cast)
-            if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
-                val id = finalUrl.substringAfter("p2p/").substringBefore("/")
-                P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
-            } 
-            else if (finalUrl.contains("playeriframe.sbs/iframe/turbovip/")) {
-                val id = finalUrl.substringAfter("turbovip/").substringBefore("/")
-                EmturbovidExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
-            } 
-            else if (finalUrl.contains("playeriframe.sbs/iframe/cast/")) {
-                val id = finalUrl.substringAfter("cast/").substringBefore("/")
-                F16Extractor().getUrl("https://f16px.com/e/$id", currentUrl)?.forEach { callback.invoke(it) }
-            } 
-            else {
-                val directLoaded = loadExtractor(finalUrl, currentUrl, subtitleCallback, callback)
-                if (!directLoaded) {
-                    try {
-                        val res = app.get(finalUrl, referer = currentUrl)
-                        val scriptHtml = res.document.html().replace("\\/", "/")
-                        Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                            val streamUrl = match.value
-                            val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "LK21 VIP",
-                                    name = "LK21 VIP",
-                                    url = streamUrl,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = finalUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    } catch (e: Exception) {}
-                }
+            // Gunakan loadExtractor untuk semua URL
+            val loaded = loadExtractor(url, currentUrl, subtitleCallback, callback)
+            if (!loaded) {
+                // Fallback manual cari m3u8/mp4 di script
+                try {
+                    val res = app.get(url, referer = currentUrl)
+                    val scriptHtml = res.document.html().replace("\\/", "/")
+                    Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
+                        val streamUrl = match.value
+                        val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "LK21 Direct",
+                                name = "LK21 Direct",
+                                url = streamUrl,
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+                } catch (e: Exception) {}
             }
         }
         return true
