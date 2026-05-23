@@ -10,7 +10,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.network.WebViewResolver
 
 // ============================================================================
-// 1. TURBOVIP EXTRACTOR (Bypass Cloudflare) - TIDAK DIOTAK-ATIK
+// 1. TURBOVIP EXTRACTOR (Bypass Cloudflare) - Logika Asli Tidak Diubah
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "TurboVIP"
@@ -20,13 +20,11 @@ open class EmturbovidExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            // Surat Pengantar agar Cloudflare tidak curiga
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
                 "Referer" to "https://playeriframe.sbs/"
             )
             
-            // Tangkap request yang mengandung m3u8
             val interceptorRegex = Regex("(?i)m3u8")
             val response = app.get(url, headers = headers, interceptor = WebViewResolver(interceptorRegex))
             val videoUrl = response.url
@@ -45,6 +43,8 @@ open class EmturbovidExtractor : ExtractorApi() {
                 )
             }
         } catch (e: Exception) {
+            // Aturan Wajib CloudStream: Loloskan CancellationException
+            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
         }
         return sources
@@ -52,7 +52,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. CAST / F16PX EXTRACTOR (Bypass WebCrypto) - TIDAK DIOTAK-ATIK
+// 2. CAST / F16PX EXTRACTOR (Bypass WebCrypto) - Logika Asli Tidak Diubah
 // ============================================================================
 open class F16Extractor : ExtractorApi() {
     override var name = "Cast"
@@ -62,13 +62,11 @@ open class F16Extractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            // Surat Pengantar untuk F16px
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
                 "Referer" to "https://playeriframe.sbs/"
             )
 
-            // Tangkap request m3u8
             val interceptorRegex = Regex("(?i)m3u8")
             val response = app.get(url, headers = headers, interceptor = WebViewResolver(interceptorRegex))
             val videoUrl = response.url
@@ -87,6 +85,8 @@ open class F16Extractor : ExtractorApi() {
                 )
             }
         } catch (e: Exception) {
+            // Aturan Wajib CloudStream: Loloskan CancellationException
+            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
         }
         return sources
@@ -114,7 +114,6 @@ open class P2PExtractor : ExtractorApi() {
         val apiUrl = "$mainUrl/api2.php?id=$id"
         val bridgeUrl = "https://playeriframe.sbs/"
         
-        // Aturan Main 1: Init headers wajib membawa referer jembatan playeriframe
         val initHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "Referer" to bridgeUrl,
@@ -124,7 +123,6 @@ open class P2PExtractor : ExtractorApi() {
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
-        // Aturan Main 2: API headers wajib membawa referer halaman video.php asal id berada
         val apiHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "Referer" to url,
@@ -142,10 +140,8 @@ open class P2PExtractor : ExtractorApi() {
         val sources = mutableListOf<ExtractorLink>()
         
         try {
-            // Langkah 1: Kunci session cookie Cloudflare lewat video.php
             app.get(url, headers = initHeaders)
 
-            // Langkah 2: Eksekusi pengambilan JSON M3U8 lewat api2.php
             val response = app.post(apiUrl, headers = apiHeaders, data = formBody).text
             val json = tryParseJson<HownetworkResponse>(response)
             val videoUrl = json?.file ?: json?.link
@@ -164,7 +160,7 @@ open class P2PExtractor : ExtractorApi() {
                 )
             }
         } catch (e: Exception) { 
-            // Aturan Kritis CloudStream: Jangan menelan CancellationException agar sistem timeout tidak bug
+            // Aturan Wajib CloudStream: Loloskan CancellationException
             if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace() 
         }
