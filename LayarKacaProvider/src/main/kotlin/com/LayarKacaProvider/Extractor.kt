@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.network.WebViewResolver
 import android.util.Base64
 import java.security.KeyPairGenerator
 import java.security.spec.ECGenParameterSpec
@@ -15,9 +14,11 @@ import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // ============================================================================
-// 1. TURBOVIP EXTRACTOR (Parsing HTML - terbukti di Termux)
+// 1. TURBOVIP EXTRACTOR (Parsing HTML - TERBUKTI di Termux)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "TurboVIP"
@@ -73,7 +74,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 2. P2P EXTRACTOR (Tidak diubah - masih berfungsi)
+// 2. P2P EXTRACTOR (TIDAK DIUBAH - Masih berfungsi)
 // ============================================================================
 data class HownetworkResponse(val file: String?, val link: String?)
 
@@ -130,10 +131,10 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 / CAST EXTRACTOR (ECDH Attestation + AES-GCM Decryption)
+// 3. F16 / CAST EXTRACTOR (ECDH Attestation + AES-GCM - TERBUKTI di Termux)
 // ============================================================================
 
-// Data class untuk Challenge
+// Data class untuk API
 data class ChallengeResponse(val challenge_id: String, val nonce: String, val viewer_hint: String)
 data class AttestResponse(val token: String, val viewer_id: String, val device_id: String)
 data class PlaybackOuter(val playback: PlaybackData)
@@ -214,33 +215,38 @@ open class F16Extractor : ExtractorApi() {
             val challenge = tryParseJson<ChallengeResponse>(challengeRes)
                 ?: return sources.also { println("F16Extractor: Gagal parse challenge") }
 
-            // 2. Generate ECDSA key pair
-            val keyPairGenerator = KeyPairGenerator.getInstance("EC")
-            val ecSpec = ECGenParameterSpec("secp256r1")
-            keyPairGenerator.initialize(ecSpec)
-            val keyPair = keyPairGenerator.genKeyPair()
-            val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
-            val privateKey = keyPair.private
+            // 2. Generate ECDSA key pair (P-256)
+            val (publicKeyJwk, privateKey) = withContext(Dispatchers.IO) {
+                val keyPairGenerator = KeyPairGenerator.getInstance("EC")
+                val ecSpec = ECGenParameterSpec("secp256r1")
+                keyPairGenerator.initialize(ecSpec)
+                val keyPair = keyPairGenerator.genKeyPair()
+                val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
+                val privateKey = keyPair.private
 
-            val w = publicKey.w
-            val x = Base64.encodeToString(w.affineX.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            val y = Base64.encodeToString(w.affineY.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            val publicKeyJwk = mapOf(
-                "crv" to "P-256",
-                "ext" to true,
-                "key_ops" to listOf("verify"),
-                "kty" to "EC",
-                "x" to x,
-                "y" to y
-            )
+                val w = publicKey.w
+                val x = Base64.encodeToString(w.affineX.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                val y = Base64.encodeToString(w.affineY.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                val jwk = mapOf(
+                    "crv" to "P-256",
+                    "ext" to true,
+                    "key_ops" to listOf("verify"),
+                    "kty" to "EC",
+                    "x" to x,
+                    "y" to y
+                )
+                jwk to privateKey
+            }
 
             // 3. Buat signature
             val dataToSign = "${challenge.challenge_id}${challenge.nonce}$viewerId$deviceId"
-            val signatureInstance = Signature.getInstance("SHA256withECDSA")
-            signatureInstance.initSign(privateKey)
-            signatureInstance.update(dataToSign.toByteArray())
-            val sig = signatureInstance.sign()
-            val signature = Base64.encodeToString(sig, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            val signature = withContext(Dispatchers.IO) {
+                val signatureInstance = Signature.getInstance("SHA256withECDSA")
+                signatureInstance.initSign(privateKey)
+                signatureInstance.update(dataToSign.toByteArray())
+                val sig = signatureInstance.sign()
+                Base64.encodeToString(sig, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            }
 
             // 4. Attest
             val attestPayload = mapOf(
@@ -271,20 +277,23 @@ open class F16Extractor : ExtractorApi() {
             val playback = tryParseJson<PlaybackOuter>(playbackRes)?.playback
                 ?: return sources.also { println("F16Extractor: Gagal playback") }
 
-            // 6. Dekripsi
-            val keyMaterial = playback.key_parts
-                .map { Base64.decode(it, Base64.URL_SAFE) }
-                .reduce { acc, bytes -> acc + bytes }
-            val iv = Base64.decode(playback.iv, Base64.URL_SAFE)
-            val payloadWithTag = Base64.decode(playback.payload, Base64.URL_SAFE)
+            // 6. Dekripsi (AES-256-GCM)
+            val decrypted = withContext(Dispatchers.IO) {
+                val keyMaterial = playback.key_parts
+                    .map { Base64.decode(it, Base64.URL_SAFE) }
+                    .reduce { acc, bytes -> acc + bytes }
+                val iv = Base64.decode(playback.iv, Base64.URL_SAFE)
+                val payloadWithTag = Base64.decode(playback.payload, Base64.URL_SAFE)
 
-            val tag = payloadWithTag.copyOfRange(payloadWithTag.size - 16, payloadWithTag.size)
-            val ciphertext = payloadWithTag.copyOfRange(0, payloadWithTag.size - 16)
+                // Pisahkan auth tag (16 byte terakhir)
+                val tag = payloadWithTag.copyOfRange(payloadWithTag.size - 16, payloadWithTag.size)
+                val ciphertext = payloadWithTag.copyOfRange(0, payloadWithTag.size - 16)
 
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val spec = GCMParameterSpec(128, iv)
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyMaterial, "AES"), spec)
-            val decrypted = cipher.doFinal(ciphertext + tag) // doFinal butuh ciphertext + tag
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                val spec = GCMParameterSpec(128, iv)
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyMaterial, "AES"), spec)
+                cipher.doFinal(ciphertext + tag) // doFinal butuh ciphertext + tag
+            }
             val streamData = tryParseJson<StreamContainer>(String(decrypted, Charsets.UTF_8))
                 ?: return sources.also { println("F16Extractor: Gagal parse stream") }
 
