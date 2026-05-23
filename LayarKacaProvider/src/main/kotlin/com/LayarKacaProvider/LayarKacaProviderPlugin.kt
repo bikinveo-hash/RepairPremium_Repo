@@ -11,8 +11,8 @@ class LayarKacaPlugin : Plugin() {
         registerMainAPI(LayarKacaProvider())
         
         // Mendaftarkan 3 Extractor Utama (Tanpa Hydrax)
-        registerExtractorAPI(P2PExtractor())
-        registerExtractorAPI(EmturbovidExtractor())
-        registerExtractorAPI(F16Extractor())
+        registerExtractorApi(P2PExtractor())
+        registerExtractorApi(EmturbovidExtractor())
+        registerExtractorApi(F16Extractor())
     }
 }
