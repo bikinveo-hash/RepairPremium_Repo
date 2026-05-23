@@ -423,21 +423,12 @@ class LayarKacaProvider : MainAPI() {
 
         allSources.forEach { url ->
             when {
-                // P2P
-                url.contains("playeriframe.sbs/iframe/p2p/") -> {
-                    val id = url.substringAfter("p2p/").substringBefore("/")
-                    P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
-                }
-                // TurboVIP
+                // HANYA TurboVIP
                 url.contains("playeriframe.sbs/iframe/turbovip/") -> {
                     val id = url.substringAfter("turbovip/").substringBefore("/")
                     Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
                 }
-                // Cast (Diabaikan dulu)
-                url.contains("playeriframe.sbs/iframe/cast/") -> {
-                    // Tidak melakukan apa-apa
-                }
-                // Fallback
+                // Fallback untuk URL lain
                 else -> {
                     try {
                         val res = app.get(url, referer = currentUrl)
