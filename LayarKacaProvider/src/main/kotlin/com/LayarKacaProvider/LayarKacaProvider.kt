@@ -3,7 +3,6 @@ package com.LayarKacaProvider
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -423,29 +422,43 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
-            // Gunakan loadExtractor untuk semua URL
-            val loaded = loadExtractor(url, currentUrl, subtitleCallback, callback)
-            if (!loaded) {
-                // Fallback manual cari m3u8/mp4 di script
-                try {
-                    val res = app.get(url, referer = currentUrl)
-                    val scriptHtml = res.document.html().replace("\\/", "/")
-                    Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
-                        val streamUrl = match.value
-                        val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "LK21 Direct",
-                                name = "LK21 Direct",
-                                url = streamUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = url
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                } catch (e: Exception) {}
+            when {
+                // P2P
+                url.contains("playeriframe.sbs/iframe/p2p/") -> {
+                    val id = url.substringAfter("p2p/").substringBefore("/")
+                    P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
+                }
+                // TurboVIP
+                url.contains("playeriframe.sbs/iframe/turbovip/") -> {
+                    val id = url.substringAfter("turbovip/").substringBefore("/")
+                    Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
+                }
+                // Cast (Diabaikan dulu)
+                url.contains("playeriframe.sbs/iframe/cast/") -> {
+                    // Tidak melakukan apa-apa
+                }
+                // Fallback
+                else -> {
+                    try {
+                        val res = app.get(url, referer = currentUrl)
+                        val scriptHtml = res.document.html().replace("\\/", "/")
+                        Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
+                            val streamUrl = match.value
+                            val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "LK21 Direct",
+                                    name = "LK21 Direct",
+                                    url = streamUrl,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = url
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                        }
+                    } catch (e: Exception) {}
+                }
             }
         }
         return true
