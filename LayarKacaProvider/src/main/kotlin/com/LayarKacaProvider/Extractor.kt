@@ -18,7 +18,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 // ============================================================================
-// 1. TURBOVIP EXTRACTOR (Parsing HTML - TERBUKTI di Termux)
+// DATA CLASSES (digunakan oleh F16Extractor)
+// ============================================================================
+data class ChallengeResponse(val challenge_id: String, val nonce: String, val viewer_hint: String)
+data class AttestResponse(val token: String, val viewer_id: String, val device_id: String)
+data class PlaybackOuter(val playback: PlaybackData)
+data class PlaybackData(
+    val iv: String,
+    val payload: String,
+    val key_parts: List<String>
+)
+data class StreamContainer(val sources: List<StreamItem>)
+data class StreamItem(val url: String, val label: String)
+
+// ============================================================================
+// 1. TURBOVIP EXTRACTOR (Parsing HTML - TERBUKTI di Termux & Python)
 // ============================================================================
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "TurboVIP"
@@ -131,21 +145,8 @@ open class P2PExtractor : ExtractorApi() {
 }
 
 // ============================================================================
-// 3. F16 / CAST EXTRACTOR (ECDH Attestation + AES-GCM - TERBUKTI di Termux)
+// 3. F16 / CAST EXTRACTOR (ECDSA Attestation + AES-GCM Decryption)
 // ============================================================================
-
-// Data class untuk API
-data class ChallengeResponse(val challenge_id: String, val nonce: String, val viewer_hint: String)
-data class AttestResponse(val token: String, val viewer_id: String, val device_id: String)
-data class PlaybackOuter(val playback: PlaybackData)
-data class PlaybackData(
-    val iv: String,
-    val payload: String,
-    val key_parts: List<String>
-)
-data class StreamContainer(val sources: List<StreamItem>)
-data class StreamItem(val url: String, val label: String)
-
 open class F16Extractor : ExtractorApi() {
     override var name = "Cast"
     override var mainUrl = "https://weneverbeenfree.com"
@@ -154,45 +155,27 @@ open class F16Extractor : ExtractorApi() {
     private val viewerId = "1993fdbe30bc4b35949faa647e5dc696"
     private val deviceId = "e72a8c5bd3da49bea2797f79cf6a363b"
 
-    // Client info statis (dari tangkapan browser)
-    private val clientData = mapOf(
-        "user_agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-        "platform" to "Android",
-        "platform_version" to "13.0.0",
-        "model" to "CPH2235",
-        "ua_full_version" to "137.0.7337.0",
-        "brand_full_versions" to listOf(
-            mapOf("brand" to "Chromium", "version" to "137.0.7337.0"),
-            mapOf("brand" to "Not/A)Brand", "version" to "24.0.0.0")
-        ),
-        "pixel_ratio" to 3,
-        "screen_width" to 360,
-        "screen_height" to 800,
-        "color_depth" to 24,
-        "languages" to listOf("id-ID", "id", "en-US", "en"),
-        "timezone" to "Asia/Jayapura",
-        "hardware_concurrency" to 8,
-        "device_memory" to 8,
-        "touch_points" to 5,
-        "webgl_vendor" to "Google Inc. (Qualcomm)",
-        "webgl_renderer" to "ANGLE (Qualcomm, Adreno (TM) 618, OpenGL ES 3.2)",
-        "canvas_hash" to "NqM1SjPxaPA42KL3TDIfbzaTumFLWcJOzn0TJvJ1xcA",
-        "audio_hash" to "_VRYiH6_cygtD14eUnkys7AF3r7zCf769syVkS3GVGU",
-        "pointer_type" to "coarse,touch",
-        "extra" to mapOf(
-            "vendor" to "Google Inc.",
-            "appVersion" to "5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-        )
-    )
+    // Fungsi konversi DER ke raw (64 byte) - TERBUKTI DI PYTHON
+    private fun derToRaw(derSig: ByteArray): ByteArray {
+        if (derSig[0] != 0x30.toByte()) throw IllegalArgumentException("Invalid DER signature")
+        var offset = 2
+        val totalLen = derSig[offset].toInt() and 0xFF; offset++
+        require(derSig[offset] == 0x02.toByte()); offset++
+        val rLen = derSig[offset].toInt() and 0xFF; offset++
+        val r = derSig.copyOfRange(offset, offset + rLen); offset += rLen
+        require(derSig[offset] == 0x02.toByte()); offset++
+        val sLen = derSig[offset].toInt() and 0xFF; offset++
+        val s = derSig.copyOfRange(offset, offset + sLen)
 
-    private val storageData = mapOf(
-        "cookie" to viewerId,
-        "local_storage" to viewerId,
-        "indexed_db" to "$viewerId:$deviceId",
-        "cache_storage" to "$viewerId:$deviceId"
-    )
-
-    private val attributesData = mapOf("entropy" to "high")
+        fun normalize(v: ByteArray): ByteArray {
+            return when {
+                v.size > 32 -> v.copyOfRange(v.size - 32, v.size)
+                v.size < 32 -> ByteArray(32 - v.size) + v
+                else -> v
+            }
+        }
+        return normalize(r) + normalize(s)
+    }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
@@ -200,7 +183,7 @@ open class F16Extractor : ExtractorApi() {
         val embedUrl = "$mainUrl/e/$videoId"
 
         val commonHeaders = mapOf(
-            "User-Agent" to clientData["user_agent"].toString(),
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "X-Embed-Origin" to "playeriframe.sbs",
             "X-Embed-Parent" to embedUrl,
             "X-Embed-Referer" to "https://playeriframe.sbs/",
@@ -210,64 +193,91 @@ open class F16Extractor : ExtractorApi() {
         )
 
         try {
-            // 1. Dapatkan challenge
+            // 1. Challenge
             val challengeRes = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders).text
             val challenge = tryParseJson<ChallengeResponse>(challengeRes)
-                ?: return sources.also { println("F16Extractor: Gagal parse challenge") }
+            if (challenge == null) {
+                println("Cast: Gagal parse challenge")
+                return sources
+            }
 
-            // 2. Generate ECDSA key pair (P-256)
-            val (publicKeyJwk, privateKey) = withContext(Dispatchers.IO) {
-                val keyPairGenerator = KeyPairGenerator.getInstance("EC")
-                val ecSpec = ECGenParameterSpec("secp256r1")
-                keyPairGenerator.initialize(ecSpec)
-                val keyPair = keyPairGenerator.genKeyPair()
-                val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
-                val privateKey = keyPair.private
+            // 2. Generate keypair & signature di IO thread (hindari blocking)
+            val attestPayload = withContext(Dispatchers.IO) {
+                val keyPair = KeyPairGenerator.getInstance("EC").apply {
+                    initialize(ECGenParameterSpec("secp256r1"))
+                }.genKeyPair()
+                val pub = keyPair.public as java.security.interfaces.ECPublicKey
+                val priv = keyPair.private
 
-                val w = publicKey.w
-                val x = Base64.encodeToString(w.affineX.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-                val y = Base64.encodeToString(w.affineY.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-                val jwk = mapOf(
-                    "crv" to "P-256",
-                    "ext" to true,
-                    "key_ops" to listOf("verify"),
-                    "kty" to "EC",
-                    "x" to x,
-                    "y" to y
+                val x = Base64.encodeToString(pub.w.affineX.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                val y = Base64.encodeToString(pub.w.affineY.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                val jwk = mapOf("crv" to "P-256", "ext" to true, "key_ops" to listOf("verify"), "kty" to "EC", "x" to x, "y" to y)
+
+                val dataToSign = "${challenge.challenge_id}${challenge.nonce}$viewerId$deviceId"
+                val sig = Signature.getInstance("SHA256withECDSA").apply {
+                    initSign(priv)
+                    update(dataToSign.toByteArray())
+                }.let { derToRaw(it.sign()) }
+                val signature = Base64.encodeToString(sig, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+
+                mapOf(
+                    "viewer_id" to viewerId,
+                    "device_id" to deviceId,
+                    "challenge_id" to challenge.challenge_id,
+                    "nonce" to challenge.nonce,
+                    "signature" to signature,
+                    "public_key" to jwk,
+                    "client" to mapOf(
+                        "user_agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                        "platform" to "Android",
+                        "platform_version" to "13.0.0",
+                        "model" to "CPH2235",
+                        "ua_full_version" to "137.0.7337.0",
+                        "brand_full_versions" to listOf(
+                            mapOf("brand" to "Chromium", "version" to "137.0.7337.0"),
+                            mapOf("brand" to "Not/A)Brand", "version" to "24.0.0.0")
+                        ),
+                        "pixel_ratio" to 3,
+                        "screen_width" to 360,
+                        "screen_height" to 800,
+                        "color_depth" to 24,
+                        "languages" to listOf("id-ID", "id", "en-US", "en"),
+                        "timezone" to "Asia/Jayapura",
+                        "hardware_concurrency" to 8,
+                        "device_memory" to 8,
+                        "touch_points" to 5,
+                        "webgl_vendor" to "Google Inc. (Qualcomm)",
+                        "webgl_renderer" to "ANGLE (Qualcomm, Adreno (TM) 618, OpenGL ES 3.2)",
+                        "canvas_hash" to "NqM1SjPxaPA42KL3TDIfbzaTumFLWcJOzn0TJvJ1xcA",
+                        "audio_hash" to "_VRYiH6_cygtD14eUnkys7AF3r7zCf769syVkS3GVGU",
+                        "pointer_type" to "coarse,touch",
+                        "extra" to mapOf(
+                            "vendor" to "Google Inc.",
+                            "appVersion" to "5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                        )
+                    ),
+                    "storage" to mapOf(
+                        "cookie" to viewerId,
+                        "local_storage" to viewerId,
+                        "indexed_db" to "$viewerId:$deviceId",
+                        "cache_storage" to "$viewerId:$deviceId"
+                    ),
+                    "attributes" to mapOf("entropy" to "high")
                 )
-                jwk to privateKey
             }
 
-            // 3. Buat signature
-            val dataToSign = "${challenge.challenge_id}${challenge.nonce}$viewerId$deviceId"
-            val signature = withContext(Dispatchers.IO) {
-                val signatureInstance = Signature.getInstance("SHA256withECDSA")
-                signatureInstance.initSign(privateKey)
-                signatureInstance.update(dataToSign.toByteArray())
-                val sig = signatureInstance.sign()
-                Base64.encodeToString(sig, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            }
-
-            // 4. Attest
-            val attestPayload = mapOf(
-                "viewer_id" to viewerId,
-                "device_id" to deviceId,
-                "challenge_id" to challenge.challenge_id,
-                "nonce" to challenge.nonce,
-                "signature" to signature,
-                "public_key" to publicKeyJwk,
-                "client" to clientData,
-                "storage" to storageData,
-                "attributes" to attributesData
-            )
+            // 3. Attest
             val attestRes = app.post("$mainUrl/api/videos/access/attest", json = attestPayload, headers = commonHeaders).text
-            val attestData = tryParseJson<AttestResponse>(attestRes)
-                ?: return sources.also { println("F16Extractor: Gagal attest") }
+            val token = tryParseJson<AttestResponse>(attestRes)?.token
+            if (token == null) {
+                println("Cast: Gagal attest")
+                return sources
+            }
 
-            // 5. Playback
+            // 4. Playback
             val playbackPayload = mapOf(
                 "fingerprint" to mapOf(
-                    "token" to attestData.token,
+                    "token" to token,
                     "viewer_id" to viewerId,
                     "device_id" to deviceId,
                     "confidence" to 0.93
@@ -275,9 +285,12 @@ open class F16Extractor : ExtractorApi() {
             )
             val playbackRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", json = playbackPayload, headers = commonHeaders).text
             val playback = tryParseJson<PlaybackOuter>(playbackRes)?.playback
-                ?: return sources.also { println("F16Extractor: Gagal playback") }
+            if (playback == null) {
+                println("Cast: Gagal playback")
+                return sources
+            }
 
-            // 6. Dekripsi (AES-256-GCM)
+            // 5. Dekripsi (AES-256-GCM) - TERBUKTI DI PYTHON
             val decrypted = withContext(Dispatchers.IO) {
                 val keyMaterial = playback.key_parts
                     .map { Base64.decode(it, Base64.URL_SAFE) }
@@ -285,18 +298,17 @@ open class F16Extractor : ExtractorApi() {
                 val iv = Base64.decode(playback.iv, Base64.URL_SAFE)
                 val payloadWithTag = Base64.decode(playback.payload, Base64.URL_SAFE)
 
-                // Pisahkan auth tag (16 byte terakhir)
-                val tag = payloadWithTag.copyOfRange(payloadWithTag.size - 16, payloadWithTag.size)
-                val ciphertext = payloadWithTag.copyOfRange(0, payloadWithTag.size - 16)
-
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                val spec = GCMParameterSpec(128, iv)
-                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyMaterial, "AES"), spec)
-                cipher.doFinal(ciphertext + tag) // doFinal butuh ciphertext + tag
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyMaterial, "AES"), GCMParameterSpec(128, iv))
+                cipher.doFinal(payloadWithTag) // Langsung gabung ciphertext+tag
             }
             val streamData = tryParseJson<StreamContainer>(String(decrypted, Charsets.UTF_8))
-                ?: return sources.also { println("F16Extractor: Gagal parse stream") }
+            if (streamData == null) {
+                println("Cast: Gagal parse stream")
+                return sources
+            }
 
+            // 6. Tambahkan sumber
             streamData.sources.forEach { source ->
                 sources.add(
                     newExtractorLink(
