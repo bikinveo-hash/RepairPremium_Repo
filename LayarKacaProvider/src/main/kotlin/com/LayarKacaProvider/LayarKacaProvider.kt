@@ -113,7 +113,7 @@ class LayarKacaProvider : MainAPI() {
         try {
             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
             val tmdbRes = app.get("https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle").parsedSafe<TmdbSearchResponse>()
-            val match = tmdbRes?.results?.firstOrNull { 
+            val match = tmRes?.results?.firstOrNull { 
                 val relDate = it.release_date ?: it.first_air_date
                 val relYear = relDate?.substringBefore("-")?.toIntOrNull()
                 relYear == year || year == null
@@ -131,7 +131,7 @@ class LayarKacaProvider : MainAPI() {
         return if (href.contains("/series/") || element.select("span.label-TV").isNotEmpty()) {
             newAnimeSearchResponse(cleanTitle, href, TvType.TvSeries) {
                 this.posterUrl = finalPoster
-                addYear(year)
+                this.year = year
                 if (ratingScore != null) {
                     this.score = Score.from(ratingScore, 10)
                 }
@@ -139,7 +139,7 @@ class LayarKacaProvider : MainAPI() {
         } else {
             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
                 this.posterUrl = finalPoster
-                addYear(year)
+                this.year = year
                 if (ratingScore != null) {
                     this.score = Score.from(ratingScore, 10)
                 }
@@ -176,7 +176,8 @@ class LayarKacaProvider : MainAPI() {
         val synopsis = document.select("div.synopsis, div.entry-content p, div.meta-info div.synopsis").text().trim()
         
         val tags = document.select("div.tag-list span.tag a, div.genre a").map { it.text().trim() }
-        val actors = document.select("div.detail p:contains(Bintang) a, div.meta-info p:contains(Actors) a").map { it.text().trim() }
+        val rawActors = document.select("div.detail p:contains(Bintang) a, div.meta-info p:contains(Actors) a").map { it.text().trim() }
+        val actorDataList = rawActors.map { ActorData(Actor(it), role = null, roleData = null) }
 
         val recommendations = document.select("ul#you-may-also-like li, div.mob-related-video li.slider").mapNotNull { recElement ->
             val recTitle = recElement.select("h3, span.video-title").text().trim()
@@ -200,11 +201,19 @@ class LayarKacaProvider : MainAPI() {
                     val epTitle = ep.text().trim()
                     val epNum = epTitle.replace(Regex("\\D+"), "").toIntOrNull() ?: 1
                     if (!epHref.isNullOrBlank()) {
-                        episodes.add(Episode(data = fixUrl(epHref), name = epTitle, episode = epNum))
+                        val newEp = newEpisode(fixUrl(epHref)) {
+                            this.name = epTitle
+                            this.episode = epNum
+                        }
+                        episodes.add(newEp)
                     }
                 }
             } else {
-                episodes.add(Episode(data = url, name = "Episode 1", episode = 1))
+                val newEp = newEpisode(url) {
+                    this.name = "Episode 1"
+                    this.episode = 1
+                }
+                episodes.add(newEp)
             }
 
             newTvSeriesLoadResponse(cleanTitle, url, TvType.TvSeries, episodes) {
@@ -213,7 +222,7 @@ class LayarKacaProvider : MainAPI() {
                 this.plot = synopsis
                 this.score = Score.from(ratingScore, 10)
                 this.tags = tags
-                this.actors = actors
+                this.actors = actorDataList
                 this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -226,7 +235,7 @@ class LayarKacaProvider : MainAPI() {
                 this.plot = synopsis
                 this.score = Score.from(ratingScore, 10)
                 this.tags = tags
-                this.actors = actors
+                this.actors = actorDataList
                 this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -281,13 +290,11 @@ class LayarKacaProvider : MainAPI() {
             var decoded = ""
             val trimmed = encryptedString.trim()
             
-            // Aturan Main Baru: Jika data-url ternyata teks biasa/path tanpa enkripsi, langsung loloskan
             if (trimmed.startsWith("http") || trimmed.startsWith("//") || trimmed.contains("playeriframe.sbs") || trimmed.contains("iframe")) {
                 decoded = trimmed
             } else {
                 for (key in possibleKeys) {
-                    var attempt = decryptRC4(key, trimmed).trim()
-                    // Jika hasil dekripsi mengandung domain target atau format path iframe, loloskan langsung
+                    val attempt = decryptRC4(key, trimmed).trim()
                     if (attempt.startsWith("http") || attempt.startsWith("//") || attempt.contains("playeriframe.sbs") || attempt.contains("iframe")) {
                         decoded = attempt
                         break
@@ -296,7 +303,6 @@ class LayarKacaProvider : MainAPI() {
             }
             
             if (decoded.isNotBlank()) {
-                // Standarisasi URL: Jika tidak diawali skema protokol HTTP, tambahkan secara manual
                 if (!decoded.startsWith("http") && !decoded.startsWith("//")) {
                     decoded = if (decoded.startsWith("/")) "https://playeriframe.sbs$decoded" else "https://$decoded"
                 }
@@ -320,9 +326,8 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
         allSources.forEach { url ->
-            var finalUrl = url
+            val finalUrl = url
             
-            // 3. BYPASS SEMUA SERVER SECARA PARALEL (P2P, TurboVIP, Cast Terbaca Semua)
             if (finalUrl.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = finalUrl.substringAfter("p2p/").substringBefore("/")
                 P2PExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)?.forEach { callback.invoke(it) }
