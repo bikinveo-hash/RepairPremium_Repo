@@ -21,7 +21,7 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
-    // ================== EKSTRAKTOR VIDSRC (TANPA ENCODE – AGAR MUNCUL) ==================
+    // ================== EKSTRAKTOR VIDSRC (FINAL – DENGAN PEMBERSIHAN NEWLINE) ==================
     suspend fun invokeVidSrc(
         tmdbId: String,
         season: Int?,
@@ -37,18 +37,21 @@ object AdiXtreamExtractor : AdiXtream() {
         }
 
         try {
-            val embedHtml = app.get(embedUrl).text
+            // Bersihkan newline agar regex bisa mencocokkan base64 panjang
+            val embedHtml = app.get(embedUrl).text.replace("\n", "").replace("\r", "")
             val rcpB64 = Regex("""cloudnestra\.com/rcp/([A-Za-z0-9+/=_-]+)""")
                 .find(embedHtml)?.groupValues?.get(1) ?: return
             val rcpUrl = "https://cloudnestra.com/rcp/$rcpB64"
 
-            val rcpHtml = app.get(rcpUrl, referer = embedUrl).text
+            // Bersihkan newline pada halaman /rcp/
+            val rcpHtml = app.get(rcpUrl, referer = embedUrl).text.replace("\n", "").replace("\r", "")
             val prorcpB64 = Regex("""/prorcp/([A-Za-z0-9+/=_-]+)""")
                 .find(rcpHtml)?.groupValues?.get(1) ?: return
             val prorcpUrl = "https://cloudnestra.com/prorcp/$prorcpB64"
 
             val prorcpHtml = app.get(prorcpUrl, referer = rcpUrl).text
 
+            // Ekstrak daftar domain dari JavaScript
             val testDomsRegex = Regex("""var test_doms\s*=\s*\[(.*?)\];""")
             val testDomsMatch = testDomsRegex.find(prorcpHtml)
             val domains = if (testDomsMatch != null) {
@@ -61,10 +64,12 @@ object AdiXtreamExtractor : AdiXtream() {
                 listOf("tmstr1.neonhorizonworkshops.com")
             }
 
+            // Ekstrak template m3u8 (ambil URL pertama sebelum " or ")
             val fileRegex = Regex("""file:\s*"([^"]+)"""")
             val fileMatch = fileRegex.find(prorcpHtml) ?: return
             val m3u8Template = fileMatch.groupValues[1].substringBefore(" or ")
 
+            // Ganti SEMUA placeholder domain (tmstr1.{v1}, tmstr2.{v2}, app2.{v5}, dll)
             val m3u8Url = m3u8Template
                 .replace(Regex("""tmstr[0-9]+\.\{v\d+\}"""), domains.first())
                 .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
