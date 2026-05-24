@@ -20,19 +20,90 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
-    // ================== EKSTRAKTOR VIDSRC ==================
+    // ================== EKSTRAKTOR VIDSRC (DIPERBARUI) ==================
     suspend fun invokeVidSrc(
-        tmdbId: String, season: Int?, episode: Int?, isTvSeries: Boolean, 
-        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
+        tmdbId: String,
+        season: Int?,
+        episode: Int?,
+        isTvSeries: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ) {
-        val baseUrl = if (isTvSeries) "$mainUrl/embed/tv/$tmdbId/$season/$episode" else "$mainUrl/embed/movie/$tmdbId"
+        // 1. Bangun embed URL baru
+        val embedUrl = if (isTvSeries) {
+            "https://vidsrcme.ru/embed/tv?tmdb=$tmdbId&season=$season&episode=$episode"
+        } else {
+            "https://vidsrcme.ru/embed/movie?tmdb=$tmdbId"
+        }
 
         try {
+            // 2. Fetch halaman embed → ekstrak base64 /rcp/
+            val embedHtml = app.get(embedUrl).text
+            val rcpB64 = Regex("""cloudnestra\.com/rcp/([A-Za-z0-9+/=_-]+)""")
+                .find(embedHtml)?.groupValues?.get(1)
+                ?: return
+            val rcpUrl = "https://cloudnestra.com/rcp/$rcpB64"
+
+            // 3. Fetch /rcp/ → ekstrak base64 /prorcp/
+            val rcpHtml = app.get(rcpUrl, referer = embedUrl).text
+            val prorcpB64 = Regex("""/prorcp/([A-Za-z0-9+/=_-]+)""")
+                .find(rcpHtml)?.groupValues?.get(1)
+                ?: return
+            val prorcpUrl = "https://cloudnestra.com/prorcp/$prorcpB64"
+
+            // 4. Fetch /prorcp/ → ekstrak daftar domain & template m3u8
+            val prorcpHtml = app.get(prorcpUrl, referer = rcpUrl).text
+
+            // Ekstrak daftar domain dari JavaScript
+            val testDomsRegex = Regex("""var test_doms\s*=\s*\[(.*?)\];""")
+            val testDomsMatch = testDomsRegex.find(prorcpHtml)
+            val domains = if (testDomsMatch != null) {
+                testDomsMatch.groupValues[1]
+                    .split(",")
+                    .map { it.trim().removeSurrounding("\"") }
+                    .filter { it.isNotBlank() }
+                    .map { it.removePrefix("https://").removeSuffix("/") }
+            } else {
+                listOf("tmstr1.neonhorizonworkshops.com")
+            }
+
+            // Ekstrak template m3u8 (ambil URL pertama sebelum " or ")
+            val fileRegex = Regex("""file:\s*"([^"]+)"""")
+            val fileMatch = fileRegex.find(prorcpHtml) ?: return
+            val m3u8Template = fileMatch.groupValues[1].substringBefore(" or ")
+
+            // Ganti SEMUA placeholder domain (tmstr1.{v1}, tmstr2.{v2}, app2.{v5}, dll)
+            val m3u8Url = m3u8Template
+                .replace(Regex("""tmstr[0-9]+\.\{v\d+\}"""), domains.first())
+                .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
+
+            // 5. Kirim callback
+            callback.invoke(
+                newExtractorLink(
+                    this.name,
+                    "VidSrc HD",
+                    m3u8Url,
+                    ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "https://cloudnestra.com/"
+                }
+            )
+        } catch (e: Exception) {
+            logError(e)
+        }
+
+        // Subtitle (kode lama – masih berfungsi)
+        try {
             val mediaTypePath = if (isTvSeries) "tv" else "movie"
-            val extRes = app.get("https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey").text
+            val extRes = app.get(
+                "https://api.themoviedb.org/3/$mediaTypePath/$tmdbId/external_ids?api_key=$tmdbApiKey"
+            ).text
             val imdbId = Regex(""""imdb_id"\s*:\s*"([^"]+)"""").find(extRes)?.groupValues?.get(1)?.removePrefix("tt")
             if (imdbId != null) {
-                val opsRes = app.get("https://rest.opensubtitles.org/search/imdbid-$imdbId/sublanguageid-ind", headers = mapOf("X-User-Agent" to "trailers.to-UA")).text
+                val opsRes = app.get(
+                    "https://rest.opensubtitles.org/search/imdbid-$imdbId/sublanguageid-ind",
+                    headers = mapOf("X-User-Agent" to "trailers.to-UA")
+                ).text
                 val subUrl = Regex(""""SubDownloadLink"\s*:\s*"([^"]+)"""").find(opsRes)?.groupValues?.get(1)?.replace("\\/", "/")
                 val subId = Regex(""""IDSubtitleFile"\s*:\s*"([^"]+)"""").find(opsRes)?.groupValues?.get(1)
                 if (subUrl != null && subId != null) {
@@ -43,40 +114,17 @@ object AdiXtreamExtractor : AdiXtream() {
                             .addFormDataPart("sub_id", subId).addFormDataPart("sub_enc", "UTF-8")
                             .addFormDataPart("sub_src", "ops").addFormDataPart("subformat", "srt").build()
                         val extractRes = app.post("https://cloudnestra.com/get_sub_url", requestBody = requestBody).text
-                        if (extractRes.startsWith("/sub/")) subtitleCallback.invoke(newSubtitleFile("Indonesia", "https://cloudnestra.com$extractRes"))
+                        if (extractRes.startsWith("/sub/"))
+                            subtitleCallback.invoke(newSubtitleFile("Indonesia", "https://cloudnestra.com$extractRes"))
                     }
                 }
             }
-        } catch (e: Exception) { }
-
-        val universalBypass = WebViewResolver(Regex("""vidsrc|cloudnestra|vsembed|rcp"""))
-        val response1 = app.get(baseUrl, interceptor = universalBypass).text
-        var iframeUrl = Regex("""<iframe[^>]+src=["']([^"']+)["']""").find(response1)?.groupValues?.get(1)
-            ?: Jsoup.parse(response1).selectFirst("iframe")?.attr("src") ?: return
-        
-        if (iframeUrl.startsWith("//")) iframeUrl = "https:$iframeUrl"
-
-        var finalHtml = app.get(iframeUrl, referer = baseUrl, interceptor = universalBypass).text
-        var finalReferer = iframeUrl
-
-        if (!finalHtml.contains("H4sI")) {
-            val hiddenMatch = Regex("""['"](/prorcp/[^'"]+|/rcp/[^'"]+)['"]""").find(finalHtml)
-            if (hiddenMatch != null) {
-                val domain = "https://" + (if (finalReferer.contains("vsembed.ru")) "cloudnestra.com" else finalReferer.substringAfter("://").substringBefore("/"))
-                val hiddenUrl = domain + hiddenMatch.groupValues[1]
-                finalHtml = app.get(hiddenUrl, referer = finalReferer, interceptor = universalBypass).text
-                finalReferer = hiddenUrl
-            }
-        }
-
-        val hashMatch = Regex("""(H4sI[a-zA-Z0-9+/=_\.\-\\]+m3u8)""").find(finalHtml)
-        if (hashMatch != null) {
-            val m3u8Url = "https://tmstr2.neonhorizonworkshops.com/pl/${hashMatch.groupValues[1].replace("\\/", "/")}"
-            callback.invoke(newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) { this.referer = finalReferer })
+        } catch (e: Exception) {
+            logError(e)
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX (TETAP) ==================
     suspend fun invokeAdimoviebox(
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
@@ -117,7 +165,7 @@ object AdiXtreamExtractor : AdiXtream() {
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX 2 ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX 2 (TETAP) ==================
     suspend fun invokeAdimoviebox2(
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
