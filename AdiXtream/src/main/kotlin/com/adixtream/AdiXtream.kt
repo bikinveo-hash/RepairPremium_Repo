@@ -13,7 +13,6 @@ open class AdiXtream : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
 
-    // Kita ubah visibilitasnya menjadi protected/public agar bisa diakses oleh Extractor
     val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
     override val mainPage = mainPageOf(
@@ -184,25 +183,27 @@ open class AdiXtream : MainAPI() {
         val season = if (isTvSeries) parts[parts.size - 2].toIntOrNull() else null
         val episode = if (isTvSeries) parts.last().toIntOrNull() else null
 
-        // Ambil Data Ekstra (Judul & Tahun) untuk Adimoviebox dari TMDB API
         var title = ""
+        var originalTitle: String? = null
         var year: Int? = null
         try {
             if (isTvSeries) {
                 val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
                 title = tvDetail?.name ?: ""
+                originalTitle = tvDetail?.originalName
                 year = tvDetail?.firstAirDate?.take(4)?.toIntOrNull()
             } else {
                 val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()
                 title = movieDetail?.title ?: ""
+                originalTitle = movieDetail?.originalTitle
                 year = movieDetail?.releaseDate?.take(4)?.toIntOrNull()
             }
         } catch (e: Exception) { }
 
         runAllAsync(
             { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
-            { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback) }
+            { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
         )
         return true
     }
