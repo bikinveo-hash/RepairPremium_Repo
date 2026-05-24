@@ -21,7 +21,7 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
-    // ================== EKSTRAKTOR VIDSRC ==================
+    // ================== EKSTRAKTOR VIDSRC (TANPA ENCODE – AGAR MUNCUL) ==================
     suspend fun invokeVidSrc(
         tmdbId: String,
         season: Int?,
@@ -30,7 +30,6 @@ object AdiXtreamExtractor : AdiXtream() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // 1. Bangun embed URL baru
         val embedUrl = if (isTvSeries) {
             "https://vidsrcme.ru/embed/tv?tmdb=$tmdbId&season=$season&episode=$episode"
         } else {
@@ -38,24 +37,18 @@ object AdiXtreamExtractor : AdiXtream() {
         }
 
         try {
-            // 2. Fetch halaman embed → ekstrak base64 /rcp/
             val embedHtml = app.get(embedUrl).text
             val rcpB64 = Regex("""cloudnestra\.com/rcp/([A-Za-z0-9+/=_-]+)""")
-                .find(embedHtml)?.groupValues?.get(1)
-                ?: return
-            val rcpUrl = "https://cloudnestra.com/rcp/${Uri.encode(rcpB64)}"
+                .find(embedHtml)?.groupValues?.get(1) ?: return
+            val rcpUrl = "https://cloudnestra.com/rcp/$rcpB64"
 
-            // 3. Fetch /rcp/ → ekstrak base64 /prorcp/
             val rcpHtml = app.get(rcpUrl, referer = embedUrl).text
             val prorcpB64 = Regex("""/prorcp/([A-Za-z0-9+/=_-]+)""")
-                .find(rcpHtml)?.groupValues?.get(1)
-                ?: return
-            val prorcpUrl = "https://cloudnestra.com/prorcp/${Uri.encode(prorcpB64)}"
+                .find(rcpHtml)?.groupValues?.get(1) ?: return
+            val prorcpUrl = "https://cloudnestra.com/prorcp/$prorcpB64"
 
-            // 4. Fetch /prorcp/ → ekstrak daftar domain & template m3u8
             val prorcpHtml = app.get(prorcpUrl, referer = rcpUrl).text
 
-            // Ekstrak daftar domain dari JavaScript
             val testDomsRegex = Regex("""var test_doms\s*=\s*\[(.*?)\];""")
             val testDomsMatch = testDomsRegex.find(prorcpHtml)
             val domains = if (testDomsMatch != null) {
@@ -68,24 +61,16 @@ object AdiXtreamExtractor : AdiXtream() {
                 listOf("tmstr1.neonhorizonworkshops.com")
             }
 
-            // Ekstrak template m3u8 (ambil URL pertama sebelum " or ")
             val fileRegex = Regex("""file:\s*"([^"]+)"""")
             val fileMatch = fileRegex.find(prorcpHtml) ?: return
             val m3u8Template = fileMatch.groupValues[1].substringBefore(" or ")
 
-            // Ganti SEMUA placeholder domain (tmstr1.{v1}, tmstr2.{v2}, app2.{v5}, dll)
             val m3u8Url = m3u8Template
                 .replace(Regex("""tmstr[0-9]+\.\{v\d+\}"""), domains.first())
                 .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
 
-            // 5. Kirim callback
             callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    "VidSrc HD",
-                    m3u8Url,
-                    ExtractorLinkType.M3U8
-                ) {
+                newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                     this.referer = "https://cloudnestra.com/"
                 }
             )
@@ -125,7 +110,7 @@ object AdiXtreamExtractor : AdiXtream() {
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX (DENGAN ORIGINAL TITLE) ==================
     suspend fun invokeAdimoviebox(
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
@@ -170,7 +155,7 @@ object AdiXtreamExtractor : AdiXtream() {
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX 2 ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX 2 (DENGAN ORIGINAL TITLE) ==================
     suspend fun invokeAdimoviebox2(
         title: String, year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
