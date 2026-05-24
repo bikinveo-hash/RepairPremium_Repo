@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.mvvm.logError // ← TAMBAHKAN INI
+import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.nicehttp.RequestBodyTypes
 import org.jsoup.Jsoup
 import okhttp3.MultipartBody
@@ -21,7 +21,7 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
-    // ================== EKSTRAKTOR VIDSRC (DIPERBARUI) ==================
+    // ================== EKSTRAKTOR VIDSRC ==================
     suspend fun invokeVidSrc(
         tmdbId: String,
         season: Int?,
@@ -43,14 +43,14 @@ object AdiXtreamExtractor : AdiXtream() {
             val rcpB64 = Regex("""cloudnestra\.com/rcp/([A-Za-z0-9+/=_-]+)""")
                 .find(embedHtml)?.groupValues?.get(1)
                 ?: return
-            val rcpUrl = "https://cloudnestra.com/rcp/$rcpB64"
+            val rcpUrl = "https://cloudnestra.com/rcp/${Uri.encode(rcpB64)}"
 
             // 3. Fetch /rcp/ → ekstrak base64 /prorcp/
             val rcpHtml = app.get(rcpUrl, referer = embedUrl).text
             val prorcpB64 = Regex("""/prorcp/([A-Za-z0-9+/=_-]+)""")
                 .find(rcpHtml)?.groupValues?.get(1)
                 ?: return
-            val prorcpUrl = "https://cloudnestra.com/prorcp/$prorcpB64"
+            val prorcpUrl = "https://cloudnestra.com/prorcp/${Uri.encode(prorcpB64)}"
 
             // 4. Fetch /prorcp/ → ekstrak daftar domain & template m3u8
             val prorcpHtml = app.get(prorcpUrl, referer = rcpUrl).text
@@ -90,7 +90,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 }
             )
         } catch (e: Exception) {
-            logError(e) // ← sekarang berfungsi karena impor sudah ditambahkan
+            logError(e)
         }
 
         // Subtitle (kode lama – masih berfungsi)
@@ -121,14 +121,15 @@ object AdiXtreamExtractor : AdiXtream() {
                 }
             }
         } catch (e: Exception) {
-            logError(e) // ← juga di sini
+            logError(e)
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX (TETAP) ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX ==================
     suspend fun invokeAdimoviebox(
         title: String, year: Int?, season: Int?, episode: Int?,
-        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
+        originalTitle: String? = null
     ) {
         val apiUrl = "https://filmboom.top"
         val searchUrl = "$apiUrl/wefeed-h5-bff/web/subject/search"
@@ -138,7 +139,10 @@ object AdiXtreamExtractor : AdiXtream() {
         
         val matchedMedia = items.find { item ->
             val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-            (item.title.equals(title, true)) || (item.title?.contains(title, true) == true && itemYear == year)
+            (item.title.equals(title, true)) ||
+            (item.title?.contains(title, true) == true && itemYear == year) ||
+            (originalTitle != null && item.title.equals(originalTitle, true)) ||
+            (originalTitle != null && item.title?.contains(originalTitle, true) == true && itemYear == year)
         } ?: return
         
         val subjectId = matchedMedia.subjectId ?: return
@@ -166,10 +170,11 @@ object AdiXtreamExtractor : AdiXtream() {
         }
     }
 
-    // ================== EKSTRAKTOR ADIMOVIEBOX 2 (TETAP) ==================
+    // ================== EKSTRAKTOR ADIMOVIEBOX 2 ==================
     suspend fun invokeAdimoviebox2(
         title: String, year: Int?, season: Int?, episode: Int?,
-        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
+        originalTitle: String? = null
     ) {
         val apiUrl = "https://api3.aoneroom.com"
         val (brand, model) = Adimoviebox2Helper.randomBrandModel()
@@ -183,9 +188,10 @@ object AdiXtreamExtractor : AdiXtream() {
         val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
             val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             val isTitleMatch = subject.title?.contains(title, true) == true
+            val isOriginalTitleMatch = originalTitle != null && subject.title?.contains(originalTitle, true) == true
             val isYearMatch = year == null || subjectYear == year
             val isTypeMatch = if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
-            isTitleMatch && isYearMatch && isTypeMatch
+            (isTitleMatch || isOriginalTitleMatch) && isYearMatch && isTypeMatch
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
