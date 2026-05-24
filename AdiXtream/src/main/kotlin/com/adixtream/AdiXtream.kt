@@ -8,7 +8,7 @@ import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
-    override var mainUrl = "https://vidsrc.net"
+    override var mainUrl = "https://vidsrcme.ru"
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override var lang = "en"
     override val hasMainPage = true
