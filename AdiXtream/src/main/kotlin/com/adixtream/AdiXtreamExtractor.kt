@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.mvvm.logError // ← TAMBAHKAN INI
 import com.lagradost.nicehttp.RequestBodyTypes
 import org.jsoup.Jsoup
 import okhttp3.MultipartBody
@@ -89,7 +90,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 }
             )
         } catch (e: Exception) {
-            logError(e)
+            logError(e) // ← sekarang berfungsi karena impor sudah ditambahkan
         }
 
         // Subtitle (kode lama – masih berfungsi)
@@ -120,7 +121,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 }
             }
         } catch (e: Exception) {
-            logError(e)
+            logError(e) // ← juga di sini
         }
     }
 
