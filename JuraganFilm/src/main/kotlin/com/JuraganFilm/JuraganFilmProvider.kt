@@ -23,20 +23,14 @@ class JuraganFilmProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        // Untuk halaman > 1, ambil latest movie dari /page/$page/
         if (page > 1) {
             val doc = app.get("$mainUrl/page/$page/").document
             val latestItems = parseLatestMovieItems(doc)
             return if (latestItems.isNotEmpty()) {
-                newHomePageResponse(
-                    "Latest Movie - Page $page",
-                    latestItems,
-                    hasNext = hasNextPage(doc) // Cek apakah masih ada halaman berikutnya
-                )
+                newHomePageResponse("Latest Movie - Page $page", latestItems, hasNext = hasNextPage(doc))
             } else null
         }
 
-        // Halaman pertama (page = 1)
         val doc = app.get(request.data).document
         val homeLists = mutableListOf<HomePageList>()
 
@@ -67,7 +61,6 @@ class JuraganFilmProvider : MainAPI() {
             homeLists.add(HomePageList("Latest Movie", latestItems))
         }
 
-        // Cek apakah ada next page untuk infinite scroll
         val hasNext = hasNextPage(doc)
         return if (homeLists.isEmpty()) null
         else newHomePageResponse(homeLists, hasNext = hasNext)
@@ -207,17 +200,72 @@ class JuraganFilmProvider : MainAPI() {
         }
     }
 
-    // =================== LOAD LINKS ===================
+    // =================== LOAD LINKS (EKSTRAKSI LANGSUNG) ===================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data URL: https://tv44.juragan.film/file/?id=...
-        // Extractor custom JuraganFilmExtractor akan menangani link m3u8 dari cloud.wth.my.id
-        loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
-        return true
+        // data = URL iframe: https://tv44.juragan.film/file/?id=...
+        // Referer dari halaman detail (disimpan di dataUrl, kita tidak punya langsung, tapi bisa pakai mainUrl)
+        val html = app.get(data, referer = mainUrl).text
+        
+        // Cari HLS_URL di JavaScript
+        val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
+        val match = m3u8Regex.find(html)
+        
+        if (match != null) {
+            val m3u8Url = match.value
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "JuraganFilm - HLS",
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = data
+                    this.quality = Qualities.P1080.value
+                }
+            )
+            return true
+        }
+        
+        // Fallback: coba ambil dari JSON fallback (MP4)
+        val fallbackRegex = Regex("""const FALLBACK_JSON_URL\s*=\s*"([^"]+)""")
+        val fallbackMatch = fallbackRegex.find(html)
+        if (fallbackMatch != null) {
+            val fallbackUrl = fallbackMatch.groupValues[1]
+            // Ambil sumber dari JSON
+            val jsonUrl = if (fallbackUrl.startsWith("http")) fallbackUrl
+                else "https://tv44.juragan.film/file/$fallbackUrl"
+            try {
+                val json = app.get(jsonUrl, referer = data).text
+                // Parsing JSON sederhana: cari link pertama
+                val linkRegex = Regex(""""link"\s*:\s*"([^"]+)"""")
+                val linkMatch = linkRegex.find(json)
+                if (linkMatch != null) {
+                    val mp4Url = linkMatch.groupValues[1]
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = "JuraganFilm - MP4",
+                            url = mp4Url,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = data
+                            this.quality = Qualities.P720.value
+                        }
+                    )
+                    return true
+                }
+            } catch (e: Exception) {
+                // lanjut
+            }
+        }
+        
+        // Fallback terakhir: loadExtractor
+        return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
     }
 
     // =================== HELPER ===================
