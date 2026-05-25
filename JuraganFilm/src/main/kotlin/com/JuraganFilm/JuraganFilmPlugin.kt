@@ -7,6 +7,6 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class JuraganFilmPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(JuraganFilmProvider())
-        registerExtractorAPI(JuraganFilmExtractor()) // Extractor untuk /file/
+        registerExtractorAPI(JuraganFilmExtractor())
     }
 }
