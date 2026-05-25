@@ -15,13 +15,13 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    // URL kategori mengandung ?page=1 agar bisa di-replace nanti
+    // Halaman utama + kategori pakai mainPageOf
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home",
-        "$mainUrl/kategori-film/box-office/?page=1" to "Box Office",
-        "$mainUrl/kategori-film/ongoing/?page=1" to "Ongoing",
-        "$mainUrl/kategori-film/drama-serial-mandarin/?page=1" to "Drama Serial Mandarin",
-        "$mainUrl/kategori-film/drama-serial-korea/?page=1" to "Drama Serial Korea"
+        "$mainUrl/kategori-film/box-office/" to "Box Office",
+        "$mainUrl/kategori-film/ongoing/" to "Ongoing",
+        "$mainUrl/kategori-film/drama-serial-mandarin/" to "Drama Serial Mandarin",
+        "$mainUrl/kategori-film/drama-serial-korea/" to "Drama Serial Korea"
     )
 
     private val mobileUserAgent =
@@ -42,10 +42,16 @@ class JuraganFilmProvider : MainAPI() {
         val isHome = request.data == "$mainUrl/"
         val url = if (isHome) {
             // Home hanya 1 halaman
+            if (page > 1) return null
             request.data
         } else {
-            // Ganti page=1 dengan page=$page
-            request.data.replace("page=1", "page=$page")
+            // Halaman kategori: tambahkan /page/$page/ untuk halaman > 1
+            if (page > 1) {
+                val base = request.data.trimEnd('/')
+                "$base/page/$page/"
+            } else {
+                request.data
+            }
         }
 
         val doc = app.get(url, headers = baseHeaders).document
@@ -74,11 +80,10 @@ class JuraganFilmProvider : MainAPI() {
             if (homeLists.isEmpty()) null
             else newHomePageResponse(homeLists, hasNext = hasNextPage(doc))
         } else {
-            // Halaman kategori: tampilkan daftar item dengan infinite scroll
-            val items = doc.select(".gmr-item-modulepost").mapNotNull { parseWidgetItem(it) }
+            // Halaman kategori: ambil semua item dari grid
+            val items = parseLatestMovieItems(doc)
             if (items.isNotEmpty()) {
-                // Selalu anggap ada halaman berikutnya selama masih ada item
-                newHomePageResponse(request.name, items, hasNext = items.size >= 8)
+                newHomePageResponse(request.name, items, hasNext = hasNextPage(doc))
             } else null
         }
     }
