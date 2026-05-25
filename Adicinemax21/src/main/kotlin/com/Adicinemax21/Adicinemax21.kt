@@ -55,7 +55,7 @@ open class Adicinemax21 : TmdbProvider() {
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://z1.idlixku.com" // Update domain baru
+        const val idlixAPI = "https://z1.idlixku.com"
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -216,6 +216,10 @@ open class Adicinemax21 : TmdbProvider() {
             ?.map { "https://www.youtube.com/watch?v=${it.key}" }
             ?.firstOrNull()
 
+        // Ambil judul Jepang dan Indonesia dari alternative titles
+        val jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title
+        val idTitle = res.alternativeTitles?.results?.find { it.iso31661 == "ID" }?.title
+
         return if (type == TvType.TvSeries) {
             val lastSeason = res.lastEpisodeToAir?.seasonNumber
             val episodes = res.seasons?.mapNotNull { season ->
@@ -238,7 +242,8 @@ open class Adicinemax21 : TmdbProvider() {
                             airedYear = year,
                             lastSeason = lastSeason,
                             epsTitle = eps.name,
-                            jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
+                            jpTitle = jpTitle,
+                            altTitle = idTitle,  // <-- tambahan
                             date = season.airDate,
                             airedDate = res.releaseDate ?: res.firstAirDate,
                             isAsian = isAsian,
@@ -292,7 +297,8 @@ open class Adicinemax21 : TmdbProvider() {
                     year = year,
                     orgTitle = orgTitle,
                     isAnime = isAnime,
-                    jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
+                    jpTitle = jpTitle,
+                    altTitle = idTitle,  // <-- tambahan
                     airedDate = res.releaseDate ?: res.firstAirDate,
                     isAsian = isAsian,
                     isBollywood = isBollywood
@@ -324,16 +330,16 @@ open class Adicinemax21 : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
-            { invokeIdlix(res.title, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeKisskh(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeIdlix(res.title, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeKisskh(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeVidlink(res.id, res.season, res.episode, callback) },
             { invokeVidsrccc(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback) },
             { invokeVixsrc(res.id, res.season, res.episode, callback) },
             { invokeCinemaOS(res.imdbId, res.id, res.title, res.season, res.episode, res.year, callback, subtitleCallback) },
-            { if (!res.isAnime) invokePlayer4U(res.title, res.season, res.episode, res.year, callback) },
+            { if (!res.isAnime) invokePlayer4U(res.title, res.altTitle, res.season, res.episode, res.year, callback) },
             { if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, callback) },
             { invokeVidsrc(res.imdbId, res.season, res.episode, subtitleCallback, callback) },
             { invokeWatchsomuch(res.imdbId, res.season, res.episode, subtitleCallback) },
@@ -362,6 +368,7 @@ open class Adicinemax21 : TmdbProvider() {
         val lastSeason: Int? = null,
         val epsTitle: String? = null,
         val jpTitle: String? = null,
+        val altTitle: String? = null,   // <-- judul alternatif Indonesia
         val date: String? = null,
         val airedDate: String? = null,
         val isAsian: Boolean = false,
@@ -369,6 +376,7 @@ open class Adicinemax21 : TmdbProvider() {
         val isCartoon: Boolean = false,
     )
 
+    // ... sisa data class tetap sama (Data, Results, Media, dll.)
     data class Data(
         val id: Int? = null,
         val type: String? = null,
