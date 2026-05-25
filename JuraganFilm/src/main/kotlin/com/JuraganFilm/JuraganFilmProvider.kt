@@ -246,11 +246,12 @@ class JuraganFilmProvider : MainAPI() {
                 ) {
                     this.referer = data
                     this.quality = Qualities.P1080.value
+                    // Header yang dibutuhkan oleh cloud.wth.my.id
                     this.headers = mapOf(
                         "Origin" to "https://tv44.juragan.film",
                         "Referer" to data,
-                        "User-Agent" to mobileUserAgent // ← WAJIB mobile
-                    )
+                        "User-Agent" to mobileUserAgent
+                    ) + if (!savedCookies.isNullOrBlank()) mapOf("Cookie" to savedCookies!!) else emptyMap()
                 }
             )
             return true
