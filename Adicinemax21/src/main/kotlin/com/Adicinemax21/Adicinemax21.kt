@@ -1,25 +1,10 @@
 package com.Adicinemax21
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.Adicinemax21.Adicinemax21Extractor.invokeAdiDewasa
 import com.Adicinemax21.Adicinemax21Extractor.invokeKisskh 
 import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox
 import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox2 
-import com.Adicinemax21.Adicinemax21Extractor.invokeGomovies
-import com.Adicinemax21.Adicinemax21Extractor.invokeIdlix
-import com.Adicinemax21.Adicinemax21Extractor.invokeMapple
-import com.Adicinemax21.Adicinemax21Extractor.invokeSuperembed
-import com.Adicinemax21.Adicinemax21Extractor.invokeVidfast
 import com.Adicinemax21.Adicinemax21Extractor.invokeVidlink
-import com.Adicinemax21.Adicinemax21Extractor.invokeVidsrc
-import com.Adicinemax21.Adicinemax21Extractor.invokeVidsrccc
-import com.Adicinemax21.Adicinemax21Extractor.invokeVixsrc
-import com.Adicinemax21.Adicinemax21Extractor.invokeWatchsomuch
-import com.Adicinemax21.Adicinemax21Extractor.invokeWyzie
-import com.Adicinemax21.Adicinemax21Extractor.invokeXprime
-import com.Adicinemax21.Adicinemax21Extractor.invokeCinemaOS
-import com.Adicinemax21.Adicinemax21Extractor.invokePlayer4U
-import com.Adicinemax21.Adicinemax21Extractor.invokeRiveStream
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -53,24 +38,8 @@ open class Adicinemax21 : TmdbProvider() {
 
         private const val apiKey = "b030404650f279792a8d3287232358e3"
 
-        /** ALL SOURCES */
-        const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://z1.idlixku.com"
-        const val vidsrcccAPI = "https://vidsrc.cc"
-        const val vidSrcAPI = "https://vidsrc.net"
-        const val xprimeAPI = "https://backend.xprime.tv"
-        const val watchSomuchAPI = "https://watchsomuch.tv"
-        const val mappleAPI = "https://mapple.uk"
+        /** HANYA SUMBER YANG AKTIF */
         const val vidlinkAPI = "https://vidlink.pro"
-        const val vidfastAPI = "https://vidfast.pro"
-        const val wyzieAPI = "https://sub.wyzie.ru"
-        const val vixsrcAPI = "https://vixsrc.to"
-        const val vidsrccxAPI = "https://vidsrc.cx"
-        const val superembedAPI = "https://multiembed.mov"
-        const val vidrockAPI = "https://vidrock.net"
-        const val cinemaOSApi = "https://cinemaos.tech"
-        const val Player4uApi = "https://player4u.xyz"
-        const val RiveStreamAPI = "https://rivestream.org"
 
         fun getType(t: String?): TvType = when (t) {
             "movie" -> TvType.Movie
@@ -329,23 +298,10 @@ open class Adicinemax21 : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
-            { invokeIdlix(res.title, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeKisskh(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeAdimoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeVidlink(res.id, res.season, res.episode, callback) },
-            { invokeVidsrccc(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback) },
-            { invokeVixsrc(res.id, res.season, res.episode, callback) },
-            { invokeCinemaOS(res.imdbId, res.id, res.title, res.season, res.episode, res.year, callback, subtitleCallback) },
-            { if (!res.isAnime) invokePlayer4U(res.title, res.orgTitle, res.altTitle, res.season, res.episode, res.year, callback) },
-            { if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, callback) },
-            { invokeVidsrc(res.imdbId, res.season, res.episode, subtitleCallback, callback) },
-            { invokeWatchsomuch(res.imdbId, res.season, res.episode, subtitleCallback) },
-            { invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback) },
-            { invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback) },
-            { invokeWyzie(res.id, res.season, res.episode, subtitleCallback) },
-            { invokeSuperembed(res.id, res.season, res.episode, subtitleCallback, callback) }
+            { invokeVidlink(res.id, res.season, res.episode, callback) }
         )
         return true
     }
@@ -375,7 +331,7 @@ open class Adicinemax21 : TmdbProvider() {
         val isCartoon: Boolean = false,
     )
 
-    // ... sisa data class tetap sama (Data, Results, Media, dll.)
+    // Data class lainnya tetap
     data class Data(
         val id: Int? = null,
         val type: String? = null,
