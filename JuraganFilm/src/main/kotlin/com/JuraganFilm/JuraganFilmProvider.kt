@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 
 class JuraganFilmProvider : MainAPI() {
     override var name = "JuraganFilm"
-    override var mainUrl = "https://tv44.juragan.film"
+    override var mainUrl = "https://tv41.juragan.film"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = false
@@ -39,7 +39,8 @@ class JuraganFilmProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        val isHome = request.data == "$mainUrl/"
+        val isHome = request.name == "Home"
+        
         val url = if (isHome) {
             // Home hanya 1 halaman
             if (page > 1) return null
@@ -309,7 +310,7 @@ class JuraganFilmProvider : MainAPI() {
     // HELPERS
     // =====================================================================
     private fun hasNextPage(doc: Document): Boolean =
-        doc.selectFirst("ul.page-numbers li a.next") != null
+        doc.selectFirst("a.next.page-numbers") != null
 
     private fun fixPosterUrl(url: String?): String? =
         url?.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
