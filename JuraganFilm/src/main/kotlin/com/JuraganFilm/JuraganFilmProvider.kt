@@ -23,14 +23,20 @@ class JuraganFilmProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
+        // Untuk halaman > 1, ambil latest movie dari /page/$page/
         if (page > 1) {
             val doc = app.get("$mainUrl/page/$page/").document
             val latestItems = parseLatestMovieItems(doc)
             return if (latestItems.isNotEmpty()) {
-                newHomePageResponse("Latest Movie - Page $page", latestItems, hasNext = hasNextPage(doc))
+                newHomePageResponse(
+                    "Latest Movie - Page $page",
+                    latestItems,
+                    hasNext = hasNextPage(doc) // Cek apakah masih ada halaman berikutnya
+                )
             } else null
         }
 
+        // Halaman pertama (page = 1)
         val doc = app.get(request.data).document
         val homeLists = mutableListOf<HomePageList>()
 
@@ -61,8 +67,10 @@ class JuraganFilmProvider : MainAPI() {
             homeLists.add(HomePageList("Latest Movie", latestItems))
         }
 
+        // Cek apakah ada next page untuk infinite scroll
+        val hasNext = hasNextPage(doc)
         return if (homeLists.isEmpty()) null
-        else newHomePageResponse(homeLists, hasNext = false)
+        else newHomePageResponse(homeLists, hasNext = hasNext)
     }
 
     // =================== SEARCH ===================
@@ -117,7 +125,6 @@ class JuraganFilmProvider : MainAPI() {
 
         return when (type) {
             TvType.TvSeries -> {
-                // Perbaikan selector + fallback episode 1
                 val episodeElements = doc.select(
                     ".entry-content .post-page-numbers, " +
                     "article .post-page-numbers, " +
@@ -207,8 +214,8 @@ class JuraganFilmProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data URL dari iframe: https://tv44.juragan.film/file/?id=...
-        // Perlu extractor custom (lihat JuraganFilmExtractor)
+        // Data URL: https://tv44.juragan.film/file/?id=...
+        // Extractor custom JuraganFilmExtractor akan menangani link m3u8 dari cloud.wth.my.id
         loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
         return true
     }
