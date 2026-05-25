@@ -216,7 +216,6 @@ open class Adicinemax21 : TmdbProvider() {
             ?.map { "https://www.youtube.com/watch?v=${it.key}" }
             ?.firstOrNull()
 
-        // Ambil judul Jepang dan Indonesia dari alternative titles
         val jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title
         val idTitle = res.alternativeTitles?.results?.find { it.iso31661 == "ID" }?.title
 
@@ -243,7 +242,7 @@ open class Adicinemax21 : TmdbProvider() {
                             lastSeason = lastSeason,
                             epsTitle = eps.name,
                             jpTitle = jpTitle,
-                            altTitle = idTitle,  // <-- tambahan
+                            altTitle = idTitle,
                             date = season.airDate,
                             airedDate = res.releaseDate ?: res.firstAirDate,
                             isAsian = isAsian,
@@ -298,7 +297,7 @@ open class Adicinemax21 : TmdbProvider() {
                     orgTitle = orgTitle,
                     isAnime = isAnime,
                     jpTitle = jpTitle,
-                    altTitle = idTitle,  // <-- tambahan
+                    altTitle = idTitle,
                     airedDate = res.releaseDate ?: res.firstAirDate,
                     isAsian = isAsian,
                     isBollywood = isBollywood
@@ -330,16 +329,16 @@ open class Adicinemax21 : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
-            { invokeIdlix(res.title, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeKisskh(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeIdlix(res.title, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdiDewasa(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeKisskh(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeVidlink(res.id, res.season, res.episode, callback) },
             { invokeVidsrccc(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback) },
             { invokeVixsrc(res.id, res.season, res.episode, callback) },
             { invokeCinemaOS(res.imdbId, res.id, res.title, res.season, res.episode, res.year, callback, subtitleCallback) },
-            { if (!res.isAnime) invokePlayer4U(res.title, res.altTitle, res.season, res.episode, res.year, callback) },
+            { if (!res.isAnime) invokePlayer4U(res.title, res.orgTitle, res.altTitle, res.season, res.episode, res.year, callback) },
             { if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, callback) },
             { invokeVidsrc(res.imdbId, res.season, res.episode, subtitleCallback, callback) },
             { invokeWatchsomuch(res.imdbId, res.season, res.episode, subtitleCallback) },
@@ -368,7 +367,7 @@ open class Adicinemax21 : TmdbProvider() {
         val lastSeason: Int? = null,
         val epsTitle: String? = null,
         val jpTitle: String? = null,
-        val altTitle: String? = null,   // <-- judul alternatif Indonesia
+        val altTitle: String? = null,
         val date: String? = null,
         val airedDate: String? = null,
         val isAsian: Boolean = false,
