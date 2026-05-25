@@ -4,8 +4,10 @@ import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.Interceptor
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class JuraganFilmProvider : MainAPI() {
     override var name = "JuraganFilm"
@@ -21,7 +23,6 @@ class JuraganFilmProvider : MainAPI() {
     )
 
     private var savedCookies: String? = null
-    // User-Agent mobile (terbukti lolos dari cloud.wth.my.id)
     private val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
     // =================== HOMEPAGE ===================
@@ -237,26 +238,51 @@ class JuraganFilmProvider : MainAPI() {
         val match = m3u8Regex.find(html)
 
         if (match != null) {
+            // Sematkan header sebagai query parameter (workaround)
+            val encodedReferer = URLEncoder.encode(data, "UTF-8")
+            val encodedUA = URLEncoder.encode(mobileUserAgent, "UTF-8")
+            val m3u8Url = match.value +
+                "&origin=https://tv44.juragan.film" +
+                "&referer=$encodedReferer" +
+                "&useragent=$encodedUA"
+
             callback(
                 newExtractorLink(
                     source = name,
                     name = "JuraganFilm - HLS",
-                    url = match.value,
+                    url = m3u8Url,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = data
                     this.quality = Qualities.P1080.value
-                    // Header yang dibutuhkan oleh cloud.wth.my.id
                     this.headers = mapOf(
                         "Origin" to "https://tv44.juragan.film",
                         "Referer" to data,
                         "User-Agent" to mobileUserAgent
-                    ) + if (!savedCookies.isNullOrBlank()) mapOf("Cookie" to savedCookies!!) else emptyMap()
+                    )
                 }
             )
             return true
         }
         return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
+    }
+
+    // =================== INTERCEPTOR UNTUK PLAYER ===================
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        return Interceptor { chain ->
+            val originalRequest = chain.request()
+            val url = originalRequest.url.toString()
+
+            if (url.contains("cloud.wth.my.id")) {
+                val newRequest = originalRequest.newBuilder()
+                    .header("Origin", "https://tv44.juragan.film")
+                    .header("Referer", extractorLink.url)
+                    .header("User-Agent", mobileUserAgent)
+                    .build()
+                return@Interceptor chain.proceed(newRequest)
+            }
+            chain.proceed(originalRequest)
+        }
     }
 
     // =================== HELPER ===================
