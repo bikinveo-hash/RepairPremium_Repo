@@ -15,9 +15,8 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    // Halaman utama + kategori pakai mainPageOf
+    // Kategori Home sudah dihapus, langsung fokus ke kategori grid
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Home",
         "$mainUrl/kategori-film/box-office/" to "Box Office",
         "$mainUrl/kategori-film/ongoing/" to "Ongoing",
         "$mainUrl/kategori-film/drama-serial-mandarin/" to "Drama Serial Mandarin",
@@ -39,54 +38,19 @@ class JuraganFilmProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        val isHome = request.name == "Home"
-        
-        val url = if (isHome) {
-            // Home hanya 1 halaman
-            if (page > 1) return null
-            request.data
+        val url = if (page > 1) {
+            val base = request.data.trimEnd('/')
+            "$base/page/$page/"
         } else {
-            // Halaman kategori: tambahkan /page/$page/ untuk halaman > 1
-            if (page > 1) {
-                val base = request.data.trimEnd('/')
-                "$base/page/$page/"
-            } else {
-                request.data
-            }
+            request.data
         }
 
         val doc = app.get(url, headers = baseHeaders).document
-
-        return if (isHome) {
-            // Tampilan homepage lengkap
-            val homeLists = mutableListOf<HomePageList>()
-
-            val sliderItems = parseSliderItems(doc)
-            if (sliderItems.isNotEmpty())
-                homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
-
-            doc.select(".home-widget").forEach { section ->
-                val title = section.selectFirst(".homemodule-title, .widget-title")
-                    ?.text()?.trim() ?: return@forEach
-                val items = section.select(".gmr-item-modulepost")
-                    .mapNotNull { parseWidgetItem(it) }
-                if (items.isNotEmpty())
-                    homeLists.add(HomePageList(title, items))
-            }
-
-            val latestItems = parseLatestMovieItems(doc)
-            if (latestItems.isNotEmpty())
-                homeLists.add(HomePageList("Latest Movie", latestItems))
-
-            if (homeLists.isEmpty()) null
-            else newHomePageResponse(homeLists, hasNext = hasNextPage(doc))
-        } else {
-            // Halaman kategori: ambil semua item dari grid
-            val items = parseLatestMovieItems(doc)
-            if (items.isNotEmpty()) {
-                newHomePageResponse(request.name, items, hasNext = hasNextPage(doc))
-            } else null
-        }
+        val items = parseLatestMovieItems(doc)
+        
+        return if (items.isNotEmpty()) {
+            newHomePageResponse(request.name, items, hasNext = hasNextPage(doc))
+        } else null
     }
 
     // =====================================================================
@@ -113,8 +77,9 @@ class JuraganFilmProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = baseHeaders).document
 
+        // Menggunakan helper cleanTitle untuk membersihkan judul SEO
         val title = doc.selectFirst("h3.entry-title, .entry-title")
-            ?.text()?.trim() ?: return null
+            ?.text()?.trim()?.let { cleanTitle(it) } ?: return null
 
         val posterUrl = fixPosterUrl(
             doc.selectFirst("meta[property=og:image]")?.attr("content")
@@ -309,6 +274,21 @@ class JuraganFilmProvider : MainAPI() {
     // =====================================================================
     // HELPERS
     // =====================================================================
+    
+    /**
+     * Memotong dan membersihkan sampah keyword SEO dari situs agar hanya menyisakan judul asli.
+     */
+    private fun cleanTitle(title: String): String {
+        return title
+            // Hapus "Nonton " atau "Nonton Film " di bagian awal
+            .replace(Regex("(?i)^Nonton\\s*(Film\\s*)?"), "")
+            // Hapus embel-embel akhir seperti kategori web dan Sub Indo
+            .replace(Regex("(?i)\\s*(Subtitle Indonesia|Sub Indo|Film Seri.*|Drama Serial.*)$"), "")
+            // Jika ada tahun rilis di ujung akhir judul yang tertinggal, hapus juga
+            .replace(Regex("\\s*\\b(19|20)\\d{2}\\b$"), "")
+            .trim()
+    }
+
     private fun hasNextPage(doc: Document): Boolean =
         doc.selectFirst("a.next.page-numbers") != null
 
@@ -318,7 +298,8 @@ class JuraganFilmProvider : MainAPI() {
     private fun parseSliderItems(doc: Document): List<SearchResponse> =
         doc.select(".gmr-slider-content").mapNotNull { el ->
             val linkEl = el.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
-            val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            // Membersihkan judul di slider (jika nantinya dipanggil lagi)
+            val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
             val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             val poster = fixPosterUrl(
                 el.selectFirst("img.tns-lazy-img")
@@ -338,7 +319,8 @@ class JuraganFilmProvider : MainAPI() {
 
     private fun parseWidgetItem(el: Element): SearchResponse? {
         val linkEl = el.selectFirst(".entry-title a") ?: return null
-        val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return null
+        // Membersihkan judul pada widget
+        val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return null
         val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return null
         val poster = fixPosterUrl(
             el.selectFirst("img.wp-post-image")
@@ -370,7 +352,8 @@ class JuraganFilmProvider : MainAPI() {
         doc.select("#gmr-main-load article.item, #primary article.item")
             .mapNotNull { el ->
                 val linkEl = el.selectFirst(".entry-title a") ?: return@mapNotNull null
-                val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                // Membersihkan judul pada item pencarian dan kategori
+                val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
                 val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                 val poster = fixPosterUrl(
                     el.selectFirst("img.wp-post-image")
