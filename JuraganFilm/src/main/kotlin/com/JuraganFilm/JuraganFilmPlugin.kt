@@ -1,10 +1,11 @@
 package com.JuraganFilm
 
-import com.lagradost.cloudstream3.APIHolder
+import com.lagradost.cloudstream3.plugins.BasePlugin
+import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
-class JuraganFilmPlugin {
-    init {
-        // Daftarkan provider langsung ke APIHolder
-        APIHolder.allProviders.add(JuraganFilmProvider())
+@CloudstreamPlugin
+class JuraganFilmPlugin : BasePlugin() {
+    override fun load() {
+        registerMainAPI(JuraganFilmProvider())
     }
 }
