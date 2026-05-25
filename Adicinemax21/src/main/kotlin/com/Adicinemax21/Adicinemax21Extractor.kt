@@ -218,12 +218,11 @@ object Adicinemax21Extractor : Adicinemax21() {
                 val quality = getQualityFromName(stream.resolutions)
                 val signCookie = stream.signCookie
 
-                // Hanya gunakan header yang diperlukan untuk streaming video
+                // Header untuk streaming video: hanya Cookie dan User-Agent umum
                 val videoHeaders = mutableMapOf<String, String>()
                 if (!signCookie.isNullOrEmpty()) {
                     videoHeaders["Cookie"] = signCookie
                 }
-                // User-Agent standar browser, jangan pakai header aneh dari API
                 videoHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
 
                 val sourceName = "Adimoviebox2 ($languageName)"
@@ -240,7 +239,6 @@ object Adicinemax21Extractor : Adicinemax21() {
                 )
 
                 if (stream.id != null) {
-                    // Subtitle internal
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -248,7 +246,6 @@ object Adicinemax21Extractor : Adicinemax21() {
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
-                    // Subtitle eksternal
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
