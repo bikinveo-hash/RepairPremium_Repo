@@ -110,9 +110,8 @@ class JuraganFilmProvider : MainAPI() {
 
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
 
-        // Trailer (YouTube pakai raw=true)
+        // Trailer: biarkan extractor bawaan CloudStream yang handle (raw = false)
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
-        val isYoutube = trailerUrl?.contains("youtube.com") == true || trailerUrl?.contains("youtu.be") == true
 
         val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
@@ -121,7 +120,7 @@ class JuraganFilmProvider : MainAPI() {
         return when (type) {
             TvType.TvSeries -> {
                 val episodeLinks = doc.select(".jf-eps-wrap a.post-page-numbers")
-                val episodes = episodeLinks.mapIndexed { index, el ->
+                val episodes = episodeLinks.map { el ->
                     newEpisode(el.attr("href")) {
                         this.name = "Episode ${el.text().trim()}"
                         this.episode = el.text().trim().toIntOrNull()
@@ -143,8 +142,11 @@ class JuraganFilmProvider : MainAPI() {
                             TrailerData(
                                 extractorUrl = trailerUrl,
                                 referer = url,
-                                raw = isYoutube,
-                                headers = mapOf("User-Agent" to USER_AGENT)
+                                raw = false,
+                                headers = mapOf(
+                                    "User-Agent" to USER_AGENT,
+                                    "Referer" to url
+                                )
                             )
                         )
                     }
@@ -163,8 +165,11 @@ class JuraganFilmProvider : MainAPI() {
                             TrailerData(
                                 extractorUrl = trailerUrl,
                                 referer = url,
-                                raw = isYoutube,
-                                headers = mapOf("User-Agent" to USER_AGENT)
+                                raw = false,
+                                headers = mapOf(
+                                    "User-Agent" to USER_AGENT,
+                                    "Referer" to url
+                                )
                             )
                         )
                     }
@@ -189,13 +194,8 @@ class JuraganFilmProvider : MainAPI() {
         return doc.selectFirst("ul.page-numbers li a.next") != null
     }
 
-    /**
-     * Membersihkan URL poster dari akhiran ukuran (misal -152x228)
-     * agar mendapatkan gambar resolusi penuh.
-     */
     private fun fixPosterUrl(url: String?): String? {
         if (url == null) return null
-        // Hapus akhiran -[lebar]x[tinggi] sebelum ekstensi file
         return url.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
     }
 
