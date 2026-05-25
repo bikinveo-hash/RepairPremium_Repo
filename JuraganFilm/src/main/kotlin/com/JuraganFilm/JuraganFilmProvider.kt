@@ -90,44 +90,60 @@ class JuraganFilmProvider : MainAPI() {
             ?: doc.selectFirst(".entry-title")?.text()?.trim()
             ?: return null
 
-        val posterUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")
+        // Poster HD: pakai og:image, atau bersihkan dari thumbnail
+        val posterUrl = fixPosterUrl(
+            doc.selectFirst("meta[property=og:image]")?.attr("content")
+        )
 
         val year = doc.selectFirst("time[itemprop=dateCreated]")?.attr("datetime")
             ?.substringBefore("-")?.toIntOrNull()
-            ?: doc.selectFirst("span.gmr-movie-genre:contains(Year:) a")?.text()?.trim()
+            ?: doc.selectFirst("span.gmr-movie-genre a[href*='/tahun/']")?.text()?.trim()
                 ?.toIntOrNull()
 
-        val plot = doc.selectFirst(".gmr-moviedata em p")?.text()?.trim()
+        val plot = doc.selectFirst(".gmr-moviedata:contains(Sinopsis:) .entry-content em, .gmr-moviedata em p")?.text()?.trim()
             ?: doc.selectFirst(".entry-content p")?.text()?.trim()
-
-        val directorElements = doc.select("span[itemprop=director] span[itemprop=name] a")
-        val directorNames = directorElements.map { it.text().trim() }
 
         val castElements = doc.select("span[itemprop=actors] span[itemprop=name] a")
         val actors = castElements.map { el ->
             ActorData(Actor(el.text().trim()))
         }
 
-        val tags = doc.select("span.gmr-movie-genre a[rel=category tag]").map { it.text().trim() }
-
+        val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
-
         val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
-
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
         val dataUrl = iframeEl?.attr("src") ?: url
 
         return when (type) {
             TvType.TvSeries -> {
-                newTvSeriesLoadResponse(title, url, type, emptyList()) {
-                    this.posterUrl = posterUrl
-                    this.year = year
-                    this.plot = plot
-                    this.tags = tags
-                    this.actors = actors
-                    // Trailer
-                    if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(TrailerData(trailerUrl, url, false))
+                val episodeLinks = doc.select(".jf-eps-wrap a.post-page-numbers")
+                val episodes = episodeLinks.mapIndexed { index, el ->
+                    newEpisode(el.attr("href")) {
+                        this.name = "Episode ${el.text().trim()}"
+                        this.episode = el.text().trim().toIntOrNull()
+                    }
+                }
+                if (episodes.isEmpty()) {
+                    newTvSeriesLoadResponse(title, url, type, emptyList()) {
+                        this.posterUrl = posterUrl
+                        this.year = year
+                        this.plot = plot
+                        this.tags = tags
+                        this.actors = actors
+                        if (!trailerUrl.isNullOrBlank()) {
+                            this.trailers.add(TrailerData(trailerUrl, url, false))
+                        }
+                    }
+                } else {
+                    newTvSeriesLoadResponse(title, url, type, episodes) {
+                        this.posterUrl = posterUrl
+                        this.year = year
+                        this.plot = plot
+                        this.tags = tags
+                        this.actors = actors
+                        if (!trailerUrl.isNullOrBlank()) {
+                            this.trailers.add(TrailerData(trailerUrl, url, false))
+                        }
                     }
                 }
             }
@@ -138,7 +154,6 @@ class JuraganFilmProvider : MainAPI() {
                     this.plot = plot
                     this.tags = tags
                     this.actors = actors
-                    // Trailer
                     if (!trailerUrl.isNullOrBlank()) {
                         this.trailers.add(TrailerData(trailerUrl, url, false))
                     }
@@ -163,6 +178,16 @@ class JuraganFilmProvider : MainAPI() {
         return doc.selectFirst("ul.page-numbers li a.next") != null
     }
 
+    /**
+     * Membersihkan URL poster dari akhiran ukuran (misal -152x228)
+     * agar mendapatkan gambar resolusi penuh.
+     */
+    private fun fixPosterUrl(url: String?): String? {
+        if (url == null) return null
+        // Hapus akhiran -[lebar]x[tinggi] sebelum ekstensi file
+        return url.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
+    }
+
     private fun parseSliderItems(doc: Document): List<SearchResponse> {
         val items = doc.select(".gmr-slider-content")
         return items.mapNotNull { element ->
@@ -172,7 +197,8 @@ class JuraganFilmProvider : MainAPI() {
             if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
 
             val imgEl = element.selectFirst("img.tns-lazy-img")
-            val posterUrl = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+            val posterUrl = fixPosterUrl(rawPoster)
 
             val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
             val type = if (url.contains("/film-seri/") || (episodeText != null && episodeText.contains("EPS", ignoreCase = true))) {
@@ -197,7 +223,8 @@ class JuraganFilmProvider : MainAPI() {
         if (title.isEmpty() || url.isEmpty()) return null
 
         val imgEl = element.selectFirst("img.wp-post-image")
-        val posterUrl = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+        val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+        val posterUrl = fixPosterUrl(rawPoster)
 
         val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
         val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
@@ -230,7 +257,8 @@ class JuraganFilmProvider : MainAPI() {
             if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
 
             val imgEl = element.selectFirst("img.wp-post-image")
-            val posterUrl = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
+            val posterUrl = fixPosterUrl(rawPoster)
 
             val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
             val dateEl = element.selectFirst("time[itemprop=dateCreated]")
