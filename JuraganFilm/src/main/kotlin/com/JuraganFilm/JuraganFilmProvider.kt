@@ -91,13 +91,10 @@ class JuraganFilmProvider : MainAPI() {
         val response = app.get(url)
         val doc = response.document
 
-        // Ambil cookie jf_bypass dari response header Set-Cookie
-        val cookies = response.headers("Set-Cookie")
-        for (cookie in cookies) {
-            if (cookie.startsWith("jf_bypass=")) {
-                jfBypassCookie = cookie.split(";")[0].trim() // contoh: jf_bypass=1779731953
-                break
-            }
+        // Ambil cookie jf_bypass dari response headers
+        val setCookie = response.headers["Set-Cookie"]
+        if (setCookie != null && setCookie.startsWith("jf_bypass=")) {
+            jfBypassCookie = setCookie.split(";")[0].trim()
         }
 
         val title = doc.selectFirst("h3.entry-title")?.text()?.trim()
@@ -213,23 +210,23 @@ class JuraganFilmProvider : MainAPI() {
         }
     }
 
-    // =================== LOAD LINKS (DENGAN COOKIE) ===================
+    // =================== LOAD LINKS ===================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data = URL iframe: https://tv44.juragan.film/file/?id=...
-        // Referer dari halaman utama
-        val html = app.get(
-            data,
-            referer = mainUrl,
-            headers = mapOf(
-                "Cookie" to (jfBypassCookie ?: ""),
-                "User-Agent" to USER_AGENT
-            )
-        ).text
+        // Siapkan header dengan cookie jf_bypass
+        val headers = mutableMapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to mainUrl
+        )
+        if (!jfBypassCookie.isNullOrBlank()) {
+            headers["Cookie"] = jfBypassCookie
+        }
+
+        val html = app.get(data, headers = headers).text
         
         // Cari HLS_URL di JavaScript
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
@@ -259,14 +256,7 @@ class JuraganFilmProvider : MainAPI() {
             val jsonUrl = if (fallbackUrl.startsWith("http")) fallbackUrl
                 else "https://tv44.juragan.film/file/$fallbackUrl"
             try {
-                val json = app.get(
-                    jsonUrl,
-                    referer = data,
-                    headers = mapOf(
-                        "Cookie" to (jfBypassCookie ?: ""),
-                        "User-Agent" to USER_AGENT
-                    )
-                ).text
+                val json = app.get(jsonUrl, headers = headers).text
                 val linkRegex = Regex(""""link"\s*:\s*"([^"]+)"""")
                 val linkMatch = linkRegex.find(json)
                 if (linkMatch != null) {
