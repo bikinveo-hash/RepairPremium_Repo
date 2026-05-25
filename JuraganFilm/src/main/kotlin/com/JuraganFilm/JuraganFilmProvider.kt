@@ -90,7 +90,6 @@ class JuraganFilmProvider : MainAPI() {
             ?: doc.selectFirst(".entry-title")?.text()?.trim()
             ?: return null
 
-        // Poster HD: pakai og:image, atau bersihkan dari thumbnail
         val posterUrl = fixPosterUrl(
             doc.selectFirst("meta[property=og:image]")?.attr("content")
         )
@@ -110,7 +109,6 @@ class JuraganFilmProvider : MainAPI() {
 
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
 
-        // Trailer: biarkan extractor bawaan CloudStream yang handle (raw = false)
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
 
         val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
@@ -119,11 +117,15 @@ class JuraganFilmProvider : MainAPI() {
 
         return when (type) {
             TvType.TvSeries -> {
-                // Ambil semua elemen episode (baik link <a> maupun span current)
-                val episodeElements = doc.select(".jf-eps-wrap .post-page-numbers")
+                // Perbaikan selector + fallback episode 1
+                val episodeElements = doc.select(
+                    ".entry-content .post-page-numbers, " +
+                    "article .post-page-numbers, " +
+                    ".jf-eps-wrap .post-page-numbers, " +
+                    ".post-page-numbers"
+                )
                 val episodes = episodeElements.map { el ->
                     if (el.tagName() == "span") {
-                        // Episode yang sedang aktif
                         newEpisode(url) {
                             this.name = "Episode ${el.text().trim()}"
                             this.episode = el.text().trim().toIntOrNull()
@@ -134,11 +136,22 @@ class JuraganFilmProvider : MainAPI() {
                             this.episode = el.text().trim().toIntOrNull()
                         }
                     }
-                }
-                val builder = if (episodes.isEmpty()) {
+                }.distinctBy { it.episode }
+
+                val hasEpisode1 = episodes.any { it.episode == 1 }
+                val finalEpisodes = if (!hasEpisode1 && episodes.isNotEmpty()) {
+                    listOf(
+                        newEpisode(url) {
+                            this.name = "Episode 1"
+                            this.episode = 1
+                        }
+                    ) + episodes
+                } else episodes
+
+                val builder = if (finalEpisodes.isEmpty()) {
                     newTvSeriesLoadResponse(title, url, type, emptyList())
                 } else {
-                    newTvSeriesLoadResponse(title, url, type, episodes)
+                    newTvSeriesLoadResponse(title, url, type, finalEpisodes)
                 }
                 builder.apply {
                     this.posterUrl = posterUrl
@@ -194,6 +207,8 @@ class JuraganFilmProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Data URL dari iframe: https://tv44.juragan.film/file/?id=...
+        // Perlu extractor custom (lihat JuraganFilmExtractor)
         loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
         return true
     }
