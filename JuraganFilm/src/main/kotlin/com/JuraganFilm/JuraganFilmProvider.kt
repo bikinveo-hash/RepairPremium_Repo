@@ -18,6 +18,9 @@ class JuraganFilmProvider : MainAPI() {
         mainPage("$mainUrl/", "Home")
     )
 
+    // Simpan cookie jf_bypass untuk digunakan di loadLinks
+    private var jfBypassCookie: String? = null
+
     // =================== HOMEPAGE ===================
     override suspend fun getMainPage(
         page: Int,
@@ -85,7 +88,17 @@ class JuraganFilmProvider : MainAPI() {
 
     // =================== LOAD (DETAIL) ===================
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
+        val response = app.get(url)
+        val doc = response.document
+
+        // Ambil cookie jf_bypass dari response header Set-Cookie
+        val cookies = response.headers("Set-Cookie")
+        for (cookie in cookies) {
+            if (cookie.startsWith("jf_bypass=")) {
+                jfBypassCookie = cookie.split(";")[0].trim() // contoh: jf_bypass=1779731953
+                break
+            }
+        }
 
         val title = doc.selectFirst("h3.entry-title")?.text()?.trim()
             ?: doc.selectFirst(".entry-title")?.text()?.trim()
@@ -200,7 +213,7 @@ class JuraganFilmProvider : MainAPI() {
         }
     }
 
-    // =================== LOAD LINKS (EKSTRAKSI LANGSUNG) ===================
+    // =================== LOAD LINKS (DENGAN COOKIE) ===================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -208,8 +221,15 @@ class JuraganFilmProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         // data = URL iframe: https://tv44.juragan.film/file/?id=...
-        // Referer dari halaman detail (disimpan di dataUrl, kita tidak punya langsung, tapi bisa pakai mainUrl)
-        val html = app.get(data, referer = mainUrl).text
+        // Referer dari halaman utama
+        val html = app.get(
+            data,
+            referer = mainUrl,
+            headers = mapOf(
+                "Cookie" to (jfBypassCookie ?: ""),
+                "User-Agent" to USER_AGENT
+            )
+        ).text
         
         // Cari HLS_URL di JavaScript
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
@@ -236,12 +256,17 @@ class JuraganFilmProvider : MainAPI() {
         val fallbackMatch = fallbackRegex.find(html)
         if (fallbackMatch != null) {
             val fallbackUrl = fallbackMatch.groupValues[1]
-            // Ambil sumber dari JSON
             val jsonUrl = if (fallbackUrl.startsWith("http")) fallbackUrl
                 else "https://tv44.juragan.film/file/$fallbackUrl"
             try {
-                val json = app.get(jsonUrl, referer = data).text
-                // Parsing JSON sederhana: cari link pertama
+                val json = app.get(
+                    jsonUrl,
+                    referer = data,
+                    headers = mapOf(
+                        "Cookie" to (jfBypassCookie ?: ""),
+                        "User-Agent" to USER_AGENT
+                    )
+                ).text
                 val linkRegex = Regex(""""link"\s*:\s*"([^"]+)"""")
                 val linkMatch = linkRegex.find(json)
                 if (linkMatch != null) {
