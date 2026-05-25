@@ -109,7 +109,11 @@ class JuraganFilmProvider : MainAPI() {
         }
 
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
+
+        // Trailer (YouTube pakai raw=true)
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
+        val isYoutube = trailerUrl?.contains("youtube.com") == true || trailerUrl?.contains("youtu.be") == true
+
         val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
         val dataUrl = iframeEl?.attr("src") ?: url
@@ -123,29 +127,29 @@ class JuraganFilmProvider : MainAPI() {
                         this.episode = el.text().trim().toIntOrNull()
                     }
                 }
-                if (episodes.isEmpty()) {
-                    newTvSeriesLoadResponse(title, url, type, emptyList()) {
-                        this.posterUrl = posterUrl
-                        this.year = year
-                        this.plot = plot
-                        this.tags = tags
-                        this.actors = actors
-                        if (!trailerUrl.isNullOrBlank()) {
-                            this.trailers.add(TrailerData(trailerUrl, url, false))
-                        }
-                    }
+                val builder = if (episodes.isEmpty()) {
+                    newTvSeriesLoadResponse(title, url, type, emptyList())
                 } else {
-                    newTvSeriesLoadResponse(title, url, type, episodes) {
-                        this.posterUrl = posterUrl
-                        this.year = year
-                        this.plot = plot
-                        this.tags = tags
-                        this.actors = actors
-                        if (!trailerUrl.isNullOrBlank()) {
-                            this.trailers.add(TrailerData(trailerUrl, url, false))
-                        }
+                    newTvSeriesLoadResponse(title, url, type, episodes)
+                }
+                builder.apply {
+                    this.posterUrl = posterUrl
+                    this.year = year
+                    this.plot = plot
+                    this.tags = tags
+                    this.actors = actors
+                    if (!trailerUrl.isNullOrBlank()) {
+                        this.trailers.add(
+                            TrailerData(
+                                extractorUrl = trailerUrl,
+                                referer = url,
+                                raw = isYoutube,
+                                headers = mapOf("User-Agent" to USER_AGENT)
+                            )
+                        )
                     }
                 }
+                builder
             }
             else -> {
                 newMovieLoadResponse(title, url, type, dataUrl) {
@@ -155,7 +159,14 @@ class JuraganFilmProvider : MainAPI() {
                     this.tags = tags
                     this.actors = actors
                     if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(TrailerData(trailerUrl, url, false))
+                        this.trailers.add(
+                            TrailerData(
+                                extractorUrl = trailerUrl,
+                                referer = url,
+                                raw = isYoutube,
+                                headers = mapOf("User-Agent" to USER_AGENT)
+                            )
+                        )
                     }
                 }
             }
