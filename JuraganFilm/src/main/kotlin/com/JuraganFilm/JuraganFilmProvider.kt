@@ -15,7 +15,6 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    // Kategori Home sudah dihapus, langsung fokus ke kategori grid
     override val mainPage = mainPageOf(
         "$mainUrl/kategori-film/box-office/" to "Box Office",
         "$mainUrl/kategori-film/ongoing/" to "Ongoing",
@@ -75,9 +74,12 @@ class JuraganFilmProvider : MainAPI() {
     // LOAD (DETAIL PAGE)
     // =====================================================================
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = baseHeaders).document
+        // Ekstrak URL asli dan Link Trailer yang sudah kita selundupkan dari halaman depan
+        val realUrl = url.substringBefore(TRAILER_SEPARATOR)
+        val trailerFromUrl = url.substringAfter(TRAILER_SEPARATOR, "").takeIf { it.isNotBlank() }
 
-        // Menggunakan helper cleanTitle untuk membersihkan judul SEO
+        val doc = app.get(realUrl, headers = baseHeaders).document
+
         val title = doc.selectFirst("h3.entry-title, .entry-title")
             ?.text()?.trim()?.let { cleanTitle(it) } ?: return null
 
@@ -96,7 +98,10 @@ class JuraganFilmProvider : MainAPI() {
         val actors = doc.select("span[itemprop=actors] span[itemprop=name] a")
             .map { ActorData(Actor(it.text().trim())) }
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
-        val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
+        
+        // Memprioritaskan trailer dari detail web (jika ada suatu hari nanti), 
+        // kalau tidak ada, pakai trailer yang sudah dibawa dari parameter SearchResponse
+        val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href") ?: trailerFromUrl
 
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
         val playerUrl = iframeEl?.attr("src")
@@ -110,14 +115,14 @@ class JuraganFilmProvider : MainAPI() {
                 }
             } ?: ""
 
-        val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
+        val type = if (realUrl.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
 
         fun buildTrailer(builder: LoadResponse) {
             if (!trailerUrl.isNullOrBlank()) {
                 builder.trailers.add(
                     TrailerData(
                         extractorUrl = trailerUrl,
-                        referer      = url,
+                        referer      = realUrl, // Gunakan realUrl agar rapi
                         raw          = false,
                         headers      = mapOf("User-Agent" to USER_AGENT)
                     )
@@ -135,7 +140,7 @@ class JuraganFilmProvider : MainAPI() {
                 )
 
                 val episodes = epElements.map { el ->
-                    val epUrl = if (el.tagName() == "span") url else el.attr("href")
+                    val epUrl = if (el.tagName() == "span") realUrl else el.attr("href")
                     val epNum = el.text().trim().toIntOrNull()
                     newEpisode(epUrl) {
                         this.name    = "Episode ${el.text().trim()}"
@@ -144,13 +149,14 @@ class JuraganFilmProvider : MainAPI() {
                 }.distinctBy { it.episode }
 
                 val finalEpisodes = if (episodes.none { it.episode == 1 }) {
-                    listOf(newEpisode(url) {
+                    listOf(newEpisode(realUrl) {
                         this.name    = "Episode 1"
                         this.episode = 1
                     }) + episodes
                 } else episodes
 
-                newTvSeriesLoadResponse(title, url, type, finalEpisodes).apply {
+                // Pastikan realUrl yang disimpan ke riwayat, bukan url yang ketempelan variabel trailer
+                newTvSeriesLoadResponse(title, realUrl, type, finalEpisodes).apply {
                     this.posterUrl = posterUrl
                     this.year      = year
                     this.plot      = plot
@@ -162,11 +168,12 @@ class JuraganFilmProvider : MainAPI() {
 
             else -> {
                 val dataUrl = if (playerUrl.isNotBlank())
-                    "$playerUrl${SEPARATOR}$url"
+                    "$playerUrl${SEPARATOR}$realUrl"
                 else
-                    url
+                    realUrl
 
-                newMovieLoadResponse(title, url, type, dataUrl).apply {
+                // Pastikan realUrl yang disimpan ke riwayat
+                newMovieLoadResponse(title, realUrl, type, dataUrl).apply {
                     this.posterUrl = posterUrl
                     this.year      = year
                     this.plot      = plot
@@ -275,16 +282,10 @@ class JuraganFilmProvider : MainAPI() {
     // HELPERS
     // =====================================================================
     
-    /**
-     * Memotong dan membersihkan sampah keyword SEO dari situs agar hanya menyisakan judul asli.
-     */
     private fun cleanTitle(title: String): String {
         return title
-            // Hapus "Nonton " atau "Nonton Film " di bagian awal
             .replace(Regex("(?i)^Nonton\\s*(Film\\s*)?"), "")
-            // Hapus embel-embel akhir seperti kategori web dan Sub Indo
             .replace(Regex("(?i)\\s*(Subtitle Indonesia|Sub Indo|Film Seri.*|Drama Serial.*)$"), "")
-            // Jika ada tahun rilis di ujung akhir judul yang tertinggal, hapus juga
             .replace(Regex("\\s*\\b(19|20)\\d{2}\\b$"), "")
             .trim()
     }
@@ -298,9 +299,13 @@ class JuraganFilmProvider : MainAPI() {
     private fun parseSliderItems(doc: Document): List<SearchResponse> =
         doc.select(".gmr-slider-content").mapNotNull { el ->
             val linkEl = el.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
-            // Membersihkan judul di slider (jika nantinya dipanggil lagi)
             val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
             val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            
+            // Tangkap dan sematkan URL trailer ke dalam url asli
+            val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
+            val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
+
             val poster = fixPosterUrl(
                 el.selectFirst("img.tns-lazy-img")
                     ?.attr("data-src")?.ifBlank { null }
@@ -312,16 +317,20 @@ class JuraganFilmProvider : MainAPI() {
                 TvType.TvSeries else TvType.Movie
 
             when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) { posterUrl = poster }
-                else            -> newMovieSearchResponse(title, url, type) { posterUrl = poster }
+                TvType.TvSeries -> newTvSeriesSearchResponse(title, finalUrl, type) { posterUrl = poster }
+                else            -> newMovieSearchResponse(title, finalUrl, type) { posterUrl = poster }
             }
         }
 
     private fun parseWidgetItem(el: Element): SearchResponse? {
         val linkEl = el.selectFirst(".entry-title a") ?: return null
-        // Membersihkan judul pada widget
         val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return null
         val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return null
+        
+        // Tangkap dan sematkan URL trailer ke dalam url asli
+        val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
+        val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
+
         val poster = fixPosterUrl(
             el.selectFirst("img.wp-post-image")
                 ?.attr("data-src")?.ifBlank { null }
@@ -336,11 +345,11 @@ class JuraganFilmProvider : MainAPI() {
             TvType.TvSeries else TvType.Movie
 
         return when (type) {
-            TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
+            TvType.TvSeries -> newTvSeriesSearchResponse(title, finalUrl, type) {
                 posterUrl = poster
                 addQuality(quality ?: "")
             }
-            else -> newMovieSearchResponse(title, url, type) {
+            else -> newMovieSearchResponse(title, finalUrl, type) {
                 posterUrl  = poster
                 this.year  = year
                 addQuality(quality ?: "")
@@ -352,9 +361,13 @@ class JuraganFilmProvider : MainAPI() {
         doc.select("#gmr-main-load article.item, #primary article.item")
             .mapNotNull { el ->
                 val linkEl = el.selectFirst(".entry-title a") ?: return@mapNotNull null
-                // Membersihkan judul pada item pencarian dan kategori
                 val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
                 val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                
+                // Tangkap dan sematkan URL trailer ke dalam url asli
+                val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
+                val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
+
                 val poster = fixPosterUrl(
                     el.selectFirst("img.wp-post-image")
                         ?.attr("data-src")?.ifBlank { null }
@@ -366,11 +379,11 @@ class JuraganFilmProvider : MainAPI() {
                 val type    = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
 
                 when (type) {
-                    TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
+                    TvType.TvSeries -> newTvSeriesSearchResponse(title, finalUrl, type) {
                         posterUrl = poster
                         addQuality(quality ?: "")
                     }
-                    else -> newMovieSearchResponse(title, url, type) {
+                    else -> newMovieSearchResponse(title, finalUrl, type) {
                         posterUrl  = poster
                         this.year  = year
                         addQuality(quality ?: "")
@@ -380,5 +393,6 @@ class JuraganFilmProvider : MainAPI() {
 
     companion object {
         const val SEPARATOR = "|||"
+        const val TRAILER_SEPARATOR = "||trailer="
     }
 }
