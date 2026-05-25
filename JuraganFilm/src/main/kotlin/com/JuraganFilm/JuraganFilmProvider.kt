@@ -3,6 +3,7 @@ package com.JuraganFilm
 import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.Interceptor
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -13,11 +14,9 @@ class JuraganFilmProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
-    override val usesWebView = false // tidak perlu WebView, curl biasa sudah works
+    override val usesWebView = false
 
-    override val mainPage = listOf(
-        mainPageOf("$mainUrl/" to "Home")
-    )
+    override val mainPage = listOf(mainPage("$mainUrl/", "Home"))
 
     private val mobileUserAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
@@ -114,8 +113,6 @@ class JuraganFilmProvider : MainAPI() {
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
 
-        // ✅ Fix #2: attr("src") di Jsoup sudah auto-decode HTML entity
-        // tapi kita tambah manual replace untuk jaga-jaga kasus edge
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
         val playerUrl = iframeEl?.attr("src")
             ?.replace("&#038;", "&")
@@ -179,8 +176,6 @@ class JuraganFilmProvider : MainAPI() {
             }
 
             else -> {
-                // ✅ Fix Movie: encode "playerUrl|||pageUrl" supaya loadLinks
-                // punya kedua info yang dibutuhkan
                 val dataUrl = if (playerUrl.isNotBlank())
                     "$playerUrl${SEPARATOR}$url"
                 else
@@ -208,22 +203,14 @@ class JuraganFilmProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        // ── Tentukan playerUrl dan pageUrl ─────────────────────────────
         val (playerUrl, pageUrl) = when {
-
-            // Movie: data berformat "playerUrl|||pageUrl"
             data.contains(SEPARATOR) -> {
                 val parts = data.split(SEPARATOR)
                 Pair(parts[0], parts[1])
             }
-
-            // Movie lama / fallback: data adalah /file/ URL langsung
             data.contains("/file/") -> {
                 Pair(data, mainUrl)
             }
-
-            // ✅ Fix #3 — Series: data = URL halaman episode
-            // Fetch halaman, extract iframe /file/, lanjut
             else -> {
                 val doc = app.get(
                     data,
@@ -243,16 +230,13 @@ class JuraganFilmProvider : MainAPI() {
                     } ?: ""
 
                 if (extracted.isBlank()) {
-                    // Tidak ada iframe, coba loadExtractor langsung
                     return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
                 }
 
-                Pair(extracted, data)   // pageUrl = URL episode
+                Pair(extracted, data)
             }
         }
 
-        // ✅ Fix #1 — Kirim Referer = URL halaman asli (bukan mainUrl)
-        // Ini yang fix 403 "hanya bisa dibuka dari iframe website"
         val playerHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer"    to pageUrl,
@@ -261,7 +245,6 @@ class JuraganFilmProvider : MainAPI() {
 
         val html = app.get(playerUrl, headers = playerHeaders).text
 
-        // Cari m3u8 dari cloud.wth.my.id
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
         val match = m3u8Regex.find(html)
 
@@ -285,14 +268,13 @@ class JuraganFilmProvider : MainAPI() {
             return true
         }
 
-        // Fallback: coba semua extractor standar CloudStream
         return loadExtractor(playerUrl, referer = pageUrl, subtitleCallback, callback)
     }
 
     // =====================================================================
-    // VIDEO INTERCEPTOR — inject header untuk setiap segment HLS
+    // VIDEO INTERCEPTOR
     // =====================================================================
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         return Interceptor { chain ->
             val req = chain.request()
             if (req.url.toString().contains("cloud.wth.my.id")) {
@@ -399,7 +381,6 @@ class JuraganFilmProvider : MainAPI() {
             }
 
     companion object {
-        // Separator untuk encode playerUrl + pageUrl di dataUrl movie
         const val SEPARATOR = "|||"
     }
 }
