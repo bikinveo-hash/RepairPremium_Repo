@@ -15,13 +15,13 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    // Halaman utama + kategori
-    override val mainPage = listOf(
-        mainPage("$mainUrl/", "Home"),
-        mainPage("$mainUrl/kategori-film/box-office/", "Box Office"),
-        mainPage("$mainUrl/kategori-film/ongoing/", "Ongoing"),
-        mainPage("$mainUrl/kategori-film/drama-serial-mandarin/", "Drama Serial Mandarin"),
-        mainPage("$mainUrl/kategori-film/drama-serial-korea/", "Drama Serial Korea")
+    // Halaman utama + kategori pakai mainPageOf
+    override val mainPage = mainPageOf(
+        "$mainUrl/" to "Home",
+        "$mainUrl/kategori-film/box-office/" to "Box Office",
+        "$mainUrl/kategori-film/ongoing/" to "Ongoing",
+        "$mainUrl/kategori-film/drama-serial-mandarin/" to "Drama Serial Mandarin",
+        "$mainUrl/kategori-film/drama-serial-korea/" to "Drama Serial Korea"
     )
 
     private val mobileUserAgent =
