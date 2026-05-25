@@ -119,11 +119,20 @@ class JuraganFilmProvider : MainAPI() {
 
         return when (type) {
             TvType.TvSeries -> {
-                val episodeLinks = doc.select(".jf-eps-wrap a.post-page-numbers")
-                val episodes = episodeLinks.map { el ->
-                    newEpisode(el.attr("href")) {
-                        this.name = "Episode ${el.text().trim()}"
-                        this.episode = el.text().trim().toIntOrNull()
+                // Ambil semua elemen episode (baik link <a> maupun span current)
+                val episodeElements = doc.select(".jf-eps-wrap .post-page-numbers")
+                val episodes = episodeElements.map { el ->
+                    if (el.tagName() == "span") {
+                        // Episode yang sedang aktif
+                        newEpisode(url) {
+                            this.name = "Episode ${el.text().trim()}"
+                            this.episode = el.text().trim().toIntOrNull()
+                        }
+                    } else {
+                        newEpisode(el.attr("href")) {
+                            this.name = "Episode ${el.text().trim()}"
+                            this.episode = el.text().trim().toIntOrNull()
+                        }
                     }
                 }
                 val builder = if (episodes.isEmpty()) {
