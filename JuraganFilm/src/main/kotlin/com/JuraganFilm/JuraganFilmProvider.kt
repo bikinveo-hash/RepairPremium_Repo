@@ -1,6 +1,5 @@
 package com.JuraganFilm
 
-import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.Interceptor
@@ -16,11 +15,17 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    override val mainPage = listOf(mainPage("$mainUrl/", "Home"))
+    // Halaman utama + kategori
+    override val mainPage = listOf(
+        mainPage("$mainUrl/", "Home"),
+        mainPage("$mainUrl/kategori-film/box-office/", "Box Office"),
+        mainPage("$mainUrl/kategori-film/ongoing/", "Ongoing"),
+        mainPage("$mainUrl/kategori-film/drama-serial-mandarin/", "Drama Serial Mandarin"),
+        mainPage("$mainUrl/kategori-film/drama-serial-korea/", "Drama Serial Korea")
+    )
 
     private val mobileUserAgent =
-        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
     private val baseHeaders get() = mapOf(
         "User-Agent" to USER_AGENT,
@@ -28,45 +33,52 @@ class JuraganFilmProvider : MainAPI() {
     )
 
     // =====================================================================
-    // HOMEPAGE
+    // HOMEPAGE / KATEGORI
     // =====================================================================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        if (page > 1) {
-            val doc = app.get(
-                "$mainUrl/page/$page/",
-                headers = baseHeaders
-            ).document
-            val items = parseLatestMovieItems(doc)
-            return if (items.isNotEmpty())
-                newHomePageResponse("Latest Movie - Page $page", items, hasNext = hasNextPage(doc))
+        val isHome = request.data == "$mainUrl/"
+        val url = if (page > 1) {
+            val base = request.data.trimEnd('/')
+            "$base/page/$page/"
+        } else {
+            request.data
+        }
+
+        val doc = app.get(url, headers = baseHeaders).document
+
+        return if (isHome) {
+            // Tampilan homepage lengkap
+            val homeLists = mutableListOf<HomePageList>()
+
+            val sliderItems = parseSliderItems(doc)
+            if (sliderItems.isNotEmpty())
+                homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
+
+            doc.select(".home-widget").forEach { section ->
+                val title = section.selectFirst(".homemodule-title, .widget-title")
+                    ?.text()?.trim() ?: return@forEach
+                val items = section.select(".gmr-item-modulepost")
+                    .mapNotNull { parseWidgetItem(it) }
+                if (items.isNotEmpty())
+                    homeLists.add(HomePageList(title, items))
+            }
+
+            val latestItems = parseLatestMovieItems(doc)
+            if (latestItems.isNotEmpty())
+                homeLists.add(HomePageList("Latest Movie", latestItems))
+
+            if (homeLists.isEmpty()) null
+            else newHomePageResponse(homeLists, hasNext = hasNextPage(doc))
+        } else {
+            // Halaman kategori: tampilkan daftar item saja
+            val items = doc.select(".gmr-item-modulepost").mapNotNull { parseWidgetItem(it) }
+            if (items.isNotEmpty())
+                newHomePageResponse(request.name, items, hasNext = hasNextPage(doc))
             else null
         }
-
-        val doc = app.get(request.data, headers = baseHeaders).document
-        val homeLists = mutableListOf<HomePageList>()
-
-        val sliderItems = parseSliderItems(doc)
-        if (sliderItems.isNotEmpty())
-            homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
-
-        doc.select(".home-widget").forEach { section ->
-            val title = section.selectFirst(".homemodule-title, .widget-title")
-                ?.text()?.trim() ?: return@forEach
-            val items = section.select(".gmr-item-modulepost")
-                .mapNotNull { parseWidgetItem(it) }
-            if (items.isNotEmpty())
-                homeLists.add(HomePageList(title, items))
-        }
-
-        val latestItems = parseLatestMovieItems(doc)
-        if (latestItems.isNotEmpty())
-            homeLists.add(HomePageList("Latest Movie", latestItems))
-
-        return if (homeLists.isEmpty()) null
-        else newHomePageResponse(homeLists, hasNext = hasNextPage(doc))
     }
 
     // =====================================================================
@@ -212,11 +224,7 @@ class JuraganFilmProvider : MainAPI() {
                 Pair(data, mainUrl)
             }
             else -> {
-                val doc = app.get(
-                    data,
-                    headers = baseHeaders
-                ).document
-
+                val doc = app.get(data, headers = baseHeaders).document
                 val extracted = doc.selectFirst("iframe[id^=jf-frame-]")
                     ?.attr("src")
                     ?.replace("&#038;", "&")
@@ -232,7 +240,6 @@ class JuraganFilmProvider : MainAPI() {
                 if (extracted.isBlank()) {
                     return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
                 }
-
                 Pair(extracted, data)
             }
         }
