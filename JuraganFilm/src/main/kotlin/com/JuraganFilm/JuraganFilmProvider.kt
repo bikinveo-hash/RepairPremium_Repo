@@ -20,8 +20,9 @@ class JuraganFilmProvider : MainAPI() {
         mainPage("$mainUrl/", "Home")
     )
 
-    // Cookie yang didapat dari WebView saat membuka halaman detail
     private var savedCookies: String? = null
+    // User-Agent mobile (terbukti lolos dari cloud.wth.my.id)
+    private val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
     // =================== HOMEPAGE ===================
     override suspend fun getMainPage(
@@ -39,13 +40,11 @@ class JuraganFilmProvider : MainAPI() {
         val doc = app.get(request.data).document
         val homeLists = mutableListOf<HomePageList>()
 
-        // Slider / Featured
         val sliderItems = parseSliderItems(doc)
         if (sliderItems.isNotEmpty()) {
             homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
         }
 
-        // Widget Sections
         val sections = doc.select(".home-widget")
         for (section in sections) {
             val sectionTitle = section.selectFirst(".homemodule-title")?.text()?.trim()
@@ -60,7 +59,6 @@ class JuraganFilmProvider : MainAPI() {
             }
         }
 
-        // Latest Movie
         val latestItems = parseLatestMovieItems(doc)
         if (latestItems.isNotEmpty()) {
             homeLists.add(HomePageList("Latest Movie", latestItems))
@@ -90,21 +88,18 @@ class JuraganFilmProvider : MainAPI() {
 
     // =================== LOAD (DETAIL) ===================
     override suspend fun load(url: String): LoadResponse? {
-        // Gunakan WebViewResolver untuk mendapatkan cookie + pastikan halaman termuat sempurna
         val resolver = WebViewResolver(
             interceptUrl = Regex(".*"),
             timeout = 30_000L
         )
         val (finalRequest, _) = resolver.resolveUsingWebView(url)
 
-        // Ambil cookie dari CookieManager setelah WebView selesai
         val cookieManager = CookieManager.getInstance()
         val cookies = cookieManager.getCookie(url)
         if (!cookies.isNullOrBlank()) {
             savedCookies = cookies
         }
 
-        // Siapkan header dengan cookie yang didapat
         val headers = mutableMapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to url
@@ -251,11 +246,10 @@ class JuraganFilmProvider : MainAPI() {
                 ) {
                     this.referer = data
                     this.quality = Qualities.P1080.value
-                    // Header yang dibutuhkan oleh cloud.wth.my.id (terbukti dari test curl)
                     this.headers = mapOf(
                         "Origin" to "https://tv44.juragan.film",
                         "Referer" to data,
-                        "User-Agent" to USER_AGENT
+                        "User-Agent" to mobileUserAgent // ← WAJIB mobile
                     )
                 }
             )
