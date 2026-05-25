@@ -38,6 +38,7 @@ object Adicinemax21Extractor : Adicinemax21() {
     // ================== IDLIX SOURCE (UPDATED) ==================
     suspend fun invokeIdlix(
         title: String? = null,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int? = null,
         season: Int? = null,
@@ -55,17 +56,24 @@ object Adicinemax21Extractor : Adicinemax21() {
                 return searchRes?.data ?: searchRes?.results
             }
 
+            // Coba dengan title, orgTitle, altTitle
             var items = title?.let { searchWithQuery(it) }
-            if ((items == null || items.isEmpty()) && altTitle != null) {
+            if (items.isNullOrEmpty() && orgTitle != null) {
+                items = searchWithQuery(orgTitle)
+            }
+            if (items.isNullOrEmpty() && altTitle != null) {
                 items = searchWithQuery(altTitle)
             }
-            if (items == null || items.isEmpty()) return
+            if (items.isNullOrEmpty()) return
             
             val isSeries = season != null
 
+            // Pencocokan longgar dengan contains
+            val allQueries = listOfNotNull(title, orgTitle, altTitle)
             val matchedItem = items.find { 
-                val titleMatch = it.title.equals(title, true) || it.originalTitle.equals(title, true) ||
-                                 (altTitle != null && (it.title.equals(altTitle, true) || it.originalTitle.equals(altTitle, true)))
+                val titleMatch = allQueries.any { query ->
+                    it.title?.contains(query, true) == true || it.originalTitle?.contains(query, true) == true
+                }
                 val typeMatch = if (isSeries) it.contentType?.contains("series", true) == true else it.contentType?.contains("movie", true) == true
                 titleMatch && typeMatch
             } ?: items.firstOrNull() ?: return
@@ -158,10 +166,11 @@ object Adicinemax21Extractor : Adicinemax21() {
         @JsonProperty("claim") val claim: String? = null
     )
 
-    // ================== ADIDEWASA SOURCE ==================
+    // ================== ADIDEWASA SOURCE (UPDATED) ==================
     @Suppress("UNCHECKED_CAST")
     suspend fun invokeAdiDewasa(
         title: String,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
@@ -184,6 +193,9 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
         
         var matchedItem = attemptSearch(title)
+        if (matchedItem == null && orgTitle != null) {
+            matchedItem = attemptSearch(orgTitle)
+        }
         if (matchedItem == null && altTitle != null) {
             matchedItem = attemptSearch(altTitle)
         }
@@ -234,9 +246,10 @@ object Adicinemax21Extractor : Adicinemax21() {
         subs?.forEach { subPath -> subtitleCallback.invoke(newSubtitleFile("English", fixUrl(subPath, baseUrl))) }
     }
 
-    // ================== KISSKH SOURCE ==================
+    // ================== KISSKH SOURCE (UPDATED) ==================
     suspend fun invokeKisskh(
         title: String,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
@@ -249,7 +262,7 @@ object Adicinemax21Extractor : Adicinemax21() {
             try {
                 val searchRes = app.get("$mainUrl/api/DramaList/Search?q=$query&type=0").text
                 val searchList = tryParseJson<ArrayList<KisskhMedia>>(searchRes) ?: return null
-                return searchList.find { it.title.equals(query, true) } 
+                return searchList.find { it.title?.contains(query, true) == true } 
                     ?: searchList.firstOrNull { it.title?.contains(query, true) == true }
             } catch (e: Exception) {
                 return null
@@ -257,6 +270,9 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
 
         var matched = searchAndMatch(title)
+        if (matched == null && orgTitle != null) {
+            matched = searchAndMatch(orgTitle)
+        }
         if (matched == null && altTitle != null) {
             matched = searchAndMatch(altTitle)
         }
@@ -290,9 +306,10 @@ object Adicinemax21Extractor : Adicinemax21() {
     private data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
     private data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
 
-    // ================== ADIMOVIEBOX (OLD) SOURCE ==================
+    // ================== ADIMOVIEBOX (OLD) SOURCE (UPDATED) ==================
     suspend fun invokeAdimoviebox(
         title: String,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
@@ -305,11 +322,15 @@ object Adicinemax21Extractor : Adicinemax21() {
             val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return null
             return items.find { item ->
                 val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-                (item.title.equals(query, true)) || (item.title?.contains(query, true) == true && itemYear == year)
+                (item.title?.contains(query, true) == true && itemYear == year) ||
+                (item.title.equals(query, true))
             }
         }
         
         var matchedMedia = search(title)
+        if (matchedMedia == null && orgTitle != null) {
+            matchedMedia = search(orgTitle)
+        }
         if (matchedMedia == null && altTitle != null) {
             matchedMedia = search(altTitle)
         }
@@ -339,16 +360,18 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
     }
 
-    // ================== GOMOVIES SOURCE ==================
+    // ================== GOMOVIES SOURCE (UPDATED) ==================
     suspend fun invokeGomovies(
         title: String? = null,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int? = null, season: Int? = null, episode: Int? = null, callback: (ExtractorLink) -> Unit,
     ) {
-        invokeGpress(title, altTitle, year, season, episode, callback, Adicinemax21.gomoviesAPI, "Gomovies", base64Decode("X3NtUWFtQlFzRVRi"), base64Decode("X3NCV2NxYlRCTWFU"))
+        invokeGpress(title, orgTitle, altTitle, year, season, episode, callback, Adicinemax21.gomoviesAPI, "Gomovies", base64Decode("X3NtUWFtQlFzRVRi"), base64Decode("X3NCV2NxYlRCTWFU"))
     }
     private suspend fun invokeGpress(
         title: String? = null,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int? = null, season: Int? = null, episode: Int? = null,
         callback: (ExtractorLink) -> Unit, api: String, name: String, mediaSelector: String, episodeSelector: String,
@@ -367,6 +390,9 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
 
         var media = title?.let { attemptSearch(it) }
+        if (media == null && orgTitle != null) {
+            media = attemptSearch(orgTitle)
+        }
         if (media == null && altTitle != null) {
             media = attemptSearch(altTitle)
         }
@@ -632,9 +658,10 @@ object Adicinemax21Extractor : Adicinemax21() {
         } catch (e: Exception) {}
     }
 
-    // ================== PLAYER4U SOURCE ==================
+    // ================== PLAYER4U SOURCE (UPDATED) ==================
     suspend fun invokePlayer4U(
         title: String? = null,
+        orgTitle: String? = null,
         altTitle: String? = null,
         season: Int? = null, episode: Int? = null, year: Int? = null, callback: (ExtractorLink) -> Unit
     ) = coroutineScope {
@@ -657,6 +684,9 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
 
         var allLinks = title?.let { tryExtract(it) } ?: emptySet()
+        if (allLinks.isEmpty() && orgTitle != null) {
+            allLinks = tryExtract(orgTitle)
+        }
         if (allLinks.isEmpty() && altTitle != null) {
             allLinks = tryExtract(altTitle)
         }
@@ -698,6 +728,7 @@ object Adicinemax21Extractor : Adicinemax21() {
     // ================== ADIMOVIEBOX 2 SOURCE (NEW UPDATED) ==================
     suspend fun invokeAdimoviebox2(
         title: String,
+        orgTitle: String? = null,
         altTitle: String? = null,
         year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
@@ -720,6 +751,9 @@ object Adicinemax21Extractor : Adicinemax21() {
         }
 
         var matchedSubject = searchSubject(title)
+        if (matchedSubject == null && orgTitle != null) {
+            matchedSubject = searchSubject(orgTitle)
+        }
         if (matchedSubject == null && altTitle != null) {
             matchedSubject = searchSubject(altTitle)
         }
