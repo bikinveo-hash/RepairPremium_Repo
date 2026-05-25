@@ -4,8 +4,10 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 class JuraganFilmExtractor : ExtractorApi() {
-    override val name = "JuraganFilm File"
-    override val mainUrl = "https://tv44.juragan.film/file/"
+    override val name           = "JuraganFilm"
+    // ✅ Fix #3: mainUrl harus match domain saja, bukan path /file/
+    // CloudStream akan trigger extractor ini untuk semua URL dari domain ini
+    override val mainUrl        = "https://tv44.juragan.film"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -14,33 +16,52 @@ class JuraganFilmExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val html = app.get(url, referer = referer ?: mainUrl).text
-        
-        // Cari link m3u8 dari cloud.wth.my.id (bisa dalam petik tunggal/ganda)
+        // ✅ Fix #1: Referer harus URL halaman asli, bukan mainUrl
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer"    to (referer ?: mainUrl),
+            "Origin"     to mainUrl
+        )
+
+        val html = app.get(url, headers = headers).text
+
+        // Cari m3u8 dari cloud.wth.my.id
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
         val match = m3u8Regex.find(html)
-        
+
         if (match != null) {
-            val m3u8Url = match.value
             callback(
                 newExtractorLink(
                     source = name,
-                    name = "JuraganFilm - HLS",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
+                    name   = "$name - HLS",
+                    url    = match.value,
+                    type   = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = url
+                    this.quality = Qualities.P1080.value
+                    this.headers = mapOf(
+                        "Origin"  to mainUrl,
+                        "Referer" to url
+                    )
+                }
+            )
+            return
+        }
+
+        // Fallback: cari mp4 biasa
+        val mp4Regex = Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""")
+        mp4Regex.find(html)?.let { mp4Match ->
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name   = "$name - MP4",
+                    url    = mp4Match.value,
+                    type   = ExtractorLinkType.VIDEO
                 ) {
                     this.referer = url
                     this.quality = Qualities.P1080.value
                 }
             )
-        }
-        
-        // Fallback: cari link mp4 dari fallback JSON
-        val fallbackRegex = Regex("""const FALLBACK_JSON_URL\s*=\s*"([^"]+)""")
-        val fallbackMatch = fallbackRegex.find(html)
-        if (fallbackMatch != null && match == null) {
-            // Tidak ada m3u8, mungkin perlu ambil dari JSON fallback
-            // Tapi untuk sekarang kita prioritaskan m3u8
         }
     }
 }
