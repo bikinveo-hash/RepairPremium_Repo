@@ -2,12 +2,9 @@ package com.JuraganFilm
 
 import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
-import okhttp3.Interceptor
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
 
 class JuraganFilmProvider : MainAPI() {
     override var name = "JuraganFilm"
@@ -16,374 +13,393 @@ class JuraganFilmProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
-    override val usesWebView = true
+    override val usesWebView = false // tidak perlu WebView, curl biasa sudah works
 
     override val mainPage = listOf(
-        mainPage("$mainUrl/", "Home")
+        mainPageOf("$mainUrl/" to "Home")
     )
 
-    private var savedCookies: String? = null
-    private val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+    private val mobileUserAgent =
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-    // =================== HOMEPAGE ===================
+    private val baseHeaders get() = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Referer"    to mainUrl
+    )
+
+    // =====================================================================
+    // HOMEPAGE
+    // =====================================================================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
         if (page > 1) {
-            val doc = app.get("$mainUrl/page/$page/").document
-            val latestItems = parseLatestMovieItems(doc)
-            return if (latestItems.isNotEmpty()) {
-                newHomePageResponse("Latest Movie - Page $page", latestItems, hasNext = hasNextPage(doc))
-            } else null
+            val doc = app.get(
+                "$mainUrl/page/$page/",
+                headers = baseHeaders
+            ).document
+            val items = parseLatestMovieItems(doc)
+            return if (items.isNotEmpty())
+                newHomePageResponse("Latest Movie - Page $page", items, hasNext = hasNextPage(doc))
+            else null
         }
 
-        val doc = app.get(request.data).document
+        val doc = app.get(request.data, headers = baseHeaders).document
         val homeLists = mutableListOf<HomePageList>()
 
         val sliderItems = parseSliderItems(doc)
-        if (sliderItems.isNotEmpty()) {
+        if (sliderItems.isNotEmpty())
             homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
-        }
 
-        val sections = doc.select(".home-widget")
-        for (section in sections) {
-            val sectionTitle = section.selectFirst(".homemodule-title")?.text()?.trim()
-                ?: section.selectFirst(".widget-title")?.text()?.trim()
-                ?: continue
-
+        doc.select(".home-widget").forEach { section ->
+            val title = section.selectFirst(".homemodule-title, .widget-title")
+                ?.text()?.trim() ?: return@forEach
             val items = section.select(".gmr-item-modulepost")
-            val searchResponses = items.mapNotNull { parseWidgetItem(it) }
-
-            if (searchResponses.isNotEmpty()) {
-                homeLists.add(HomePageList(sectionTitle, searchResponses))
-            }
+                .mapNotNull { parseWidgetItem(it) }
+            if (items.isNotEmpty())
+                homeLists.add(HomePageList(title, items))
         }
 
         val latestItems = parseLatestMovieItems(doc)
-        if (latestItems.isNotEmpty()) {
+        if (latestItems.isNotEmpty())
             homeLists.add(HomePageList("Latest Movie", latestItems))
-        }
 
-        val hasNext = hasNextPage(doc)
         return if (homeLists.isEmpty()) null
-        else newHomePageResponse(homeLists, hasNext = hasNext)
+        else newHomePageResponse(homeLists, hasNext = hasNextPage(doc))
     }
 
-    // =================== SEARCH ===================
+    // =====================================================================
+    // SEARCH
+    // =====================================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val searchUrl = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
-        val doc = if (page > 1) {
-            app.get("$mainUrl/page/$page/?s=$query&post_type[]=post&post_type[]=tv").document
-        } else {
-            app.get(searchUrl).document
-        }
+        val url = if (page > 1)
+            "$mainUrl/page/$page/?s=$query&post_type[]=post&post_type[]=tv"
+        else
+            "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
 
-        val widgetItems = doc.select(".gmr-item-modulepost").mapNotNull { parseWidgetItem(it) }
-        val latestItems = parseLatestMovieItems(doc)
-        val results = (widgetItems + latestItems).distinctBy { it.url }
+        val doc = app.get(url, headers = baseHeaders).document
+        val results = (
+            doc.select(".gmr-item-modulepost").mapNotNull { parseWidgetItem(it) } +
+            parseLatestMovieItems(doc)
+        ).distinctBy { it.url }
 
-        val hasNext = hasNextPage(doc)
-        return newSearchResponseList(results, hasNext)
+        return newSearchResponseList(results, hasNextPage(doc))
     }
 
-    // =================== LOAD (DETAIL) ===================
+    // =====================================================================
+    // LOAD (DETAIL PAGE)
+    // =====================================================================
     override suspend fun load(url: String): LoadResponse? {
-        val resolver = WebViewResolver(
-            interceptUrl = Regex(".*"),
-            timeout = 30_000L
-        )
-        val (finalRequest, _) = resolver.resolveUsingWebView(url)
+        val doc = app.get(url, headers = baseHeaders).document
 
-        val cookieManager = CookieManager.getInstance()
-        val cookies = cookieManager.getCookie(url)
-        if (!cookies.isNullOrBlank()) {
-            savedCookies = cookies
-        }
-
-        val headers = mutableMapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to url
-        )
-        if (!savedCookies.isNullOrBlank()) {
-            headers["Cookie"] = savedCookies!!
-        }
-
-        val doc = app.get(url, headers = headers).document
-
-        val title = doc.selectFirst("h3.entry-title")?.text()?.trim()
-            ?: doc.selectFirst(".entry-title")?.text()?.trim()
-            ?: return null
+        val title = doc.selectFirst("h3.entry-title, .entry-title")
+            ?.text()?.trim() ?: return null
 
         val posterUrl = fixPosterUrl(
             doc.selectFirst("meta[property=og:image]")?.attr("content")
         )
+        val year = doc.selectFirst("time[itemprop=dateCreated]")
+            ?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
+            ?: doc.selectFirst("a[href*='/tahun/']")?.text()?.trim()?.toIntOrNull()
 
-        val year = doc.selectFirst("time[itemprop=dateCreated]")?.attr("datetime")
-            ?.substringBefore("-")?.toIntOrNull()
-            ?: doc.selectFirst("span.gmr-movie-genre a[href*='/tahun/']")?.text()?.trim()
-                ?.toIntOrNull()
+        val plot = doc.selectFirst(
+            ".gmr-moviedata:contains(Sinopsis:) .entry-content em, " +
+            ".gmr-moviedata em p, .entry-content p"
+        )?.text()?.trim()
 
-        val plot = doc.selectFirst(".gmr-moviedata:contains(Sinopsis:) .entry-content em, .gmr-moviedata em p")?.text()?.trim()
-            ?: doc.selectFirst(".entry-content p")?.text()?.trim()
-
-        val castElements = doc.select("span[itemprop=actors] span[itemprop=name] a")
-        val actors = castElements.map { el ->
-            ActorData(Actor(el.text().trim()))
-        }
-
+        val actors = doc.select("span[itemprop=actors] span[itemprop=name] a")
+            .map { ActorData(Actor(it.text().trim())) }
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
-
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
 
-        val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
+        // ✅ Fix #2: attr("src") di Jsoup sudah auto-decode HTML entity
+        // tapi kita tambah manual replace untuk jaga-jaga kasus edge
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
-        val dataUrl = iframeEl?.attr("src") ?: url
+        val playerUrl = iframeEl?.attr("src")
+            ?.replace("&#038;", "&")
+            ?.replace("&amp;", "&")
+            ?.let { src ->
+                when {
+                    src.startsWith("//")  -> "https:$src"
+                    src.startsWith("/")   -> "$mainUrl$src"
+                    else                  -> src
+                }
+            } ?: ""
+
+        val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
+
+        fun buildTrailer(builder: LoadResponse) {
+            if (!trailerUrl.isNullOrBlank()) {
+                builder.trailers.add(
+                    TrailerData(
+                        extractorUrl = trailerUrl,
+                        referer      = url,
+                        raw          = false,
+                        headers      = mapOf("User-Agent" to USER_AGENT)
+                    )
+                )
+            }
+        }
 
         return when (type) {
             TvType.TvSeries -> {
-                val episodeElements = doc.select(
+                val epElements = doc.select(
                     ".entry-content .post-page-numbers, " +
                     "article .post-page-numbers, " +
                     ".jf-eps-wrap .post-page-numbers, " +
                     ".post-page-numbers"
                 )
-                val episodes = episodeElements.map { el ->
-                    if (el.tagName() == "span") {
-                        newEpisode(url) {
-                            this.name = "Episode ${el.text().trim()}"
-                            this.episode = el.text().trim().toIntOrNull()
-                        }
-                    } else {
-                        newEpisode(el.attr("href")) {
-                            this.name = "Episode ${el.text().trim()}"
-                            this.episode = el.text().trim().toIntOrNull()
-                        }
+
+                val episodes = epElements.map { el ->
+                    val epUrl = if (el.tagName() == "span") url else el.attr("href")
+                    val epNum = el.text().trim().toIntOrNull()
+                    newEpisode(epUrl) {
+                        this.name    = "Episode ${el.text().trim()}"
+                        this.episode = epNum
                     }
                 }.distinctBy { it.episode }
 
-                val hasEpisode1 = episodes.any { it.episode == 1 }
-                val finalEpisodes = if (!hasEpisode1 && episodes.isNotEmpty()) {
-                    listOf(
-                        newEpisode(url) {
-                            this.name = "Episode 1"
-                            this.episode = 1
-                        }
-                    ) + episodes
+                val finalEpisodes = if (episodes.none { it.episode == 1 }) {
+                    listOf(newEpisode(url) {
+                        this.name    = "Episode 1"
+                        this.episode = 1
+                    }) + episodes
                 } else episodes
 
-                val builder = if (finalEpisodes.isEmpty()) {
-                    newTvSeriesLoadResponse(title, url, type, emptyList())
-                } else {
-                    newTvSeriesLoadResponse(title, url, type, finalEpisodes)
-                }
-                builder.apply {
+                newTvSeriesLoadResponse(title, url, type, finalEpisodes).apply {
                     this.posterUrl = posterUrl
-                    this.year = year
-                    this.plot = plot
-                    this.tags = tags
-                    this.actors = actors
-                    if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(
-                            TrailerData(
-                                extractorUrl = trailerUrl,
-                                referer = url,
-                                raw = false,
-                                headers = mapOf("User-Agent" to USER_AGENT)
-                            )
-                        )
-                    }
+                    this.year      = year
+                    this.plot      = plot
+                    this.tags      = tags
+                    this.actors    = actors
+                    buildTrailer(this)
                 }
-                builder
             }
+
             else -> {
-                newMovieLoadResponse(title, url, type, dataUrl) {
+                // ✅ Fix Movie: encode "playerUrl|||pageUrl" supaya loadLinks
+                // punya kedua info yang dibutuhkan
+                val dataUrl = if (playerUrl.isNotBlank())
+                    "$playerUrl${SEPARATOR}$url"
+                else
+                    url
+
+                newMovieLoadResponse(title, url, type, dataUrl).apply {
                     this.posterUrl = posterUrl
-                    this.year = year
-                    this.plot = plot
-                    this.tags = tags
-                    this.actors = actors
-                    if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(
-                            TrailerData(
-                                extractorUrl = trailerUrl,
-                                referer = url,
-                                raw = false,
-                                headers = mapOf("User-Agent" to USER_AGENT)
-                            )
-                        )
-                    }
+                    this.year      = year
+                    this.plot      = plot
+                    this.tags      = tags
+                    this.actors    = actors
+                    buildTrailer(this)
                 }
             }
         }
     }
 
-    // =================== LOAD LINKS ===================
+    // =====================================================================
+    // LOAD LINKS
+    // =====================================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val headers = mutableMapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to mainUrl
-        )
-        if (!savedCookies.isNullOrBlank()) {
-            headers["Cookie"] = savedCookies!!
+
+        // ── Tentukan playerUrl dan pageUrl ─────────────────────────────
+        val (playerUrl, pageUrl) = when {
+
+            // Movie: data berformat "playerUrl|||pageUrl"
+            data.contains(SEPARATOR) -> {
+                val parts = data.split(SEPARATOR)
+                Pair(parts[0], parts[1])
+            }
+
+            // Movie lama / fallback: data adalah /file/ URL langsung
+            data.contains("/file/") -> {
+                Pair(data, mainUrl)
+            }
+
+            // ✅ Fix #3 — Series: data = URL halaman episode
+            // Fetch halaman, extract iframe /file/, lanjut
+            else -> {
+                val doc = app.get(
+                    data,
+                    headers = baseHeaders
+                ).document
+
+                val extracted = doc.selectFirst("iframe[id^=jf-frame-]")
+                    ?.attr("src")
+                    ?.replace("&#038;", "&")
+                    ?.replace("&amp;", "&")
+                    ?.let { src ->
+                        when {
+                            src.startsWith("//") -> "https:$src"
+                            src.startsWith("/")  -> "$mainUrl$src"
+                            else                 -> src
+                        }
+                    } ?: ""
+
+                if (extracted.isBlank()) {
+                    // Tidak ada iframe, coba loadExtractor langsung
+                    return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
+                }
+
+                Pair(extracted, data)   // pageUrl = URL episode
+            }
         }
 
-        val html = app.get(data, headers = headers).text
+        // ✅ Fix #1 — Kirim Referer = URL halaman asli (bukan mainUrl)
+        // Ini yang fix 403 "hanya bisa dibuka dari iframe website"
+        val playerHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer"    to pageUrl,
+            "Origin"     to mainUrl
+        )
+
+        val html = app.get(playerUrl, headers = playerHeaders).text
+
+        // Cari m3u8 dari cloud.wth.my.id
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
         val match = m3u8Regex.find(html)
 
         if (match != null) {
-            // Sematkan header sebagai query parameter (workaround)
-            val encodedReferer = URLEncoder.encode(data, "UTF-8")
-            val encodedUA = URLEncoder.encode(mobileUserAgent, "UTF-8")
-            val m3u8Url = match.value +
-                "&origin=https://tv44.juragan.film" +
-                "&referer=$encodedReferer" +
-                "&useragent=$encodedUA"
-
             callback(
                 newExtractorLink(
                     source = name,
-                    name = "JuraganFilm - HLS",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
+                    name   = "JuraganFilm - HLS",
+                    url    = match.value,
+                    type   = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = data
+                    this.referer = playerUrl
                     this.quality = Qualities.P1080.value
                     this.headers = mapOf(
-                        "Origin" to "https://tv44.juragan.film",
-                        "Referer" to data,
+                        "Origin"     to mainUrl,
+                        "Referer"    to playerUrl,
                         "User-Agent" to mobileUserAgent
                     )
                 }
             )
             return true
         }
-        return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
+
+        // Fallback: coba semua extractor standar CloudStream
+        return loadExtractor(playerUrl, referer = pageUrl, subtitleCallback, callback)
     }
 
-    // =================== INTERCEPTOR UNTUK PLAYER ===================
+    // =====================================================================
+    // VIDEO INTERCEPTOR — inject header untuk setiap segment HLS
+    // =====================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
         return Interceptor { chain ->
-            val originalRequest = chain.request()
-            val url = originalRequest.url.toString()
-
-            if (url.contains("cloud.wth.my.id")) {
-                val newRequest = originalRequest.newBuilder()
-                    .header("Origin", "https://tv44.juragan.film")
-                    .header("Referer", extractorLink.url)
-                    .header("User-Agent", mobileUserAgent)
-                    .build()
-                return@Interceptor chain.proceed(newRequest)
+            val req = chain.request()
+            if (req.url.toString().contains("cloud.wth.my.id")) {
+                chain.proceed(
+                    req.newBuilder()
+                        .header("Origin",     mainUrl)
+                        .header("Referer",    extractorLink.referer ?: mainUrl)
+                        .header("User-Agent", mobileUserAgent)
+                        .build()
+                )
+            } else {
+                chain.proceed(req)
             }
-            chain.proceed(originalRequest)
         }
     }
 
-    // =================== HELPER ===================
-    private fun hasNextPage(doc: Document): Boolean {
-        return doc.selectFirst("ul.page-numbers li a.next") != null
-    }
+    // =====================================================================
+    // HELPERS
+    // =====================================================================
+    private fun hasNextPage(doc: Document): Boolean =
+        doc.selectFirst("ul.page-numbers li a.next") != null
 
-    private fun fixPosterUrl(url: String?): String? {
-        if (url == null) return null
-        return url.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
-    }
+    private fun fixPosterUrl(url: String?): String? =
+        url?.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
 
-    private fun parseSliderItems(doc: Document): List<SearchResponse> {
-        val items = doc.select(".gmr-slider-content")
-        return items.mapNotNull { element ->
-            val linkEl = element.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
-            val title = linkEl.text().trim()
-            val url = linkEl.attr("href").trim()
-            if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
-
-            val imgEl = element.selectFirst("img.tns-lazy-img")
-            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-            val posterUrl = fixPosterUrl(rawPoster)
-
-            val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
-            val type = if (url.contains("/film-seri/") || (episodeText != null && episodeText.contains("EPS", ignoreCase = true))) {
-                TvType.TvSeries
-            } else TvType.Movie
+    private fun parseSliderItems(doc: Document): List<SearchResponse> =
+        doc.select(".gmr-slider-content").mapNotNull { el ->
+            val linkEl = el.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
+            val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val poster = fixPosterUrl(
+                el.selectFirst("img.tns-lazy-img")
+                    ?.attr("data-src")?.ifBlank { null }
+                    ?: el.selectFirst("img.tns-lazy-img")?.attr("src")
+            )
+            val eps = el.selectFirst(".strokeepisode")?.text()
+            val type = if (url.contains("/film-seri/") ||
+                eps?.contains("EPS", ignoreCase = true) == true)
+                TvType.TvSeries else TvType.Movie
 
             when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                }
-                else -> newMovieSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                }
+                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) { posterUrl = poster }
+                else            -> newMovieSearchResponse(title, url, type) { posterUrl = poster }
             }
         }
-    }
 
-    private fun parseWidgetItem(element: Element): SearchResponse? {
-        val linkEl = element.selectFirst(".entry-title a") ?: return null
-        val title = linkEl.text().trim()
-        val url = linkEl.attr("href").trim()
-        if (title.isEmpty() || url.isEmpty()) return null
-
-        val imgEl = element.selectFirst("img.wp-post-image")
-        val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-        val posterUrl = fixPosterUrl(rawPoster)
-
-        val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
-        val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
-        val dateEl = element.selectFirst("time[itemprop=dateCreated]")
-        val year = dateEl?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
-
-        val type = if (url.contains("/film-seri/") || (episodeText != null && episodeText.contains("EPS", ignoreCase = true))) {
-            TvType.TvSeries
-        } else TvType.Movie
+    private fun parseWidgetItem(el: Element): SearchResponse? {
+        val linkEl = el.selectFirst(".entry-title a") ?: return null
+        val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return null
+        val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return null
+        val poster = fixPosterUrl(
+            el.selectFirst("img.wp-post-image")
+                ?.attr("data-src")?.ifBlank { null }
+                ?: el.selectFirst("img.wp-post-image")?.attr("src")
+        )
+        val quality = el.selectFirst(".gmr-quality-item a")?.text()?.trim()
+        val year    = el.selectFirst("time[itemprop=dateCreated]")
+            ?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
+        val eps     = el.selectFirst(".strokeepisode")?.text()
+        val type    = if (url.contains("/film-seri/") ||
+            eps?.contains("EPS", ignoreCase = true) == true)
+            TvType.TvSeries else TvType.Movie
 
         return when (type) {
             TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                this.posterUrl = posterUrl
-                addQuality(qualityText ?: "")
+                posterUrl = poster
+                addQuality(quality ?: "")
             }
             else -> newMovieSearchResponse(title, url, type) {
-                this.posterUrl = posterUrl
-                addQuality(qualityText ?: "")
-                this.year = year
+                posterUrl  = poster
+                this.year  = year
+                addQuality(quality ?: "")
             }
         }
     }
 
-    private fun parseLatestMovieItems(doc: Document): List<SearchResponse> {
-        val items = doc.select("#gmr-main-load article.item, #primary article.item")
-        return items.mapNotNull { element ->
-            val linkEl = element.selectFirst(".entry-title a") ?: return@mapNotNull null
-            val title = linkEl.text().trim()
-            val url = linkEl.attr("href").trim()
-            if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
+    private fun parseLatestMovieItems(doc: Document): List<SearchResponse> =
+        doc.select("#gmr-main-load article.item, #primary article.item")
+            .mapNotNull { el ->
+                val linkEl = el.selectFirst(".entry-title a") ?: return@mapNotNull null
+                val title  = linkEl.text().trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val poster = fixPosterUrl(
+                    el.selectFirst("img.wp-post-image")
+                        ?.attr("data-src")?.ifBlank { null }
+                        ?: el.selectFirst("img.wp-post-image")?.attr("src")
+                )
+                val quality = el.selectFirst(".gmr-quality-item a")?.text()?.trim()
+                val year    = el.selectFirst("time[itemprop=dateCreated]")
+                    ?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
+                val type    = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
 
-            val imgEl = element.selectFirst("img.wp-post-image")
-            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-            val posterUrl = fixPosterUrl(rawPoster)
-
-            val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
-            val dateEl = element.selectFirst("time[itemprop=dateCreated]")
-            val year = dateEl?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
-
-            val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
-
-            when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                    addQuality(qualityText ?: "")
-                }
-                else -> newMovieSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                    addQuality(qualityText ?: "")
-                    this.year = year
+                when (type) {
+                    TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
+                        posterUrl = poster
+                        addQuality(quality ?: "")
+                    }
+                    else -> newMovieSearchResponse(title, url, type) {
+                        posterUrl  = poster
+                        this.year  = year
+                        addQuality(quality ?: "")
+                    }
                 }
             }
-        }
+
+    companion object {
+        // Separator untuk encode playerUrl + pageUrl di dataUrl movie
+        const val SEPARATOR = "|||"
     }
 }
