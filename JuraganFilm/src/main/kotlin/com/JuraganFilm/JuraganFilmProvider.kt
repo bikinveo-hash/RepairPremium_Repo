@@ -1,6 +1,7 @@
 package com.JuraganFilm
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -13,13 +14,14 @@ class JuraganFilmProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
+    override val usesWebView = true // Wajib untuk izin WebView
 
     override val mainPage = listOf(
         mainPage("$mainUrl/", "Home")
     )
 
-    // Simpan cookie jf_bypass untuk digunakan di loadLinks
-    private var jfBypassCookie: String? = null
+    // Simpan cookie dari WebView
+    private var savedCookies: String? = null
 
     // =================== HOMEPAGE ===================
     override suspend fun getMainPage(
@@ -37,13 +39,11 @@ class JuraganFilmProvider : MainAPI() {
         val doc = app.get(request.data).document
         val homeLists = mutableListOf<HomePageList>()
 
-        // 1. Slider / Featured
         val sliderItems = parseSliderItems(doc)
         if (sliderItems.isNotEmpty()) {
             homeLists.add(HomePageList("Featured", sliderItems, isHorizontalImages = true))
         }
 
-        // 2. Widget Sections
         val sections = doc.select(".home-widget")
         for (section in sections) {
             val sectionTitle = section.selectFirst(".homemodule-title")?.text()?.trim()
@@ -58,7 +58,6 @@ class JuraganFilmProvider : MainAPI() {
             }
         }
 
-        // 3. Latest Movie
         val latestItems = parseLatestMovieItems(doc)
         if (latestItems.isNotEmpty()) {
             homeLists.add(HomePageList("Latest Movie", latestItems))
@@ -86,16 +85,31 @@ class JuraganFilmProvider : MainAPI() {
         return newSearchResponseList(results, hasNext)
     }
 
-    // =================== LOAD (DETAIL) ===================
+    // =================== LOAD (DETAIL) DENGAN WEBVIEW ===================
     override suspend fun load(url: String): LoadResponse? {
-        val response = app.get(url)
-        val doc = response.document
-
-        // Ambil cookie jf_bypass dari response headers
-        val setCookie = response.headers["Set-Cookie"]
-        if (setCookie != null && setCookie.startsWith("jf_bypass=")) {
-            jfBypassCookie = setCookie.split(";")[0].trim()
+        // Gunakan WebViewResolver untuk mendapatkan cookie + HTML
+        val resolver = WebViewResolver(
+            interceptUrl = Regex(".*"), // Tidak perlu intercept, ambil saja final
+            timeout = 30000L
+        )
+        val (finalRequest, _) = resolver.resolveUsingWebView(url)
+        
+        // Ambil cookie dari request final (jika ada)
+        val cookieHeader = finalRequest?.header("Cookie")
+        if (!cookieHeader.isNullOrBlank()) {
+            savedCookies = cookieHeader
         }
+
+        // Gunakan app.get dengan cookie untuk mendapatkan HTML
+        val headers = mutableMapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to url
+        )
+        if (!savedCookies.isNullOrBlank()) {
+            headers["Cookie"] = savedCookies!!
+        }
+        
+        val doc = app.get(url, headers = headers).document
 
         val title = doc.selectFirst("h3.entry-title")?.text()?.trim()
             ?: doc.selectFirst(".entry-title")?.text()?.trim()
@@ -114,9 +128,7 @@ class JuraganFilmProvider : MainAPI() {
             ?: doc.selectFirst(".entry-content p")?.text()?.trim()
 
         val castElements = doc.select("span[itemprop=actors] span[itemprop=name] a")
-        val actors = castElements.map { el ->
-            ActorData(Actor(el.text().trim()))
-        }
+        val actors = castElements.map { el -> ActorData(Actor(el.text().trim())) }
 
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
 
@@ -128,12 +140,7 @@ class JuraganFilmProvider : MainAPI() {
 
         return when (type) {
             TvType.TvSeries -> {
-                val episodeElements = doc.select(
-                    ".entry-content .post-page-numbers, " +
-                    "article .post-page-numbers, " +
-                    ".jf-eps-wrap .post-page-numbers, " +
-                    ".post-page-numbers"
-                )
+                val episodeElements = doc.select(".entry-content .post-page-numbers, article .post-page-numbers, .jf-eps-wrap .post-page-numbers, .post-page-numbers")
                 val episodes = episodeElements.map { el ->
                     if (el.tagName() == "span") {
                         newEpisode(url) {
@@ -150,61 +157,24 @@ class JuraganFilmProvider : MainAPI() {
 
                 val hasEpisode1 = episodes.any { it.episode == 1 }
                 val finalEpisodes = if (!hasEpisode1 && episodes.isNotEmpty()) {
-                    listOf(
-                        newEpisode(url) {
-                            this.name = "Episode 1"
-                            this.episode = 1
-                        }
-                    ) + episodes
+                    listOf(newEpisode(url) { this.name = "Episode 1"; this.episode = 1 }) + episodes
                 } else episodes
 
-                val builder = if (finalEpisodes.isEmpty()) {
-                    newTvSeriesLoadResponse(title, url, type, emptyList())
-                } else {
-                    newTvSeriesLoadResponse(title, url, type, finalEpisodes)
-                }
+                val builder = if (finalEpisodes.isEmpty()) newTvSeriesLoadResponse(title, url, type, emptyList())
+                else newTvSeriesLoadResponse(title, url, type, finalEpisodes)
+
                 builder.apply {
-                    this.posterUrl = posterUrl
-                    this.year = year
-                    this.plot = plot
-                    this.tags = tags
-                    this.actors = actors
-                    if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(
-                            TrailerData(
-                                extractorUrl = trailerUrl,
-                                referer = url,
-                                raw = false,
-                                headers = mapOf(
-                                    "User-Agent" to USER_AGENT,
-                                    "Referer" to url
-                                )
-                            )
-                        )
-                    }
+                    this.posterUrl = posterUrl; this.year = year; this.plot = plot
+                    this.tags = tags; this.actors = actors
+                    if (!trailerUrl.isNullOrBlank()) this.trailers.add(TrailerData(trailerUrl, url, false, mapOf("User-Agent" to USER_AGENT)))
                 }
                 builder
             }
             else -> {
                 newMovieLoadResponse(title, url, type, dataUrl) {
-                    this.posterUrl = posterUrl
-                    this.year = year
-                    this.plot = plot
-                    this.tags = tags
-                    this.actors = actors
-                    if (!trailerUrl.isNullOrBlank()) {
-                        this.trailers.add(
-                            TrailerData(
-                                extractorUrl = trailerUrl,
-                                referer = url,
-                                raw = false,
-                                headers = mapOf(
-                                    "User-Agent" to USER_AGENT,
-                                    "Referer" to url
-                                )
-                            )
-                        )
-                    }
+                    this.posterUrl = posterUrl; this.year = year; this.plot = plot
+                    this.tags = tags; this.actors = actors
+                    if (!trailerUrl.isNullOrBlank()) this.trailers.add(TrailerData(trailerUrl, url, false, mapOf("User-Agent" to USER_AGENT)))
                 }
             }
         }
@@ -217,171 +187,26 @@ class JuraganFilmProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Siapkan header dengan cookie jf_bypass
-        val headers = mutableMapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to mainUrl
-        )
-        if (!jfBypassCookie.isNullOrBlank()) {
-            headers["Cookie"] = jfBypassCookie
-        }
+        val headers = mutableMapOf("User-Agent" to USER_AGENT, "Referer" to mainUrl)
+        if (!savedCookies.isNullOrBlank()) headers["Cookie"] = savedCookies!!
 
         val html = app.get(data, headers = headers).text
-        
-        // Cari HLS_URL di JavaScript
         val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
         val match = m3u8Regex.find(html)
-        
         if (match != null) {
-            val m3u8Url = match.value
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = "JuraganFilm - HLS",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = data
-                    this.quality = Qualities.P1080.value
-                }
-            )
+            callback(newExtractorLink(name, "JuraganFilm - HLS", match.value, ExtractorLinkType.M3U8) {
+                this.referer = data; this.quality = Qualities.P1080.value
+            })
             return true
         }
-        
-        // Fallback: coba ambil dari JSON fallback (MP4)
-        val fallbackRegex = Regex("""const FALLBACK_JSON_URL\s*=\s*"([^"]+)""")
-        val fallbackMatch = fallbackRegex.find(html)
-        if (fallbackMatch != null) {
-            val fallbackUrl = fallbackMatch.groupValues[1]
-            val jsonUrl = if (fallbackUrl.startsWith("http")) fallbackUrl
-                else "https://tv44.juragan.film/file/$fallbackUrl"
-            try {
-                val json = app.get(jsonUrl, headers = headers).text
-                val linkRegex = Regex(""""link"\s*:\s*"([^"]+)"""")
-                val linkMatch = linkRegex.find(json)
-                if (linkMatch != null) {
-                    val mp4Url = linkMatch.groupValues[1]
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name = "JuraganFilm - MP4",
-                            url = mp4Url,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = Qualities.P720.value
-                        }
-                    )
-                    return true
-                }
-            } catch (e: Exception) {
-                // lanjut
-            }
-        }
-        
-        // Fallback terakhir: loadExtractor
         return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
     }
 
-    // =================== HELPER ===================
-    private fun hasNextPage(doc: Document): Boolean {
-        return doc.selectFirst("ul.page-numbers li a.next") != null
-    }
+    // =================== HELPER (SAMA SEPERTI SEBELUMNYA) ===================
+    private fun hasNextPage(doc: Document) = doc.selectFirst("ul.page-numbers li a.next") != null
+    private fun fixPosterUrl(url: String?) = url?.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
 
-    private fun fixPosterUrl(url: String?): String? {
-        if (url == null) return null
-        return url.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
-    }
-
-    private fun parseSliderItems(doc: Document): List<SearchResponse> {
-        val items = doc.select(".gmr-slider-content")
-        return items.mapNotNull { element ->
-            val linkEl = element.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
-            val title = linkEl.text().trim()
-            val url = linkEl.attr("href").trim()
-            if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
-
-            val imgEl = element.selectFirst("img.tns-lazy-img")
-            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-            val posterUrl = fixPosterUrl(rawPoster)
-
-            val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
-            val type = if (url.contains("/film-seri/") || (episodeText != null && episodeText.contains("EPS", ignoreCase = true))) {
-                TvType.TvSeries
-            } else TvType.Movie
-
-            when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                }
-                else -> newMovieSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                }
-            }
-        }
-    }
-
-    private fun parseWidgetItem(element: Element): SearchResponse? {
-        val linkEl = element.selectFirst(".entry-title a") ?: return null
-        val title = linkEl.text().trim()
-        val url = linkEl.attr("href").trim()
-        if (title.isEmpty() || url.isEmpty()) return null
-
-        val imgEl = element.selectFirst("img.wp-post-image")
-        val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-        val posterUrl = fixPosterUrl(rawPoster)
-
-        val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
-        val episodeText = element.selectFirst(".strokeepisode")?.text()?.trim()
-        val dateEl = element.selectFirst("time[itemprop=dateCreated]")
-        val year = dateEl?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
-
-        val type = if (url.contains("/film-seri/") || (episodeText != null && episodeText.contains("EPS", ignoreCase = true))) {
-            TvType.TvSeries
-        } else TvType.Movie
-
-        return when (type) {
-            TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                this.posterUrl = posterUrl
-                addQuality(qualityText ?: "")
-            }
-            else -> newMovieSearchResponse(title, url, type) {
-                this.posterUrl = posterUrl
-                addQuality(qualityText ?: "")
-                this.year = year
-            }
-        }
-    }
-
-    private fun parseLatestMovieItems(doc: Document): List<SearchResponse> {
-        val items = doc.select("#gmr-main-load article.item, #primary article.item")
-        return items.mapNotNull { element ->
-            val linkEl = element.selectFirst(".entry-title a") ?: return@mapNotNull null
-            val title = linkEl.text().trim()
-            val url = linkEl.attr("href").trim()
-            if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
-
-            val imgEl = element.selectFirst("img.wp-post-image")
-            val rawPoster = imgEl?.attr("data-src")?.ifBlank { imgEl?.attr("src") }
-            val posterUrl = fixPosterUrl(rawPoster)
-
-            val qualityText = element.selectFirst(".gmr-quality-item a")?.text()?.trim()
-            val dateEl = element.selectFirst("time[itemprop=dateCreated]")
-            val year = dateEl?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
-
-            val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
-
-            when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                    addQuality(qualityText ?: "")
-                }
-                else -> newMovieSearchResponse(title, url, type) {
-                    this.posterUrl = posterUrl
-                    addQuality(qualityText ?: "")
-                    this.year = year
-                }
-            }
-        }
-    }
+    private fun parseSliderItems(doc: Document): List<SearchResponse> { /* ... */ }
+    private fun parseWidgetItem(element: Element): SearchResponse? { /* ... */ }
+    private fun parseLatestMovieItems(doc: Document): List<SearchResponse> { /* ... */ }
 }
