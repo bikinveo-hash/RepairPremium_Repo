@@ -1,5 +1,6 @@
 package com.JuraganFilm
 
+import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
@@ -96,10 +97,11 @@ class JuraganFilmProvider : MainAPI() {
         )
         val (finalRequest, _) = resolver.resolveUsingWebView(url)
 
-        // Ambil cookie dari request final (jika ada)
-        val cookieHeader = finalRequest?.header("Cookie")
-        if (!cookieHeader.isNullOrBlank()) {
-            savedCookies = cookieHeader
+        // Ambil cookie dari CookieManager setelah WebView selesai
+        val cookieManager = CookieManager.getInstance()
+        val cookies = cookieManager.getCookie(url)
+        if (!cookies.isNullOrBlank()) {
+            savedCookies = cookies
         }
 
         // Siapkan header dengan cookie yang didapat
