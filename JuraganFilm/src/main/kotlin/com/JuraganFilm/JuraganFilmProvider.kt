@@ -86,58 +86,48 @@ class JuraganFilmProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
-        // Judul (bersih dari h3.entry-title)
         val title = doc.selectFirst("h3.entry-title")?.text()?.trim()
             ?: doc.selectFirst(".entry-title")?.text()?.trim()
             ?: return null
 
-        // Poster HD
         val posterUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")
 
-        // Tahun rilis (dari meta, atau dari span.gmr-movie-genre)
         val year = doc.selectFirst("time[itemprop=dateCreated]")?.attr("datetime")
             ?.substringBefore("-")?.toIntOrNull()
             ?: doc.selectFirst("span.gmr-movie-genre:contains(Year:) a")?.text()?.trim()
                 ?.toIntOrNull()
 
-        // Sinopsis
         val plot = doc.selectFirst(".gmr-moviedata em p")?.text()?.trim()
             ?: doc.selectFirst(".entry-content p")?.text()?.trim()
 
-        // Director (span[itemprop=director] span[itemprop=name] a)
         val directorElements = doc.select("span[itemprop=director] span[itemprop=name] a")
         val directorNames = directorElements.map { it.text().trim() }
 
-        // Cast (span[itemprop=actors] span[itemprop=name] a)
         val castElements = doc.select("span[itemprop=actors] span[itemprop=name] a")
         val actors = castElements.map { el ->
             ActorData(Actor(el.text().trim()))
         }
 
-        // Genre/Tags (span.gmr-movie-genre a[rel=category tag])
         val tags = doc.select("span.gmr-movie-genre a[rel=category tag]").map { it.text().trim() }
 
-        // Trailer (a.gmr-trailer-popup, tidak selalu ada di detail)
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href")
 
-        // Deteksi tipe dari URL
         val type = if (url.contains("/film-seri/")) TvType.TvSeries else TvType.Movie
 
-        // dataUrl untuk loadLinks: URL iframe player
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
         val dataUrl = iframeEl?.attr("src") ?: url
 
         return when (type) {
             TvType.TvSeries -> {
-                // Untuk series, daftar episode bisa diekstrak dari halaman season (jika ada)
                 newTvSeriesLoadResponse(title, url, type, emptyList()) {
                     this.posterUrl = posterUrl
                     this.year = year
                     this.plot = plot
                     this.tags = tags
                     this.actors = actors
+                    // Trailer
                     if (!trailerUrl.isNullOrBlank()) {
-                        addTrailer(trailerUrl, url)
+                        this.trailers.add(TrailerData(trailerUrl, url, false))
                     }
                 }
             }
@@ -148,8 +138,9 @@ class JuraganFilmProvider : MainAPI() {
                     this.plot = plot
                     this.tags = tags
                     this.actors = actors
+                    // Trailer
                     if (!trailerUrl.isNullOrBlank()) {
-                        addTrailer(trailerUrl, url)
+                        this.trailers.add(TrailerData(trailerUrl, url, false))
                     }
                 }
             }
@@ -163,8 +154,6 @@ class JuraganFilmProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data berisi URL iframe (file/?id=...)
-        // Buka halaman iframe, mungkin ada extractor khusus atau langsung loadExtractor
         loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
         return true
     }
