@@ -7,10 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class Adicinemax21Plugin : Plugin() {
     override fun load(context: Context) {
-        // Register Main Provider
+        // Hanya mendaftarkan provider utama
         registerMainAPI(Adicinemax21())
-        
-        // Register Extractors
-        registerExtractorAPI(Majorplay())
     }
 }
