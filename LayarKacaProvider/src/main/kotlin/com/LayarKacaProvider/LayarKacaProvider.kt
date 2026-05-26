@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
+import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
@@ -362,7 +362,6 @@ class LayarKacaProvider : MainAPI() {
         var response = app.get(currentUrl)
         var document = response.document
 
-        // Handle loading redirect
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
             val path = try { URI(currentUrl).path } catch (e: Exception) { "" }
             currentUrl = "https://tv4.nontondrama.my$path"
@@ -380,7 +379,6 @@ class LayarKacaProvider : MainAPI() {
             document = app.get(currentUrl).document
         }
 
-        // Ambil URL dari player list (decrypt RC4)
         val playerLinks = document.select("ul#player-list li a")
             .mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
 
@@ -414,7 +412,6 @@ class LayarKacaProvider : MainAPI() {
             if (decoded.isNotBlank()) rawSources.add(decoded)
         }
 
-        // HANYA PROSES TURBOVIP
         val allSources = rawSources.distinct().map { fixUrl(it) }
         allSources.forEach { url ->
             if (url.contains("playeriframe.sbs/iframe/turbovip/")) {
@@ -423,5 +420,26 @@ class LayarKacaProvider : MainAPI() {
             }
         }
         return true
+    }
+
+    // =====================================================================
+    // VIDEO INTERCEPTOR – Mencegah HTTP 429 saat seek
+    // =====================================================================
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
+        val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        return Interceptor { chain ->
+            val originalRequest = chain.request()
+            val url = originalRequest.url.toString()
+
+            if (url.contains("turbovidhls.com") || url.contains("etvp.cc")) {
+                val newRequest = originalRequest.newBuilder()
+                    .header("User-Agent", mobileUA)
+                    .header("Origin", "https://turbovidhls.com")
+                    .header("Referer", "https://turbovidhls.com/")
+                    .build()
+                return@Interceptor chain.proceed(newRequest)
+            }
+            chain.proceed(originalRequest)
+        }
     }
 }
