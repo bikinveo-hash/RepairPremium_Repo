@@ -239,6 +239,9 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster = document.select("meta[property='og:image']").attr("content").ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
         
+        val ratingText = document.select("span.rating-value").text().ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore = Regex("(\\d\\.\\d)").find(ratingText)?.value
+        
         val year = document.select("span.year").text().toIntOrNull() 
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -321,6 +324,7 @@ class LayarKacaProvider : MainAPI() {
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot
                 this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
@@ -334,6 +338,7 @@ class LayarKacaProvider : MainAPI() {
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot
                 this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags
                 this.actors = actors
                 this.recommendations = recommendations
@@ -373,14 +378,17 @@ class LayarKacaProvider : MainAPI() {
 
         val rawSources = mutableListOf<String>()
 
+        // 1. Tangkap dari player-list (RC4)
         val playerLinks = document.select("ul#player-list li a").mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
         val host = try { URI(currentUrl).host } catch(e: Exception) { "tv4.nontondrama.my" }
         val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
         
         val possibleKeys = listOfNotNull(
             host, baseDomain, 
-            "tv1.lk21official.cc", "tv10.lk21official.cc", "lk21official.cc", "nontondrama.my",
-            "series.lk21.de", "lk21.party", "gudangvape.com"
+            "tv1.lk21official.cc", "tv2.lk21official.cc", "tv3.lk21official.cc", "tv4.lk21official.cc", "tv5.lk21official.cc",
+            "tv6.lk21official.cc", "tv7.lk21official.cc", "tv8.lk21official.cc", "tv9.lk21official.cc", "tv10.lk21official.cc",
+            "lk21official.cc", "tv1.nontondrama.my", "tv2.nontondrama.my", "tv3.nontondrama.my", "tv4.nontondrama.my", "nontondrama.my",
+            "series.lk21.de", "lk21.de", "lk21.party", "gudangvape.com"
         ).distinct()
 
         playerLinks.forEach { encryptedString ->
@@ -399,6 +407,7 @@ class LayarKacaProvider : MainAPI() {
             if (decoded.isNotBlank()) rawSources.add(decoded)
         }
 
+        // 2. Fallback: WebViewResolver
         if (rawSources.isEmpty()) {
             try {
                 val interceptorRegex = Regex("(?i)playeriframe\\.sbs/iframe")
@@ -414,30 +423,23 @@ class LayarKacaProvider : MainAPI() {
 
         allSources.forEach { url ->
             when {
+                // HANYA TurboVIP
                 url.contains("playeriframe.sbs/iframe/turbovip/") -> {
                     val id = url.substringAfter("turbovip/").substringBefore("/")
                     Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)?.forEach { callback.invoke(it) }
                 }
-                
-                url.contains("playeriframe.sbs/iframe/hydrax/") -> {
-                    val id = url.substringAfter("hydrax/").substringBefore("/")
-                    tryHydraxExtract(url, currentUrl, callback)
-                }
-                
+                // Fallback untuk URL lain
                 else -> {
                     try {
                         val res = app.get(url, referer = currentUrl)
                         val scriptHtml = res.document.html().replace("\\/", "/")
-                        var linkFound = false
-                        
-                        // Coba cari direct m3u8 atau mp4
                         Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                             val streamUrl = match.value
                             val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
                             callback.invoke(
                                 newExtractorLink(
-                                    source = "LK21 Server Cadangan",
-                                    name = "Server Cadangan",
+                                    source = "LK21 Direct",
+                                    name = "LK21 Direct",
                                     url = streamUrl,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
@@ -445,49 +447,11 @@ class LayarKacaProvider : MainAPI() {
                                     this.quality = Qualities.Unknown.value
                                 }
                             )
-                            linkFound = true
-                        }
-                        
-                        // FALLBACK: Periksa iframe tersembunyi (Double Iframe) 
-                        if (!linkFound) {
-                            res.document.select("iframe").mapNotNull { it.attr("src") }.forEach { innerIframe ->
-                                if (innerIframe.isNotBlank()) {
-                                    val fixedInner = fixUrl(innerIframe)
-                                    if (fixedInner.contains("m3u8", ignoreCase = true) || fixedInner.contains("hydrax", ignoreCase = true)) {
-                                         tryHydraxExtract(fixedInner, url, callback)
-                                    }
-                                }
-                            }
                         }
                     } catch (e: Exception) {}
                 }
             }
         }
         return true
-    }
-
-    private suspend fun tryHydraxExtract(
-        iframeUrl: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val html = app.get(iframeUrl, referer = referer).text
-            val m3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""")
-                .findAll(html.replace("\\/", "/"))
-                .firstOrNull()?.value ?: return
-
-            callback.invoke(
-                newExtractorLink(
-                    source = "LK21 Hydrax",
-                    name = "Hydrax HD",
-                    url = m3u8,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = iframeUrl
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-        } catch (e: Exception) {}
     }
 }
