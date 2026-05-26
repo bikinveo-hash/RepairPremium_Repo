@@ -421,20 +421,23 @@ class LayarKacaProvider : MainAPI() {
                 
                 url.contains("playeriframe.sbs/iframe/hydrax/") -> {
                     val id = url.substringAfter("hydrax/").substringBefore("/")
-                    tryHydraxExtract(id, url, currentUrl, callback)
+                    tryHydraxExtract(url, currentUrl, callback)
                 }
                 
                 else -> {
                     try {
                         val res = app.get(url, referer = currentUrl)
                         val scriptHtml = res.document.html().replace("\\/", "/")
+                        var linkFound = false
+                        
+                        // Coba cari direct m3u8 atau mp4
                         Regex("(?i)https?://[^\"]+\\.(m3u8|mp4)(?:\\?[^\"']*)?").findAll(scriptHtml).forEach { match ->
                             val streamUrl = match.value
                             val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true)
                             callback.invoke(
                                 newExtractorLink(
-                                    source = "LK21 Direct",
-                                    name = "LK21 Direct",
+                                    source = "LK21 Server Cadangan",
+                                    name = "Server Cadangan",
                                     url = streamUrl,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
@@ -442,6 +445,19 @@ class LayarKacaProvider : MainAPI() {
                                     this.quality = Qualities.Unknown.value
                                 }
                             )
+                            linkFound = true
+                        }
+                        
+                        // FALLBACK: Periksa iframe tersembunyi (Double Iframe) 
+                        if (!linkFound) {
+                            res.document.select("iframe").mapNotNull { it.attr("src") }.forEach { innerIframe ->
+                                if (innerIframe.isNotBlank()) {
+                                    val fixedInner = fixUrl(innerIframe)
+                                    if (fixedInner.contains("m3u8", ignoreCase = true) || fixedInner.contains("hydrax", ignoreCase = true)) {
+                                         tryHydraxExtract(fixedInner, url, callback)
+                                    }
+                                }
+                            }
                         }
                     } catch (e: Exception) {}
                 }
@@ -451,7 +467,6 @@ class LayarKacaProvider : MainAPI() {
     }
 
     private suspend fun tryHydraxExtract(
-        id: String,
         iframeUrl: String,
         referer: String,
         callback: (ExtractorLink) -> Unit
