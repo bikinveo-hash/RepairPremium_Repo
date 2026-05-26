@@ -18,7 +18,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            // Ekstrak ID dari URL: https://turbovidhls.com/t/6a10996443060
+            // Ekstrak ID dari URL
             val id = url.substringAfter("/t/").substringBefore("?")
             if (id.isEmpty()) return null
 
@@ -27,39 +27,79 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 "Referer" to "https://playeriframe.sbs/"
             )
 
-            val response = app.get("$mainUrl/t/$id", headers = headers)
-            val html = response.text
+            val html = app.get("$mainUrl/t/$id", headers = headers).text
 
-            // Ekstraksi URL M3U8 dari data-hash atau urlPlay
-            var m3u8Url = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
-            if (m3u8Url.isNullOrBlank()) {
-                m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
+            // Ekstraksi URL Master M3U8
+            var masterUrl = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
+            if (masterUrl.isNullOrBlank()) {
+                masterUrl = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
+            if (masterUrl.isNullOrBlank()) return null
 
-            if (m3u8Url.isNullOrBlank()) {
-                println("Lk21TurboExtractor: Gagal mengekstrak URL M3U8")
-                return null
-            }
+            // Fetch dan parse master playlist
+            val masterContent = app.get(masterUrl, headers = mapOf(
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )).text
 
-            sources.add(
-                newExtractorLink(
-                    source = "LK21 TurboVIP",
-                    name = "TurboVIP HD",
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
+            val qualityMap = mapOf(
+                "1920x1080" to Qualities.P1080.value,
+                "1280x720"  to Qualities.P720.value,
+                "854x480"   to Qualities.P480.value,
+                "640x360"   to Qualities.P360.value
+            )
+
+            // Parse setiap baris STREAM-INF
+            val lines = masterContent.lines()
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
+
+                val subUrl = lines.getOrNull(i + 1)?.trim() ?: continue
+                if (!subUrl.startsWith("http")) continue
+
+                // CEK CDN sebelum di-return (Lewati CDN mati)
+                val cdnHost = try { java.net.URI(subUrl).host } catch (e: Exception) { continue }
+                val deadCdns = listOf("exznews.com", "cdn64.", "cdn32.")
+                if (deadCdns.any { cdnHost.contains(it) }) {
+                    println("TurboVIP: skip dead CDN $cdnHost")
+                    continue
+                }
+
+                // Cek apakah CDN bisa diakses (Mencegah Error 2001 di player)
+                val check = try {
+                    app.head(subUrl, headers = mapOf(
                         "Origin" to mainUrl,
                         "Referer" to "$mainUrl/"
-                    )
-                }
-            )
+                    ), timeout = 5L)
+                } catch (e: Exception) { continue }
+
+                if (!check.isSuccessful) continue
+
+                val quality = qualityMap.entries
+                    .firstOrNull { line.contains(it.key) }?.value
+                    ?: Qualities.Unknown.value
+
+                sources.add(
+                    newExtractorLink(
+                        source = name,
+                        name = "TurboVIP ${Qualities.getStringByInt(quality)}",
+                        url = subUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = quality
+                        this.headers = mapOf(
+                            "Origin" to mainUrl,
+                            "Referer" to "$mainUrl/"
+                        )
+                    }
+                )
+            }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
         }
-        return sources
+        return sources.ifEmpty { null }
     }
 }
