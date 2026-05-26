@@ -18,7 +18,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            // Ekstrak ID dari URL
             val id = url.substringAfter("/t/").substringBefore("?")
             if (id.isEmpty()) return null
 
@@ -29,14 +28,12 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             val html = app.get("$mainUrl/t/$id", headers = headers).text
 
-            // Ekstraksi URL Master M3U8
             var masterUrl = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
             if (masterUrl.isNullOrBlank()) {
                 masterUrl = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
             if (masterUrl.isNullOrBlank()) return null
 
-            // Fetch dan parse master playlist
             val masterContent = app.get(masterUrl, headers = mapOf(
                 "Origin" to mainUrl,
                 "Referer" to "$mainUrl/"
@@ -49,7 +46,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 "640x360"   to Qualities.P360.value
             )
 
-            // Parse setiap baris STREAM-INF
             val lines = masterContent.lines()
             for (i in lines.indices) {
                 val line = lines[i]
@@ -60,9 +56,8 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
                 // CEK CDN sebelum di-return (Lewati CDN mati)
                 val cdnHost = try { java.net.URI(subUrl).host } catch (e: Exception) { continue }
-                val deadCdns = listOf("exznews.com", "cdn64.", "cdn32.")
+                val deadCdns = listOf("exznews.com", "cdn64.", "cdn32.", "saznever.com") // Penambahan saznever.com
                 if (deadCdns.any { cdnHost.contains(it) }) {
-                    println("TurboVIP: skip dead CDN $cdnHost")
                     continue
                 }
 
@@ -89,16 +84,17 @@ open class Lk21TurboExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = quality
+                        // SUNTIKKAN USER-AGENT UNTUK MENCEGAH ERROR 429
                         this.headers = mapOf(
                             "Origin" to mainUrl,
-                            "Referer" to "$mainUrl/"
+                            "Referer" to "$mainUrl/",
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                         )
                     }
                 )
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            e.printStackTrace()
         }
         return sources.ifEmpty { null }
     }
