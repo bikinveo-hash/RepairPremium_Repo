@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
 
 // ============================================================================
 // HANYA TURBOVIP EXTRACTOR (LK21)
@@ -29,7 +28,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             val html = app.get("$mainUrl/t/$id", headers = headers).text
 
-            // Dapatkan Master URL M3U8
             var masterUrl = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
             if (masterUrl.isNullOrBlank()) {
                 masterUrl = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
@@ -37,33 +35,48 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             if (masterUrl.isNullOrBlank()) return null
 
-            // CARA OTOMATIS: 
-            // Biarkan `M3u8Helper` bawaan Cloudstream yang mendeteksi dan mengurai semua kualitas secara akurat
-            M3u8Helper.generateM3u8(
-                name,
-                masterUrl,
-                "$mainUrl/",
-                headers = mapOf(
-                    "Origin" to mainUrl,
-                    "Referer" to "$mainUrl/",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                )
-            ).forEach { link ->
-                sources.add(link)
-            }
-            
-            // FALLBACK OTOMATIS: 
-            // Jika Helper kosong, lempar satu link master mentah dan biarkan ExoPlayer memutar secara Adaptive (Auto)
-            if (sources.isEmpty()) {
+            // WAJIB fetch M3U8 manual untuk membuang CDN yang mati (Menghindari Player Crash)
+            val masterContent = app.get(masterUrl, headers = mapOf(
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            )).text
+
+            val qualityMap = mapOf(
+                "1920x1080" to Qualities.P1080.value,
+                "1280x720"  to Qualities.P720.value,
+                "854x480"   to Qualities.P480.value,
+                "640x360"   to Qualities.P360.value
+            )
+
+            val lines = masterContent.lines()
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
+
+                val subUrl = lines.getOrNull(i + 1)?.trim() ?: continue
+                if (!subUrl.startsWith("http")) continue
+
+                // FILTER WAJIB: Membuang domain mati agar ExoPlayer tidak Error
+                val cdnHost = try { java.net.URI(subUrl).host } catch (e: Exception) { continue }
+                val deadCdns = listOf("exznews.com", "cdn64.", "cdn32.", "saznever.com")
+                if (deadCdns.any { cdnHost.contains(it) }) {
+                    continue
+                }
+
+                val quality = qualityMap.entries
+                    .firstOrNull { line.contains(it.key) }?.value
+                    ?: Qualities.Unknown.value
+
                 sources.add(
                     newExtractorLink(
                         source = name,
-                        name = "TurboVIP HD",
-                        url = masterUrl,
+                        name = "TurboVIP ${Qualities.getStringByInt(quality)}",
+                        url = subUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
+                        this.quality = quality
+                        // SUNTIKAN USER-AGENT ANTI ERROR 2004 / 429
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -72,7 +85,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
                     }
                 )
             }
-            
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
