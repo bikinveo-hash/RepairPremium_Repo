@@ -35,7 +35,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             if (masterUrl.isNullOrBlank()) return null
 
-            // WAJIB fetch M3U8 manual untuk membuang CDN yang mati (Menghindari Player Crash)
             val masterContent = app.get(masterUrl, headers = mapOf(
                 "Origin" to mainUrl,
                 "Referer" to "$mainUrl/"
@@ -56,7 +55,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 val subUrl = lines.getOrNull(i + 1)?.trim() ?: continue
                 if (!subUrl.startsWith("http")) continue
 
-                // FILTER WAJIB: Membuang domain mati agar ExoPlayer tidak Error
+                // FILTER WAJIB: Membuang domain mati
                 val cdnHost = try { java.net.URI(subUrl).host } catch (e: Exception) { continue }
                 val deadCdns = listOf("exznews.com", "cdn64.", "cdn32.", "saznever.com")
                 if (deadCdns.any { cdnHost.contains(it) }) {
@@ -67,23 +66,41 @@ open class Lk21TurboExtractor : ExtractorApi() {
                     .firstOrNull { line.contains(it.key) }?.value
                     ?: Qualities.Unknown.value
 
-                sources.add(
-                    newExtractorLink(
-                        source = name,
-                        name = "TurboVIP ${Qualities.getStringByInt(quality)}",
-                        url = subUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = quality
-                        // SUNTIKAN USER-AGENT ANTI ERROR 2004 / 429
-                        this.headers = mapOf(
-                            "Origin" to mainUrl,
-                            "Referer" to "$mainUrl/",
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                        )
-                    }
-                )
+                // --- MANIPULASI M3U8 (BYPASS CLEARTEXT HTTP) ---
+                try {
+                    // 1. Unduh isi sub-playlist yang asli
+                    val subContent = app.get(subUrl, headers = mapOf(
+                        "Origin" to mainUrl,
+                        "Referer" to "$mainUrl/",
+                        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                    )).text
+
+                    // 2. Ganti semua protokol http:// menjadi https:// secara paksa
+                    val fixedSubContent = subContent.replace("http://", "https://")
+                    
+                    // 3. Konversi ke Base64 agar ExoPlayer bisa membacanya sebagai memori internal (Data URI)
+                    val base64M3u8 = android.util.Base64.encodeToString(fixedSubContent.toByteArray(), android.util.Base64.NO_WRAP)
+                    val dataUri = "data:application/vnd.apple.mpegurl;base64,$base64M3u8"
+
+                    sources.add(
+                        newExtractorLink(
+                            source = name,
+                            name = "TurboVIP ${Qualities.getStringByInt(quality)}",
+                            url = dataUri, // Berikan Data URI ke Player
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.quality = quality
+                            this.headers = mapOf(
+                                "Origin" to mainUrl,
+                                "Referer" to "$mainUrl/",
+                                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                            )
+                        }
+                    )
+                } catch (e: Exception) {
+                    // Lanjut ke resolusi berikutnya jika gagal
+                }
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
