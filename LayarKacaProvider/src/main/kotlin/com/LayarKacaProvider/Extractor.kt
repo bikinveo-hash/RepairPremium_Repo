@@ -33,12 +33,16 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             if (m3u8Url.isNullOrBlank()) return null
 
+            // Deteksi tipe dari ekstensi URL
+            val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
+            val type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+
             sources.add(
                 newExtractorLink(
                     source = "LK21 TurboVIP",
                     name = "TurboVIP HD",
                     url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
+                    type = type
                 ) {
                     this.referer = "$mainUrl/"
                     this.quality = Qualities.Unknown.value
