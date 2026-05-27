@@ -13,146 +13,138 @@ class KlikXXI : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movie/page/" to "Latest Movies",
-        "$mainUrl/tv/page/" to "TV Series"
+        "$mainUrl/?s=&search=advanced&post_type=movie&index=&orderby=&genre=&movieyear=&country=&quality=" to "Latest Movies",
+        "$mainUrl/tv" to "TV Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data + page).document
-        val home = document.select("div.gmr-item-modulepost").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, home)
+        val url = if (request.data.contains("?")) {
+            if (page <= 1) request.data else request.data.replace("/?", "/page/$page/?")
+        } else {
+            if (page <= 1) request.data else "${request.data.removeSuffix("/")}/page/$page/"
+        }
+
+        val document = app.get(url).document
+        val items = document.select("article.item, article.item-infinite, div.gmr-item-modulepost")
+            .mapNotNull { it.toSearchResult() }
+        
+        return newHomePageResponse(request.name, items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        return document.select("article.item, article.item-infinite").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        val rawTitle = document.selectFirst("h1.entry-title")?.text() ?: ""
-        val title = rawTitle.replace(Regex("(?i)\\s*(Season\\s*\\d+.*|[0-9]{4})$"), "").trim()
-        val poster = document.selectFirst(".gmr-movie-data figure img")?.let { 
-            it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
-        }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
-        val plot = document.selectFirst(".entry-content[itemprop=description] p")?.text()
-        val dataId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id") ?: ""
+        val title = document.selectFirst("h1.entry-title")?.text()?.replace("Streaming Film", "")?.trim() ?: ""
         
-        val isTvSeries = url.contains("/tv/") || url.contains("/eps/")
+        // Perbaikan Selector Detail Poster & Maksimalkan Kualitas Gambar ke HQ
+        val posterHtml = document.selectFirst(".gmr-movie-data img, .content-thumbnail img, figure img")?.let { 
+            it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
+        }
+        val poster = fixUrlNull(posterHtml)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
 
-        return if (isTvSeries) {
-            val episodes = document.select(".gmr-season-episodes a.button").mapNotNull { epNode ->
-                val epUrl = epNode.attr("href")
-                val epTitle = epNode.text()
-                if (epTitle.contains("Batch", true)) return@mapNotNull null
-       
-                val match = Regex("S(\\d+)Eps(\\d+)").find(epTitle)
-                newEpisode(epUrl) {
-                    this.name = epTitle
-                    this.season = match?.groupValues?.get(1)?.toIntOrNull()
-                    this.episode = match?.groupValues?.get(2)?.toIntOrNull()
+        val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
+        val year = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
+        val description = document.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
+        val ratingValue = document.selectFirst(".gmr-rating-item")?.text()?.trim()?.toDoubleOrNull()
+
+        val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
+        
+        return if (episodeElements.isNotEmpty()) {
+            val episodes = episodeElements.mapNotNull {
+                val epHref = it.attr("href")
+                val epName = it.text()
+                if (epName.contains("Batch", true)) return@mapNotNull null
+                
+                val sMatch = Regex("""S(\d+)""").find(epName)
+                val eMatch = Regex("""Eps(\d+)""").find(epName)
+                
+                newEpisode(epHref) {
+                    this.name = epName
+                    this.season = sMatch?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = eMatch?.groupValues?.get(1)?.toIntOrNull()
                 }
-            }
+            }.reversed()
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.plot = plot
+                this.year = year
+                this.plot = description
+                this.tags = tags
+                this.score = Score.from10(ratingValue)
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, dataId) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
-                this.plot = plot
+                this.year = year
+                this.plot = description
+                this.tags = tags
+                this.score = Score.from10(ratingValue)
             }
-        }
-    }
-
-    // Helper Engine untuk membongkar enkripsi Javascript Packer secara instan & hemat RAM
-    private fun unpackDeanEdwards(packedScript: String): String {
-        return try {
-            val payload = packedScript.substringAfter("}('").substringBefore("',")
-            val remaining = packedScript.substringAfter("',")
-            val base = remaining.substringBefore(",").trim().toIntOrNull() ?: 36
-            val wordsStr = remaining.substringAfter("'").substringBefore("'.split")
-            val words = wordsStr.split("|")
-
-            val wordRegex = Regex("""\b[0-9a-zA-Z]+\b""")
-            wordRegex.replace(payload) { matchResult ->
-                val wordCode = matchResult.value
-                val index = wordCode.toIntOrNull(base) ?: return@replace wordCode
-                if (index < words.size && words[index].isNotEmpty()) words[index] else wordCode
-            }
-        } catch (e: Exception) {
-            ""
         }
     }
 
     override suspend fun loadLinks(
         data: String,
-        isCasting: Boolean,
+        isDataJob: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 1. Ambil ID unik konten film/episode
-        val ajaxId = if (data.startsWith("http")) {
-            app.get(data).document.selectFirst("#muvipro_player_content_id")?.attr("data-id") ?: return false
-        } else data
+        val document = app.get(data).document
+        val ajaxId = document.selectFirst(".gmr-server-wrap, #muvipro_player_content_id")?.attr("data-id") ?: return false
 
-        // 2. Ambil Iframe Gateway dari WordPress AJAX KlikXXI
-        val ajaxResponse = app.post(
-            url = "$mainUrl/wp-admin/admin-ajax.php",
-            data = mapOf("action" to "muvipro_player_content", "tab" to "p1", "post_id" to ajaxId)
-        ).text
-        
-        // 3. Cari URL src dari hgcloud.to
-        val hgCloudUrl = Regex("""src=["'](https://hgcloud\.to/e/[a-zA-Z0-9]+)["']""").find(ajaxResponse)?.groupValues?.get(1) ?: return false
-        
-        // 4. Lompati gerbang redirect hgcloud dan langsung konversi ke domain tujuan (masukestin.com)
-        val fileId = hgCloudUrl.substringAfter("/e/")
-        val playerPageUrl = "https://masukestin.com/e/$fileId"
+        val servers = document.select("ul.muvipro-player-tabs li a, .gmr-player-nav li a").mapNotNull {
+            val href = it.attr("href")
+            if (href.startsWith("#p")) href.replace("#p", "") else null
+        }
 
-        // 5. Load halaman JWPlayer dari masukestin.com dengan menyertakan Referer hgcloud agar tidak diblokir
-        val playerPageHtml = app.get(
-            url = playerPageUrl,
-            headers = mapOf("Referer" to "https://hgcloud.to/")
-        ).text
+        servers.distinct().forEach { serverNum ->
+            val response = app.post(
+                url = "$mainUrl/wp-admin/admin-ajax.php",
+                data = mapOf(
+                    "action" to "muvipro_player_content",
+                    "tab" to serverNum,
+                    "post_id" to ajaxId
+                ),
+                referer = data,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+            ).text
 
-        // 6. Tangkap baris kode yang berisi enkripsi Packer eval()
-        val packedScript = playerPageHtml.lineSequence()
-            .firstOrNull { it.contains("eval(function(p,a,c,k,e,d)") } ?: return false
+            val iframeUrl = Regex("""src='([^"']+)""").find(response)?.groupValues?.get(1)
+                ?: Regex("""src="([^"']+)""").find(response)?.groupValues?.get(1)
 
-        // 7. Bongkar skrip enkripsi secara native menggunakan engine helper kita
-        val unpackedJs = unpackDeanEdwards(packedScript)
-
-        // 8. Ekstrak link master.m3u8 langsung dari hasil bongkaran skrip tersebut
-        val masterM3u8 = Regex("""["'](https?://[^"']+\.m3u8)["']""").find(unpackedJs)?.groupValues?.get(1) ?: return false
-
-        // 9. Kirim data link stream dengan struktur inisialisasi lambda block yang benar sesuai core rule
-        callback.invoke(
-            newExtractorLink(
-                source = this.name,
-                name = "Server HGCloud (HLS Multi-Quality)",
-                url = masterM3u8,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = playerPageUrl
-                this.quality = Qualities.P720.value
+            iframeUrl?.let { url ->
+                val finalUrl = if (url.startsWith("//")) "https:$url" else url
+                loadExtractor(finalUrl, data, subtitleCallback, callback)
             }
-        )
-
+        }
         return true
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".entry-title a")?.text() ?: return null
-        val href = this.selectFirst(".entry-title a")?.attr("href") ?: return null
-        val posterUrl = this.selectFirst("img")?.let { 
+        val titleLink = this.selectFirst(".entry-title a") ?: return null
+        val title = titleLink.text()
+        val href = titleLink.attr("href")
+        
+        // Perbaikan: Melakukan fiksasi link poster di pencarian/halaman utama agar protokolnya (https:) lengkap
+        val posterRaw = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
-        }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
+        }
+        val posterUrl = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
         
         val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
+        
         return if (isTvSeries) {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) { this.posterUrl = posterUrl }
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+            }
         } else {
-            newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = posterUrl }
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 }
