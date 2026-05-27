@@ -37,37 +37,34 @@ class KlikXXI : MainAPI() {
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         val year = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
         val description = document.selectFirst(".entry-content-single p")?.text()
-        val rating = document.selectFirst(".gmr-meta-rating span")?.text()?.toRatingInt()
+        
+        // Perbaikan: Ambil rating sebagai Double untuk Score API
+        val ratingValue = document.selectFirst(".gmr-rating-item")?.text()?.trim()?.toDoubleOrNull()
 
-        // Cek apakah ini TV Series atau Movie
         return if (document.selectFirst(".gmr-listseries") != null) {
             val episodes = document.select(".gmr-season-episodes a.button-shadow").mapNotNull {
                 val epHref = it.attr("href")
                 val epName = it.text()
                 
-                // Filter link batch download
                 if (epName.contains("Batch", true)) return@mapNotNull null
                 
-                // Ekstrak season dan episode dari teks (Contoh: S1Eps1)
                 val sMatch = Regex("""S(\d+)""").find(epName)
                 val eMatch = Regex("""Eps(\d+)""").find(epName)
                 
-                val seasonNum = sMatch?.groupValues?.get(1)?.toIntOrNull()
-                val episodeNum = eMatch?.groupValues?.get(1)?.toIntOrNull()
-
                 newEpisode(epHref) {
                     this.name = epName
-                    this.season = seasonNum
-                    this.episode = episodeNum
+                    this.season = sMatch?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = eMatch?.groupValues?.get(1)?.toIntOrNull()
                 }
-            }.reversed() // Dibalik agar urutan dari Ep 1
+            }.reversed()
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
                 this.tags = tags
-                addScore(rating)
+                // Perbaikan: Gunakan properti score dengan Score.from10
+                this.score = Score.from10(ratingValue)
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -75,7 +72,8 @@ class KlikXXI : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = tags
-                addScore(rating)
+                // Perbaikan: Gunakan properti score dengan Score.from10
+                this.score = Score.from10(ratingValue)
             }
         }
     }
@@ -86,13 +84,8 @@ class KlikXXI : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data di sini adalah URL (baik URL Movie atau URL Episode)
         val document = app.get(data).document
-        
-        // Ambil AJAX ID dari halaman
         val ajaxId = document.selectFirst(".gmr-server-wrap")?.attr("data-id") ?: return false
-
-        // Ambil semua server yang tersedia
         val servers = document.select("ul.muvipro-player-tabs li a").mapNotNull {
             val id = it.attr("href").replace("#", "")
             if (id.startsWith("p")) id else null
@@ -111,7 +104,6 @@ class KlikXXI : MainAPI() {
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
-            // Cari URL di dalam iframe atau teks respon
             val iframeUrl = Regex("""src='([^"']+)""").find(response)?.groupValues?.get(1)
                 ?: Regex("""src="([^"']+)""").find(response)?.groupValues?.get(1)
 
@@ -120,7 +112,6 @@ class KlikXXI : MainAPI() {
                 loadExtractor(finalUrl, data, subtitleCallback, callback)
             }
         }
-
         return true
     }
 
@@ -131,7 +122,6 @@ class KlikXXI : MainAPI() {
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
         
-        // Deteksi tipe berdasarkan badge episode atau URL
         val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
         
         return if (isTvSeries) {
