@@ -87,7 +87,7 @@ class KlikXXI : MainAPI() {
         }
     }
 
-    // Helper Engine Unpacker JS (Dean Edwards) ditaruh internal agar rapi
+    // Engine Internal Helper Unpacker JS (Dean Edwards)
     private fun unpackDeanEdwards(packedScript: String): String {
         return try {
             val payload = packedScript.substringAfter("}('").substringBefore("',")
@@ -126,20 +126,21 @@ class KlikXXI : MainAPI() {
                 url = "$mainUrl/wp-admin/admin-ajax.php",
                 data = mapOf(
                     "action" to "muvipro_player_content",
-                    "tab" to serverNum,
+                    "tab" to "p$serverNum",
                     "post_id" to ajaxId
                 ),
                 referer = data,
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
-            val iframeUrl = Regex("""src='([^"']+)""").find(response)?.groupValues?.get(1)
-                ?: Regex("""src="([^"']+)""").find(response)?.groupValues?.get(1)
+            // Ditambahkan (?i) agar Regex kebal huruf besar/kecil dari tag <IFRAME SRC= di server KlikXXI
+            val iframeUrl = Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
+                ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
 
             iframeUrl?.let { url ->
                 val finalUrl = if (url.startsWith("//")) "https:$url" else url
                 
-                // Intercept Server Pertama (hgcloud.to) dengan Native Unpacker kita agar cepat & tanpa WebView
+                // Mengamankan bypass native server pertama (hgcloud) tanpa menyentuh sisa server lainnya
                 if (finalUrl.contains("hgcloud.to")) {
                     try {
                         val fileId = finalUrl.substringAfter("/e/")
@@ -154,14 +155,24 @@ class KlikXXI : MainAPI() {
 
                         if (packedScript != null) {
                             val unpackedJs = unpackDeanEdwards(packedScript)
-                            val masterM3u8 = Regex("""["'](https?://[^"']+\.m3u8)["']""").find(unpackedJs)?.groupValues?.get(1)
                             
-                            if (masterM3u8 != null) {
+                            // Regex Fleksibel yang terbukti sukses ditarik di Termux lu
+                            val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
+                            
+                            if (masterM3u8Match != null) {
+                                // Rekonstruksi jika response mengembalikan path relatif (/stream/...)
+                                val finalStreamUrl = if (masterM3u8Match.startsWith("/")) {
+                                    "https://masukestin.com$masterM3u8Match"
+                                } else {
+                                    masterM3u8Match
+                                }
+
+                                // Penerapan inisialisasi properti baru di dalam block lambda (Fix Build Error)
                                 callback.invoke(
                                     newExtractorLink(
                                         source = this.name,
                                         name = "Server HGCloud (HLS Multi-Quality)",
-                                        url = masterM3u8,
+                                        url = finalStreamUrl,
                                         type = ExtractorLinkType.M3U8
                                     ) {
                                         this.referer = playerPageUrl
@@ -171,11 +182,11 @@ class KlikXXI : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        // Jika native-unpacker gagal/error, fallback otomatis ke extractor bawaan core
+                        // Fallback otomatis jika terjadi kendala jaringan saat dekripsi native
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
                 } else {
-                    // Sisa server ke-2 sampai ke-7 diproses otomatis oleh extractor bawaan core
+                    // Sisa server ke-2 sampai ke-7 diproses otomatis ke pemanggil core extractor
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
