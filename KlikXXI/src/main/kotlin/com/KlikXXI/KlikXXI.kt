@@ -12,14 +12,12 @@ class KlikXXI : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Perbaikan URL Paginasi
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Latest Movies",
         "$mainUrl/tv/" to "TV Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Logika paginasi WordPress yang benar
         val url = if (page == 1) {
             request.data 
         } else {
@@ -45,24 +43,33 @@ class KlikXXI : MainAPI() {
         }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
         val plot = document.selectFirst(".entry-content[itemprop=description] p")?.text()
         
-        // Cerdas: Mengambil data-id dan melemparnya sebagai "dataUrl" untuk ditangkap di loadLinks
         val dataId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id") ?: ""
         
         val isTvSeries = url.contains("/tv/") || url.contains("/eps/")
 
         return if (isTvSeries) {
-            val episodes = document.select(".gmr-season-episodes a.button").mapNotNull { epNode ->
-                val epUrl = epNode.attr("href")
-                val epTitle = epNode.text()
-                if (epTitle.contains("Batch", true)) return@mapNotNull null
-       
-                val match = Regex("S(\\d+)Eps(\\d+)").find(epTitle)
-                newEpisode(epUrl) {
-                    this.name = epTitle
-                    this.season = match?.groupValues?.get(1)?.toIntOrNull()
-                    this.episode = match?.groupValues?.get(2)?.toIntOrNull()
+            val episodes = mutableListOf<Episode>()
+            document.select(".gmr-season-block").forEach { block ->
+                val seasonName = block.selectFirst(".season-title")?.text() ?: ""
+                val seasonNum = Regex("\\d+").find(seasonName)?.value?.toIntOrNull()
+                
+                block.select(".gmr-season-episodes a").forEach { epNode ->
+                    val epUrl = epNode.attr("href")
+                    val epTitle = epNode.text()
+                    
+                    if (!epTitle.contains("Batch", true) && epUrl.contains("/eps/")) {
+                        val epNum = Regex("(?i)(?:Eps|Episode)\\s*(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: Regex("\\d+").findAll(epTitle).lastOrNull()?.value?.toIntOrNull()
+                        
+                        episodes.add(newEpisode(epUrl) {
+                            this.name = epTitle
+                            this.season = seasonNum
+                            this.episode = epNum
+                        })
+                    }
                 }
             }
+            
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
@@ -81,20 +88,29 @@ class KlikXXI : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Ambil ID untuk request AJAX
+        // Ambil ID dari URL episode jika perlu
         val ajaxId = if (data.startsWith("http")) {
             app.get(data).document.selectFirst("#muvipro_player_content_id")?.attr("data-id") ?: return false
         } else data
 
-        // Request ke AJAX endpoint
         val ajaxResponse = app.post(
             url = "$mainUrl/wp-admin/admin-ajax.php",
-            data = mapOf("action" to "muvipro_player_content", "post_id" to ajaxId)
+            data = mapOf("action" to "muvipro_player_content", "post_id" to ajaxId),
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Content-Type" to "application/x-www-form-urlencoded"
+            )
         ).text
         
-        // Di sini lu perlu parse iframe dari ajaxResponse, 
-        // lalu panggil loadExtractor untuk setiap link yang ketemu.
-        // Contoh: callback.invoke(newExtractorLink(...))
+        // Cari semua link iframe yang ada di respon AJAX
+        val iframes = Regex("(?i)src=\"(.*?)\"").findAll(ajaxResponse).map { it.groupValues[1] }.toList()
+        
+        iframes.forEach { link ->
+            val fixedLink = fixUrlNull(link) ?: return@forEach
+            if (!fixedLink.contains("youtube", true)) {
+                loadExtractor(fixedLink, data, subtitleCallback, callback)
+            }
+        }
         return true
     }
 
@@ -117,4 +133,4 @@ class KlikXXI : MainAPI() {
             }
         }
     }
-} // HANYA ADA SATU KURUNG KURAWAL PENUTUP KELAS DI SINI
+}
