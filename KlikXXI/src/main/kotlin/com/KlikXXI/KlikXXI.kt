@@ -133,13 +133,14 @@ class KlikXXI : MainAPI() {
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
+            // Ditambahkan (?i) agar Regex kebal huruf besar/kecil dari tag <IFRAME SRC= di server KlikXXI
             val iframeUrl = Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
                 ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
 
             iframeUrl?.let { url ->
                 val finalUrl = if (url.startsWith("//")) "https:$url" else url
                 
-                // Ekstraksi Terarah secara Native untuk Server Pertama (hgcloud)
+                // Mengamankan bypass native server pertama (hgcloud) tanpa menyentuh sisa server lainnya
                 if (finalUrl.contains("hgcloud.to")) {
                     try {
                         val fileId = finalUrl.substringAfter("/e/")
@@ -155,49 +156,37 @@ class KlikXXI : MainAPI() {
                         if (packedScript != null) {
                             val unpackedJs = unpackDeanEdwards(packedScript)
                             
-                            // Ambil semua manifest berkualitas tinggi & cerminannya yang disembunyikan oleh skrip Packer
-                            val hls4 = Regex("""["']hls4["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
-                            val hls2 = Regex("""["']hls2["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
-                            val hls3 = Regex("""["']hls3["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
+                            // Regex Fleksibel yang terbukti sukses ditarik di Termux lu
+                            val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
+                            
+                            if (masterM3u8Match != null) {
+                                // Rekonstruksi jika response mengembalikan path relatif (/stream/...)
+                                val finalStreamUrl = if (masterM3u8Match.startsWith("/")) {
+                                    "https://masukestin.com$masterM3u8Match"
+                                } else {
+                                    masterM3u8Match
+                                }
 
-                            // 1. Ekstrak Tautan Utama hls4 (Otomatis Menjadi Resolusi Tertinggi 1080p / Auto)
-                            hls4?.let { path ->
-                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
+                                // Penerapan inisialisasi properti baru di dalam block lambda (Fix Build Error)
                                 callback.invoke(
-                                    newExtractorLink(this.name, "HGCloud 1080p (Main)", streamUrl, ExtractorLinkType.M3U8) {
-                                        this.referer = playerPageUrl
-                                        this.quality = Qualities.P1080.value
-                                    }
-                                )
-                            }
-
-                            // 2. Ekstrak Tautan Cadangan hls2 (Resolusi Menengah / 720p)
-                            hls2?.let { path ->
-                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
-                                callback.invoke(
-                                    newExtractorLink(this.name, "HGCloud 720p (Backup)", streamUrl, ExtractorLinkType.M3U8) {
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "Server HGCloud (HLS Multi-Quality)",
+                                        url = finalStreamUrl,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
                                         this.referer = playerPageUrl
                                         this.quality = Qualities.P720.value
                                     }
                                 )
                             }
-
-                            // 3. Ekstrak Tautan Cadangan hls3 (Resolusi Rendah / 480p)
-                            hls3?.let { path ->
-                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
-                                callback.invoke(
-                                    newExtractorLink(this.name, "HGCloud 480p (Light)", streamUrl, ExtractorLinkType.M3U8) {
-                                        this.referer = playerPageUrl
-                                        this.quality = Qualities.P480.value
-                                    }
-                                )
-                            }
                         }
                     } catch (e: Exception) {
+                        // Fallback otomatis jika terjadi kendala jaringan saat dekripsi native
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
                 } else {
-                    // Sisa server ke-2 sampai ke-7 dimuat otomatis menggunakan extractor bawaan core
+                    // Sisa server ke-2 sampai ke-7 diproses otomatis ke pemanggil core extractor
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
@@ -210,6 +199,7 @@ class KlikXXI : MainAPI() {
         val title = titleLink.text()
         val href = titleLink.attr("href")
         
+        // Perbaikan: Melakukan fiksasi link poster di pencarian/halaman utama agar protokolnya (https:) lengkap
         val posterRaw = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
