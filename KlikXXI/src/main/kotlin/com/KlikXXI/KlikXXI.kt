@@ -12,47 +12,53 @@ class KlikXXI : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Perubahan: Menggunakan link kategori baru sesuai permintaan
     override val mainPage = mainPageOf(
         "$mainUrl/?s=&search=advanced&post_type=movie&index=&orderby=&genre=&movieyear=&country=&quality=" to "Latest Movies",
         "$mainUrl/tv" to "TV Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Logika penanganan paginasi dinamis untuk WordPress query string vs clean path
+        // Logika Paginasi WordPress: 
+        // Jika ada query string (?), masukan /page/X/ sebelum tanda tanya.
+        // Jika tidak ada, tambahkan /page/X/ di akhir.
         val url = if (request.data.contains("?")) {
-            "${request.data}&paged=$page"
+            if (page <= 1) request.data else request.data.replace("/?", "/page/$page/?")
         } else {
-            "${request.data.removeSuffix("/")}/page/$page/"
+            if (page <= 1) request.data else "${request.data.removeSuffix("/")}/page/$page/"
         }
-        
+
         val document = app.get(url).document
-        val home = document.select("div.gmr-item-modulepost").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, home)
+        
+        // Selector diperluas: article.item (kategori) dan div.gmr-item-modulepost (home)
+        val items = document.select("article.item, article.item-infinite, div.gmr-item-modulepost")
+            .mapNotNull { it.toSearchResult() }
+        
+        return newHomePageResponse(request.name, items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        return document.select("article.item, article.item-infinite").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.replace("Streaming Film", "")?.trim() ?: ""
-        val poster = document.selectFirst(".content-thumbnail img")?.let { 
+        val poster = document.selectFirst(".content-thumbnail img, figure img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         val year = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
-        val description = document.selectFirst(".entry-content-single p")?.text()
-        
+        val description = document.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
         val ratingValue = document.selectFirst(".gmr-rating-item")?.text()?.trim()?.toDoubleOrNull()
 
-        return if (document.selectFirst(".gmr-listseries") != null) {
-            val episodes = document.select(".gmr-season-episodes a.button-shadow").mapNotNull {
+        // Cek apakah ada daftar episode (ciri TV Series)
+        val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
+        
+        return if (episodeElements.isNotEmpty()) {
+            val episodes = episodeElements.mapNotNull {
                 val epHref = it.attr("href")
                 val epName = it.text()
-                
                 if (epName.contains("Batch", true)) return@mapNotNull null
                 
                 val sMatch = Regex("""S(\d+)""").find(epName)
@@ -90,14 +96,15 @@ class KlikXXI : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val ajaxId = document.selectFirst(".gmr-server-wrap")?.attr("data-id") ?: return false
-        val servers = document.select("ul.muvipro-player-tabs li a").mapNotNull {
-            val id = it.attr("href").replace("#", "")
-            if (id.startsWith("p")) id else null
+        val ajaxId = document.selectFirst(".gmr-server-wrap, #muvipro_player_content_id")?.attr("data-id") ?: return false
+
+        // Ambil semua tab server (Server 1, Server 2, dst)
+        val servers = document.select("ul.muvipro-player-tabs li a, .gmr-player-nav li a").mapNotNull {
+            val href = it.attr("href")
+            if (href.startsWith("#p")) href.replace("#p", "") else null
         }
 
-        servers.forEach { serverId ->
-            val serverNum = serverId.replace("p", "")
+        servers.distinct().forEach { serverNum ->
             val response = app.post(
                 url = "$mainUrl/wp-admin/admin-ajax.php",
                 data = mapOf(
@@ -121,8 +128,9 @@ class KlikXXI : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".entry-title a")?.text() ?: return null
-        val href = this.selectFirst(".entry-title a")?.attr("href") ?: return null
+        val titleLink = this.selectFirst(".entry-title a") ?: return null
+        val title = titleLink.text()
+        val href = titleLink.attr("href")
         val posterUrl = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
