@@ -40,7 +40,6 @@ class KlikXXI : MainAPI() {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.replace("Streaming Film", "")?.trim() ?: ""
         
-        // Perbaikan Selector Detail Poster & Maksimalkan Kualitas Gambar ke HQ
         val posterHtml = document.selectFirst(".gmr-movie-data img, .content-thumbnail img, figure img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
@@ -107,6 +106,91 @@ class KlikXXI : MainAPI() {
         }
     }
 
+    /**
+     * Parse master M3U8 dan invoke callback untuk setiap variant quality.
+     * Ini yang membuat semua resolusi (1080p, 720p, 480p) muncul di CloudStream.
+     */
+    private suspend fun parseMasterM3u8AndCallback(
+        masterUrl: String,
+        refererUrl: String,
+        sourceName: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val m3u8Text = try {
+            app.get(
+                url = masterUrl,
+                headers = mapOf("Referer" to refererUrl)
+            ).text
+        } catch (e: Exception) {
+            // Jika gagal fetch master, fallback satu link Unknown quality
+            callback.invoke(
+                newExtractorLink(
+                    source = sourceName,
+                    name = "HGCloud",
+                    url = masterUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = refererUrl
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            return
+        }
+
+        // Base URL untuk resolve relative path
+        val baseUrl = masterUrl.substringBeforeLast("/")
+
+        // Regex menangkap RESOLUTION dan URI di baris berikutnya
+        // Format standar M3U8: #EXT-X-STREAM-INF:BANDWIDTH=...,RESOLUTION=WxH\nstream_url
+        val streamInfRegex = Regex(
+            """#EXT-X-STREAM-INF:[^\n]*RESOLUTION=\d+x(\d+)[^\n]*\n([^\n]+)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val matches = streamInfRegex.findAll(m3u8Text).toList()
+
+        if (matches.isEmpty()) {
+            // Bukan master playlist (mungkin langsung media playlist), kirim apa adanya
+            callback.invoke(
+                newExtractorLink(
+                    source = sourceName,
+                    name = "HGCloud",
+                    url = masterUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = refererUrl
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            return
+        }
+
+        // Invoke callback untuk tiap variant — inilah kunci semua resolusi muncul
+        matches.forEach { match ->
+            val height = match.groupValues[1].toIntOrNull() ?: return@forEach
+            val variantPath = match.groupValues[2].trim()
+
+            // Resolve absolute URL jika path masih relatif
+            val variantUrl = when {
+                variantPath.startsWith("http") -> variantPath
+                variantPath.startsWith("/")    -> "https://masukestin.com$variantPath"
+                else                           -> "$baseUrl/$variantPath"
+            }
+
+            callback.invoke(
+                newExtractorLink(
+                    source = sourceName,
+                    name = "HGCloud ${height}p",
+                    url = variantUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = refererUrl
+                    this.quality = height  // nilai integer langsung (720, 1080, 480, dst.)
+                }
+            )
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isDataJob: Boolean,
@@ -133,14 +217,12 @@ class KlikXXI : MainAPI() {
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
-            // Ditambahkan (?i) agar Regex kebal huruf besar/kecil dari tag <IFRAME SRC= di server KlikXXI
             val iframeUrl = Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
                 ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
 
             iframeUrl?.let { url ->
                 val finalUrl = if (url.startsWith("//")) "https:$url" else url
                 
-                // Mengamankan bypass native server pertama (hgcloud) tanpa menyentuh sisa server lainnya
                 if (finalUrl.contains("hgcloud.to")) {
                     try {
                         val fileId = finalUrl.substringAfter("/e/")
@@ -155,38 +237,30 @@ class KlikXXI : MainAPI() {
 
                         if (packedScript != null) {
                             val unpackedJs = unpackDeanEdwards(packedScript)
-                            
-                            // Regex Fleksibel yang terbukti sukses ditarik di Termux lu
-                            val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
-                            
+
+                            val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""")
+                                .find(unpackedJs)?.groupValues?.get(1)
+
                             if (masterM3u8Match != null) {
-                                // Rekonstruksi jika response mengembalikan path relatif (/stream/...)
                                 val finalStreamUrl = if (masterM3u8Match.startsWith("/")) {
                                     "https://masukestin.com$masterM3u8Match"
                                 } else {
                                     masterM3u8Match
                                 }
 
-                                // Penerapan inisialisasi properti baru di dalam block lambda (Fix Build Error)
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = this.name,
-                                        name = "Server HGCloud (HLS Multi-Quality)",
-                                        url = finalStreamUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = playerPageUrl
-                                        this.quality = Qualities.P720.value
-                                    }
+                                // ✅ FIX UTAMA: parse master M3U8 → semua variant quality di-callback
+                                parseMasterM3u8AndCallback(
+                                    masterUrl   = finalStreamUrl,
+                                    refererUrl  = playerPageUrl,
+                                    sourceName  = this.name,
+                                    callback    = callback
                                 )
                             }
                         }
                     } catch (e: Exception) {
-                        // Fallback otomatis jika terjadi kendala jaringan saat dekripsi native
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
                 } else {
-                    // Sisa server ke-2 sampai ke-7 diproses otomatis ke pemanggil core extractor
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
@@ -199,7 +273,6 @@ class KlikXXI : MainAPI() {
         val title = titleLink.text()
         val href = titleLink.attr("href")
         
-        // Perbaikan: Melakukan fiksasi link poster di pencarian/halaman utama agar protokolnya (https:) lengkap
         val posterRaw = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
