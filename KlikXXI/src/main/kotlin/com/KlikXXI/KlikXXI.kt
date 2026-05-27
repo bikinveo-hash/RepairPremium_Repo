@@ -18,9 +18,6 @@ class KlikXXI : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Logika Paginasi WordPress: 
-        // Jika ada query string (?), masukan /page/X/ sebelum tanda tanya.
-        // Jika tidak ada, tambahkan /page/X/ di akhir.
         val url = if (request.data.contains("?")) {
             if (page <= 1) request.data else request.data.replace("/?", "/page/$page/?")
         } else {
@@ -28,8 +25,6 @@ class KlikXXI : MainAPI() {
         }
 
         val document = app.get(url).document
-        
-        // Selector diperluas: article.item (kategori) dan div.gmr-item-modulepost (home)
         val items = document.select("article.item, article.item-infinite, div.gmr-item-modulepost")
             .mapNotNull { it.toSearchResult() }
         
@@ -44,15 +39,18 @@ class KlikXXI : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.replace("Streaming Film", "")?.trim() ?: ""
-        val poster = document.selectFirst(".content-thumbnail img, figure img")?.let { 
+        
+        // Perbaikan Selector Detail Poster & Maksimalkan Kualitas Gambar ke HQ
+        val posterHtml = document.selectFirst(".gmr-movie-data img, .content-thumbnail img, figure img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
+        val poster = fixUrlNull(posterHtml)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
+
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         val year = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
         val description = document.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
         val ratingValue = document.selectFirst(".gmr-rating-item")?.text()?.trim()?.toDoubleOrNull()
 
-        // Cek apakah ada daftar episode (ciri TV Series)
         val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
         
         return if (episodeElements.isNotEmpty()) {
@@ -98,7 +96,6 @@ class KlikXXI : MainAPI() {
         val document = app.get(data).document
         val ajaxId = document.selectFirst(".gmr-server-wrap, #muvipro_player_content_id")?.attr("data-id") ?: return false
 
-        // Ambil semua tab server (Server 1, Server 2, dst)
         val servers = document.select("ul.muvipro-player-tabs li a, .gmr-player-nav li a").mapNotNull {
             val href = it.attr("href")
             if (href.startsWith("#p")) href.replace("#p", "") else null
@@ -131,9 +128,12 @@ class KlikXXI : MainAPI() {
         val titleLink = this.selectFirst(".entry-title a") ?: return null
         val title = titleLink.text()
         val href = titleLink.attr("href")
-        val posterUrl = this.selectFirst("img")?.let { 
+        
+        // Perbaikan: Melakukan fiksasi link poster di pencarian/halaman utama agar protokolnya (https:) lengkap
+        val posterRaw = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
-        }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
+        }
+        val posterUrl = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
         
         val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
         
