@@ -133,7 +133,6 @@ class KlikXXI : MainAPI() {
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
-            // Ditambahkan (?i) agar Regex kebal huruf besar/kecil dari tag <IFRAME SRC= di server KlikXXI
             val iframeUrl = Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
                 ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
 
@@ -155,38 +154,27 @@ class KlikXXI : MainAPI() {
 
                         if (packedScript != null) {
                             val unpackedJs = unpackDeanEdwards(packedScript)
-                            
-                            // Regex Fleksibel yang terbukti sukses ditarik di Termux lu
                             val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
                             
                             if (masterM3u8Match != null) {
-                                // Rekonstruksi jika response mengembalikan path relatif (/stream/...)
                                 val finalStreamUrl = if (masterM3u8Match.startsWith("/")) {
                                     "https://masukestin.com$masterM3u8Match"
                                 } else {
                                     masterM3u8Match
                                 }
 
-                                // Penerapan inisialisasi properti baru di dalam block lambda (Fix Build Error)
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = this.name,
-                                        name = "Server HGCloud (HLS Multi-Quality)",
-                                        url = finalStreamUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = playerPageUrl
-                                        this.quality = Qualities.P720.value
-                                    }
-                                )
+                                // PERBAIKAN: Memakai M3u8Helper() untuk memecah master manifest menjadi trek resolusi terpisah secara dinamis
+                                M3u8Helper().generateM3u8(
+                                    source = this.name,
+                                    url = finalStreamUrl,
+                                    referer = playerPageUrl
+                                ).forEach(callback)
                             }
                         }
                     } catch (e: Exception) {
-                        // Fallback otomatis jika terjadi kendala jaringan saat dekripsi native
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
                 } else {
-                    // Sisa server ke-2 sampai ke-7 diproses otomatis ke pemanggil core extractor
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
@@ -199,7 +187,6 @@ class KlikXXI : MainAPI() {
         val title = titleLink.text()
         val href = titleLink.attr("href")
         
-        // Perbaikan: Melakukan fiksasi link poster di pencarian/halaman utama agar protokolnya (https:) lengkap
         val posterRaw = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }
