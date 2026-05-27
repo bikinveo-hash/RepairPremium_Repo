@@ -72,6 +72,8 @@ class KlikXXI : MainAPI() {
         val ratingValue = document.selectFirst(".gmr-rating-item")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
 
+        val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
+
         val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
 
         return if (episodeElements.isNotEmpty()) {
@@ -94,6 +96,7 @@ class KlikXXI : MainAPI() {
                 this.plot      = description
                 this.tags      = tags
                 this.score     = Score.from10(ratingValue)
+                addTrailer(trailerUrl)
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -102,6 +105,7 @@ class KlikXXI : MainAPI() {
                 this.plot      = description
                 this.tags      = tags
                 this.score     = Score.from10(ratingValue)
+                addTrailer(trailerUrl)
             }
         }
     }
@@ -308,20 +312,15 @@ class KlikXXI : MainAPI() {
         val posterUrl = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
 
         // ── Quality label (HD / CAM / BluRay / WebRip dsb.) ──────────────
-        // KlikXXI meletakkan label kualitas di .gmr-quality-item atau .quality
         val qualityStr = this
             .selectFirst(".gmr-quality-item, .quality, .qualitylabel, span.quality")
             ?.text()?.trim()
-        // getQualityFromString() dari MainAPI.kt mengkonversi "HD"→SearchQuality.HD,
-        // "CAM"→SearchQuality.Cam, "BluRay"→SearchQuality.BlueRay, dst.
         val searchQuality = getQualityFromString(qualityStr)
 
         // ── Score / Rating ────────────────────────────────────────────────
-        // KlikXXI menampilkan rating di .gmr-rating-item (format "8.5")
         val ratingValue = this
             .selectFirst(".gmr-rating-item, .rating, .star-rating")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
-        // Score.from10() menerima Double? dalam rentang [0.0, 10.0]
         val score = Score.from10(ratingValue)
 
         val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
@@ -329,14 +328,14 @@ class KlikXXI : MainAPI() {
         return if (isTvSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
-                this.quality   = searchQuality   // ← SearchQuality (badge kartu)
-                this.score     = score            // ← Score (rating bintang kartu)
+                this.quality   = searchQuality
+                this.score     = score
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
-                this.quality   = searchQuality   // ← SearchQuality (badge kartu)
-                this.score     = score            // ← Score (rating bintang kartu)
+                this.quality   = searchQuality
+                this.score     = score
             }
         }
     }
