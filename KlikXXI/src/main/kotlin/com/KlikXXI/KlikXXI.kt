@@ -139,7 +139,7 @@ class KlikXXI : MainAPI() {
             iframeUrl?.let { url ->
                 val finalUrl = if (url.startsWith("//")) "https:$url" else url
                 
-                // Mengamankan bypass native server pertama (hgcloud) tanpa menyentuh sisa server lainnya
+                // Ekstraksi Terarah secara Native untuk Server Pertama (hgcloud)
                 if (finalUrl.contains("hgcloud.to")) {
                     try {
                         val fileId = finalUrl.substringAfter("/e/")
@@ -154,27 +154,50 @@ class KlikXXI : MainAPI() {
 
                         if (packedScript != null) {
                             val unpackedJs = unpackDeanEdwards(packedScript)
-                            val masterM3u8Match = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
                             
-                            if (masterM3u8Match != null) {
-                                val finalStreamUrl = if (masterM3u8Match.startsWith("/")) {
-                                    "https://masukestin.com$masterM3u8Match"
-                                } else {
-                                    masterM3u8Match
-                                }
+                            // Ambil semua manifest berkualitas tinggi & cerminannya yang disembunyikan oleh skrip Packer
+                            val hls4 = Regex("""["']hls4["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
+                            val hls2 = Regex("""["']hls2["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
+                            val hls3 = Regex("""["']hls3["']\s*:\s*["']([^"']+)""").find(unpackedJs)?.groupValues?.get(1)
 
-                                // PERBAIKAN: Memakai M3u8Helper() untuk memecah master manifest menjadi trek resolusi terpisah secara dinamis
-                                M3u8Helper().generateM3u8(
-                                    source = this.name,
-                                    url = finalStreamUrl,
-                                    referer = playerPageUrl
-                                ).forEach(callback)
+                            // 1. Ekstrak Tautan Utama hls4 (Otomatis Menjadi Resolusi Tertinggi 1080p / Auto)
+                            hls4?.let { path ->
+                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
+                                callback.invoke(
+                                    newExtractorLink(this.name, "HGCloud 1080p (Main)", streamUrl, ExtractorLinkType.M3U8) {
+                                        this.referer = playerPageUrl
+                                        this.quality = Qualities.P1080.value
+                                    }
+                                )
+                            }
+
+                            // 2. Ekstrak Tautan Cadangan hls2 (Resolusi Menengah / 720p)
+                            hls2?.let { path ->
+                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
+                                callback.invoke(
+                                    newExtractorLink(this.name, "HGCloud 720p (Backup)", streamUrl, ExtractorLinkType.M3U8) {
+                                        this.referer = playerPageUrl
+                                        this.quality = Qualities.P720.value
+                                    }
+                                )
+                            }
+
+                            // 3. Ekstrak Tautan Cadangan hls3 (Resolusi Rendah / 480p)
+                            hls3?.let { path ->
+                                val streamUrl = if (path.startsWith("/")) "https://masukestin.com$path" else path
+                                callback.invoke(
+                                    newExtractorLink(this.name, "HGCloud 480p (Light)", streamUrl, ExtractorLinkType.M3U8) {
+                                        this.referer = playerPageUrl
+                                        this.quality = Qualities.P480.value
+                                    }
+                                )
                             }
                         }
                     } catch (e: Exception) {
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
                 } else {
+                    // Sisa server ke-2 sampai ke-7 dimuat otomatis menggunakan extractor bawaan core
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
