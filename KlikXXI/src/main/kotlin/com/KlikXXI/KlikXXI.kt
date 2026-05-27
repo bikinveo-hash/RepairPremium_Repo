@@ -65,7 +65,7 @@ class KlikXXI : MainAPI() {
         }
     }
 
-    // Helper Engine untuk membongkar enkripsi Javascript Packer secara native & aman
+    // Helper Engine untuk membongkar enkripsi Javascript Packer secara instan & hemat RAM
     private fun unpackDeanEdwards(packedScript: String): String {
         return try {
             val payload = packedScript.substringAfter("}('").substringBefore("',")
@@ -109,7 +109,7 @@ class KlikXXI : MainAPI() {
         val fileId = hgCloudUrl.substringAfter("/e/")
         val playerPageUrl = "https://masukestin.com/e/$fileId"
 
-        // 5. Load halaman JWPlayer dari masukestin.com dengan menyertakan Referer hgcloud
+        // 5. Load halaman JWPlayer dari masukestin.com dengan menyertakan Referer hgcloud agar tidak diblokir
         val playerPageHtml = app.get(
             url = playerPageUrl,
             headers = mapOf("Referer" to "https://hgcloud.to/")
@@ -125,16 +125,16 @@ class KlikXXI : MainAPI() {
         // 8. Ekstrak link master.m3u8 langsung dari hasil bongkaran skrip tersebut
         val masterM3u8 = Regex("""["'](https?://[^"']+\.m3u8)["']""").find(unpackedJs)?.groupValues?.get(1) ?: return false
 
-        // 9. Kembalikan link streaming menggunakan pembungkus lambda builder yang benar
+        // 9. Kirim data link stream dengan struktur inisialisasi lambda block yang benar sesuai core rule
         callback.invoke(
             newExtractorLink(
                 source = this.name,
                 name = "Server HGCloud (HLS Multi-Quality)",
                 url = masterM3u8,
-                [span_6](start_span)[span_7](start_span)type = ExtractorLinkType.M3U8[span_6](end_span)[span_7](end_span)
+                type = ExtractorLinkType.M3U8
             ) {
-                [span_8](start_span)[span_9](start_span)this.referer = playerPageUrl[span_8](end_span)[span_9](end_span)
-                [span_10](start_span)[span_11](start_span)[span_12](start_span)this.quality = Qualities.P720.value[span_10](end_span)[span_11](end_span)[span_12](end_span)
+                this.referer = playerPageUrl
+                this.quality = Qualities.P720.value
             }
         )
 
