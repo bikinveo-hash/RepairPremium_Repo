@@ -87,6 +87,26 @@ class KlikXXI : MainAPI() {
         }
     }
 
+    // Helper Engine Unpacker JS (Dean Edwards) ditaruh internal agar rapi
+    private fun unpackDeanEdwards(packedScript: String): String {
+        return try {
+            val payload = packedScript.substringAfter("}('").substringBefore("',")
+            val remaining = packedScript.substringAfter("',")
+            val base = remaining.substringBefore(",").trim().toIntOrNull() ?: 36
+            val wordsStr = remaining.substringAfter("'").substringBefore("'.split")
+            val words = wordsStr.split("|")
+
+            val wordRegex = Regex("""\b[0-9a-zA-Z]+\b""")
+            wordRegex.replace(payload) { matchResult ->
+                val wordCode = matchResult.value
+                val index = wordCode.toIntOrNull(base) ?: return@replace wordCode
+                if (index < words.size && words[index].isNotEmpty()) words[index] else wordCode
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isDataJob: Boolean,
@@ -118,7 +138,46 @@ class KlikXXI : MainAPI() {
 
             iframeUrl?.let { url ->
                 val finalUrl = if (url.startsWith("//")) "https:$url" else url
-                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                
+                // Intercept Server Pertama (hgcloud.to) dengan Native Unpacker kita agar cepat & tanpa WebView
+                if (finalUrl.contains("hgcloud.to")) {
+                    try {
+                        val fileId = finalUrl.substringAfter("/e/")
+                        val playerPageUrl = "https://masukestin.com/e/$fileId"
+                        val playerPageHtml = app.get(
+                            url = playerPageUrl,
+                            headers = mapOf("Referer" to "https://hgcloud.to/")
+                        ).text
+
+                        val packedScript = playerPageHtml.lineSequence()
+                            .firstOrNull { it.contains("eval(function(p,a,c,k,e,d)") }
+
+                        if (packedScript != null) {
+                            val unpackedJs = unpackDeanEdwards(packedScript)
+                            val masterM3u8 = Regex("""["'](https?://[^"']+\.m3u8)["']""").find(unpackedJs)?.groupValues?.get(1)
+                            
+                            if (masterM3u8 != null) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "Server HGCloud (HLS Multi-Quality)",
+                                        url = masterM3u8,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = playerPageUrl
+                                        this.quality = Qualities.P720.value
+                                    }
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Jika native-unpacker gagal/error, fallback otomatis ke extractor bawaan core
+                        loadExtractor(finalUrl, data, subtitleCallback, callback)
+                    }
+                } else {
+                    // Sisa server ke-2 sampai ke-7 diproses otomatis oleh extractor bawaan core
+                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+                }
             }
         }
         return true
