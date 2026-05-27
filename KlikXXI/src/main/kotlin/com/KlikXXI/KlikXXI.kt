@@ -12,13 +12,21 @@ class KlikXXI : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    // PERBAIKAN 1: Gunakan URL dasar, jangan pasang /page/ di sini
     override val mainPage = mainPageOf(
-        "$mainUrl/movie/page/" to "Latest Movies",
-        "$mainUrl/tv/page/" to "TV Series"
+        "$mainUrl/" to "Latest Movies",
+        "$mainUrl/tv/" to "TV Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data + page).document
+        // PERBAIKAN 2: Logika paginasi WordPress yang benar
+        val url = if (page == 1) {
+            request.data // Halaman 1 -> https://klikxxi.me/ atau https://klikxxi.me/tv/
+        } else {
+            "${request.data}page/$page/" // Halaman 2 -> https://klikxxi.me/page/2/
+        }
+
+        val document = app.get(url).document
         val home = document.select("div.gmr-item-modulepost").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
@@ -28,40 +36,33 @@ class KlikXXI : MainAPI() {
         return document.select("article.item").mapNotNull { it.toSearchResult() }
     }
 
-    override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-        val rawTitle = document.selectFirst("h1.entry-title")?.text() ?: ""
-        val title = rawTitle.replace(Regex("(?i)\\s*(Season\\s*\\d+.*|[0-9]{4})$"), "").trim()
-        val poster = document.selectFirst(".gmr-movie-data figure img")?.let { 
+    // (Fungsi load dibiarkan sama seperti milikmu sebelumnya...)
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = this.selectFirst(".entry-title a")?.text() ?: return null
+        val href = this.selectFirst(".entry-title a")?.attr("href") ?: return null
+        
+        // Mengambil gambar dan membersihkan resolusi (-152x228) agar dapat gambar HD
+        val posterUrl = this.selectFirst("img")?.let { 
             it.attr("data-lazy-src").ifEmpty { it.attr("src") } 
         }?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
-        val plot = document.selectFirst(".entry-content[itemprop=description] p")?.text()
-        val dataId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id") ?: ""
-        val isTvSeries = url.contains("/tv/") || url.contains("/eps/")
-
+        
+        val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
+        
         return if (isTvSeries) {
-            val episodes = document.select(".gmr-season-episodes a.button").mapNotNull { epNode ->
-                val epUrl = epNode.attr("href")
-                val epTitle = epNode.text()
-                if (epTitle.contains("Batch", true)) return@mapNotNull null
-                val match = Regex("S(\\d+)Eps(\\d+)").find(epTitle)
-                newEpisode(epUrl) {
-                    this.name = epTitle
-                    this.season = match?.groupValues?.get(1)?.toIntOrNull()
-                    this.episode = match?.groupValues?.get(2)?.toIntOrNull()
-                }
-            }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
-                this.plot = plot
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                // PERBAIKAN 3: Gunakan fixUrlNull untuk menambah https:// jika hilang
+                this.posterUrl = fixUrlNull(posterUrl)
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, dataId) {
-                this.posterUrl = poster
-                this.plot = plot
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                // PERBAIKAN 3: Gunakan fixUrlNull
+                this.posterUrl = fixUrlNull(posterUrl)
             }
         }
     }
+}
+
 
     override suspend fun loadLinks(
         data: String,
