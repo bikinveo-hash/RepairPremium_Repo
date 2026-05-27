@@ -12,13 +12,21 @@ class KlikXXI : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    // Perubahan: Menggunakan link kategori baru sesuai permintaan
     override val mainPage = mainPageOf(
-        "$mainUrl/movie/page/" to "Latest Movies",
-        "$mainUrl/tv/page/" to "TV Series"
+        "$mainUrl/?s=&search=advanced&post_type=movie&index=&orderby=&genre=&movieyear=&country=&quality=" to "Latest Movies",
+        "$mainUrl/tv" to "TV Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data + page).document
+        // Logika penanganan paginasi dinamis untuk WordPress query string vs clean path
+        val url = if (request.data.contains("?")) {
+            "${request.data}&paged=$page"
+        } else {
+            "${request.data.removeSuffix("/")}/page/$page/"
+        }
+        
+        val document = app.get(url).document
         val home = document.select("div.gmr-item-modulepost").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
@@ -38,7 +46,6 @@ class KlikXXI : MainAPI() {
         val year = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
         val description = document.selectFirst(".entry-content-single p")?.text()
         
-        // Perbaikan: Ambil rating sebagai Double untuk Score API
         val ratingValue = document.selectFirst(".gmr-rating-item")?.text()?.trim()?.toDoubleOrNull()
 
         return if (document.selectFirst(".gmr-listseries") != null) {
@@ -63,7 +70,6 @@ class KlikXXI : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = tags
-                // Perbaikan: Gunakan properti score dengan Score.from10
                 this.score = Score.from10(ratingValue)
             }
         } else {
@@ -72,7 +78,6 @@ class KlikXXI : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = tags
-                // Perbaikan: Gunakan properti score dengan Score.from10
                 this.score = Score.from10(ratingValue)
             }
         }
