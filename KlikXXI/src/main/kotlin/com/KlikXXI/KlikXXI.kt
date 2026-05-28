@@ -72,8 +72,6 @@ class KlikXXI : MainAPI() {
         val ratingValue = document.selectFirst(".gmr-rating-item")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
 
-        val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
-
         val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
 
         return if (episodeElements.isNotEmpty()) {
@@ -96,7 +94,6 @@ class KlikXXI : MainAPI() {
                 this.plot      = description
                 this.tags      = tags
                 this.score     = Score.from10(ratingValue)
-                addTrailer(trailerUrl)
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -105,13 +102,12 @@ class KlikXXI : MainAPI() {
                 this.plot      = description
                 this.tags      = tags
                 this.score     = Score.from10(ratingValue)
-                addTrailer(trailerUrl)
             }
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  LOAD LINKS  (tidak diubah sama sekali)
+    //  LOAD LINKS
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun extractHlsUrl(unpackedJs: String): String? {
@@ -213,7 +209,7 @@ class KlikXXI : MainAPI() {
                         ) {
                             this.referer = referer
                             this.quality = if (pendingHeight > 0) pendingHeight
-                                          else Qualities.Unknown.value
+                                    else Qualities.Unknown.value
                         }
                     )
                     pendingBandwidth = -1
@@ -260,7 +256,10 @@ class KlikXXI : MainAPI() {
             iframeUrl?.let { raw ->
                 val finalUrl = if (raw.startsWith("//")) "https:$raw" else raw
 
-                if (finalUrl.contains("hgcloud.to")) {
+                // --- MODIFIKASI STRp2p DITAMBAHKAN DI SINI ---
+                if (finalUrl.contains("klikxxi.strp2p.site")) {
+                    Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
+                } else if (finalUrl.contains("hgcloud.to")) {
                     try {
                         val fileId        = finalUrl.substringAfter("/e/")
                         val playerPageUrl = "https://masukestin.com/e/$fileId"
@@ -297,9 +296,6 @@ class KlikXXI : MainAPI() {
 
     // ─────────────────────────────────────────────────────────────────────────
     //  HELPER — toSearchResult()
-    //  Sekarang juga mengisi:
-    //    • quality  → badge HD / CAM / WebRip dll. di kartu (SearchQuality)
-    //    • score    → rating bintang di kartu (Score)
     // ─────────────────────────────────────────────────────────────────────────
     private fun Element.toSearchResult(): SearchResponse? {
         val titleLink = this.selectFirst(".entry-title a") ?: return null
