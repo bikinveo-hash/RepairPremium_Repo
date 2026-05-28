@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.json.JSONObject
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -15,228 +16,164 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Extractor untuk server video Strp2p.
  *
- * ┌─────────────────────────────────────────────────────────────────┐
- * │  DOMAIN YANG DITANGANI (dikonfirmasi dari debug live):          │
- * │   • klikxxi.strp2p.site  — domain utama Strp2p                 │
- * │   • klikxxi.upns.one     — domain alias, API & crypto identik  │
- * ├─────────────────────────────────────────────────────────────────┤
- * │  FORMAT URL IFRAME (dua format aktif):                          │
- * │   Format A: https://klikxxi.strp2p.site/e/q5sc8o   (path /e/) │
- * │   Format B: https://klikxxi.strp2p.site/#q5sc8o    (hash #)   │
- * │   Format C: https://klikxxi.upns.one/#ikaftn        (hash #)   │
- * ├─────────────────────────────────────────────────────────────────┤
- * │  ALUR KERJA:                                                    │
- * │   1. Ekstrak video ID dari URL → regex [/#]([A-Za-z0-9]{4,})$  │
- * │   2. GET {baseDomain}/api/v1/video?id={id}&w=360&h=800&r=...   │
- * │      Header wajib: Referer = {baseDomain}/                     │
- * │   3. Respons: Hex string (application/octet-stream)            │
- * │   4. Dekripsi AES-128-CBC / PKCS5Padding                       │
- * │      Key: "kiemtienmua911ca"  IV: "1234567890oiuytr"           │
- * │   5. Parse JSON → prioritas field:                             │
- * │      [1] "cf"             — Cloudflare proxy, SSL valid        │
- * │      [2] "source"         — direct IP, mungkin SSL error       │
- * │      [3] "hlsVideoTiktok" — path relatif via TikTok CDN        │
- * └─────────────────────────────────────────────────────────────────┘
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │  DOMAIN YANG DITANGANI:                                        │
+ * │   • klikxxi.strp2p.site  — domain utama                       │
+ * │   • klikxxi.upns.one     — alias, API & crypto identik        │
+ * ├────────────────────────────────────────────────────────────────┤
+ * │  ALUR KERJA:                                                   │
+ * │   1. Ekstrak baseDomain & videoId dari URL iframe              │
+ * │   2. GET /api/v1/video?id=...  → Hex (application/octet-stream)│
+ * │   3. Dekripsi AES-128-CBC                                      │
+ * │   4. Parse JSON → link dengan prioritas:                       │
+ * │      [1] "cf"             — Cloudflare, SSL valid, ekstensi    │
+ * │                             .txt (M3U8 disamarkan)             │
+ * │      [2] "source"         — raw IP, fallback                  │
+ * │      [3] "hlsVideoTiktok" — path relatif, CDN base dari        │
+ * │                             streamingConfig.adjust.Tiktok.domain│
+ * └────────────────────────────────────────────────────────────────┘
  *
- * CHANGELOG:
- *  v3 — Fix SSL ERR_CERT_AUTHORITY_INVALID:
- *       Prioritaskan field "cf" (Cloudflare proxy domain) sebelum "source" (raw IP).
- *       Field "cf" berisi domain valid dengan SSL cert dari Cloudflare.
- *  v3 — Fix TikTok CDN 404:
- *       Ekstrak "hlsVideoTiktokBase" dari JSON jika ada, sebagai CDN base dinamis.
- *       Fallback ke CDN_BASE hardcoded jika field tidak tersedia.
- *       Tambahkan validasi URL final sebelum callback.
+ * CHANGELOG v4:
+ *  - Fix [6-CF]: Hapus filter ".m3u8" untuk field "cf".
+ *    Server menyamarkan M3U8 sebagai .txt — isi file tetap valid.
+ *    Contoh: https://s39.corporateoperations.sbs/v4/5c/{id}/cf-master.{ver}.txt
+ *  - Fix [6-B]: CDN base TikTok diambil dari
+ *    streamingConfig.adjust.Tiktok.domain (dinamis per-session),
+ *    bukan hardcode. Fallback ke metric.cfDomain jika parse gagal.
  */
 class Strp2p : ExtractorApi() {
     override val name            = "Strp2p"
     override val mainUrl         = "https://klikxxi.strp2p.site"
     override val requiresReferer = true
 
-    // ── Konstanta Kriptografi (AES-128-CBC, dikonfirmasi dari debug) ─────────
-    private val AES_KEY = "kiemtienmua911ca"   // 16 bytes → AES-128
-    private val AES_IV  = "1234567890oiuytr"   // 16 bytes
-
-    // ── Parameter API ────────────────────────────────────────────────────────
-    private val API_W = "360"
-    private val API_H = "800"
-    private val API_R = "klikxxi.me"
-
-    // ── CDN base fallback untuk path relatif dari field "hlsVideoTiktok" ────
-    // Dipakai hanya jika JSON tidak mengandung field CDN base eksplisit.
-    // Dikonfirmasi dari Termux debug: "soq.corporateoperations.sbs"
-    private val CDN_BASE_FALLBACK = "https://soq.corporateoperations.sbs"
-
-    // ── User-Agent yang dikonfirmasi berhasil di debug ───────────────────────
+    private val AES_KEY = "kiemtienmua911ca"
+    private val AES_IV  = "1234567890oiuytr"
+    private val API_W   = "360"
+    private val API_H   = "800"
+    private val API_R   = "klikxxi.me"
     private val UA = "Mozilla/5.0 (Linux; Android 10; Mobile) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/120.0.0.0 Mobile Safari/537.36"
-
     private val TAG = "Strp2p"
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  getUrl — Entry point (dipanggil via getSafeUrl() dari KlikXXI.kt)
-    // ─────────────────────────────────────────────────────────────────────────
     override suspend fun getUrl(
         url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d(TAG, "══════════ STRP2P START ══════════")
+        Log.d(TAG, "══════════ STRP2P v4 START ══════════")
         Log.d(TAG, "Input URL : $url")
-        Log.d(TAG, "Referer   : $referer")
 
-        // ── Langkah 1: Deteksi base domain dari URL iframe ───────────────────
+        // [1] Base domain
         val baseDomain = Regex("""^(https?://[^/#?]+)""")
             .find(url)?.groupValues?.get(1) ?: mainUrl
-        Log.d(TAG, "✅ [1] Base domain: $baseDomain")
+        Log.d(TAG, "✅ [1] baseDomain: $baseDomain")
 
-        // ── Langkah 2: Ekstrak Video ID ──────────────────────────────────────
+        // [2] Video ID
         val videoId = Regex("""[/#]([A-Za-z0-9]{4,})$""")
-            .find(url.substringBefore("?"))
-            ?.groupValues?.get(1)
-            ?.trim() ?: ""
-
+            .find(url.substringBefore("?"))?.groupValues?.get(1)?.trim() ?: ""
         if (videoId.isBlank()) {
-            Log.e(TAG, "❌ [2] Video ID kosong — URL tidak cocok pola [/#]{id}. url=$url")
-            return
+            Log.e(TAG, "❌ [2] Video ID kosong. url=$url"); return
         }
-        Log.d(TAG, "✅ [2] Video ID: '$videoId'")
+        Log.d(TAG, "✅ [2] videoId: '$videoId'")
 
-        // ── Langkah 3: Request ke API ────────────────────────────────────────
+        // [3] Request API
         val apiUrl = "$baseDomain/api/v1/video?id=$videoId&w=$API_W&h=$API_H&r=$API_R"
-        Log.d(TAG, "✅ [3] API URL: $apiUrl")
-
-        val rawResponse = try {
-            app.get(
-                url     = apiUrl,
-                headers = mapOf(
-                    "Referer"    to "$baseDomain/",
-                    "Accept"     to "*/*",
-                    "User-Agent" to UA
-                )
-            )
+        Log.d(TAG, "✅ [3] apiUrl: $apiUrl")
+        val resp = try {
+            app.get(apiUrl, headers = mapOf(
+                "Referer" to "$baseDomain/", "Accept" to "*/*", "User-Agent" to UA))
         } catch (e: Exception) {
-            Log.e(TAG, "❌ [3] HTTP request gagal: ${e.message}")
-            return
+            Log.e(TAG, "❌ [3] HTTP gagal: ${e.message}"); return
+        }
+        if (resp.code != 200) { Log.e(TAG, "❌ [3] HTTP ${resp.code}"); return }
+
+        val hexStr = resp.text.trim()
+        if (hexStr.isBlank()) { Log.e(TAG, "❌ [3] Respons kosong"); return }
+        Log.d(TAG, "    HTTP 200 — ${hexStr.length} char hex")
+
+        // [4] Validasi hex
+        if (!hexStr.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+            || hexStr.length % 2 != 0) {
+            Log.e(TAG, "❌ [4] Hex tidak valid"); return
         }
 
-        val httpCode    = rawResponse.code
-        val hexResponse = rawResponse.text.trim()
-        Log.d(TAG, "    HTTP $httpCode — respons ${hexResponse.length} char")
-
-        if (httpCode != 200) {
-            Log.e(TAG, "❌ [3] HTTP $httpCode bukan 200.")
-            return
-        }
-        if (hexResponse.isBlank()) {
-            Log.e(TAG, "❌ [3] Respons kosong.")
-            return
-        }
-
-        // ── Langkah 4: Validasi Hex ──────────────────────────────────────────
-        if (!hexResponse.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
-            Log.e(TAG, "❌ [4] Bukan hex valid. Preview: '${hexResponse.take(80)}'")
-            return
-        }
-        if (hexResponse.length % 2 != 0) {
-            Log.e(TAG, "❌ [4] Panjang hex ganjil (${hexResponse.length}).")
-            return
-        }
-        Log.d(TAG, "✅ [4] Hex valid — ${hexResponse.length} char = ${hexResponse.length / 2} bytes")
-
-        // ── Langkah 5: Dekripsi AES-128-CBC ──────────────────────────────────
+        // [5] Dekripsi
         val rawJson = try {
-            decryptAesCbc(hexResponse, AES_KEY.toByteArray(), AES_IV.toByteArray())
+            decryptAesCbc(hexStr, AES_KEY.toByteArray(), AES_IV.toByteArray())
         } catch (e: Exception) {
-            Log.e(TAG, "❌ [5] Dekripsi AES gagal: ${e.message}")
-            return
+            Log.e(TAG, "❌ [5] Dekripsi gagal: ${e.message}"); return
         }
-        Log.d(TAG, "✅ [5] Dekripsi OK — JSON ${rawJson.length} char")
+        Log.d(TAG, "✅ [5] JSON ${rawJson.length} char")
         Log.d(TAG, "    Preview: ${rawJson.take(200)}")
 
-        // ── Langkah 6: Ekstrak URL dari JSON ─────────────────────────────────
+        // Parse JSON untuk field kompleks (streamingConfig)
+        val jsonObj = try { JSONObject(rawJson) } catch (e: Exception) {
+            Log.w(TAG, "⚠️  JSONObject parse gagal, lanjut regex"); null
+        }
+
         var linkFound = false
 
-        // ────────────────────────────────────────────────────────────────────
-        //  SUMBER 1: field "cf" — Cloudflare reverse proxy, SSL VALID
-        // ────────────────────────────────────────────────────────────────────
-        // Contoh JSON: "cf":"https:\/\/stzm.mountainstreamlab.space\/v4\/...\/master.m3u8"
-        // Field ini memakai domain (bukan raw IP) sehingga sertifikat SSL valid.
-        // PRIORITASKAN ini sebelum "source" untuk menghindari ERR_CERT_AUTHORITY_INVALID.
+        // ── [6-CF] field "cf" — Cloudflare, ekstensi .txt ──────────────────
+        // KRITIS: Jangan filter berdasarkan ".m3u8"!
+        // Server Strp2p menyamarkan M3U8 sebagai .txt untuk menghindari blokir.
+        // URL contoh: https://s39.corporateoperations.sbs/v4/5c/{id}/cf-master.{ver}.txt
+        // ExoPlayer/Media3 bisa memutar .txt berisi M3U8 selama
+        // kita set MimeType = APPLICATION_M3U8 via ExtractorLinkType.M3U8.
         val cfUrl = Regex(""""cf"\s*:\s*"([^"]+)"""")
             .find(rawJson)?.groupValues?.get(1)
             ?.unescapeJsonSlashes()
-            ?.takeIf { it.startsWith("http") && ".m3u8" in it }
+            ?.takeIf { it.startsWith("http") && !isRawIp(it) }
 
         if (cfUrl != null) {
-            Log.d(TAG, "✅ [6-CF] cf (Cloudflare) → $cfUrl")
+            Log.d(TAG, "✅ [6-CF] cf → $cfUrl")
             callback(newExtractorLink(
-                source = name,
-                name   = "Strp2p [CF]",
-                url    = cfUrl,
-                type   = ExtractorLinkType.M3U8
+                source = name, name = "Strp2p [CF]",
+                url = cfUrl, type = ExtractorLinkType.M3U8
             ) {
                 this.referer = "$baseDomain/"
                 this.quality = Qualities.Unknown.value
             })
             linkFound = true
         } else {
-            Log.w(TAG, "⚠️  [6-CF] field 'cf' tidak ada / bukan M3U8 — akan coba 'source'.")
+            Log.w(TAG, "⚠️  [6-CF] cf tidak ada atau raw IP.")
         }
 
-        // ────────────────────────────────────────────────────────────────────
-        //  SUMBER 2: field "source" — direct IP, SSL mungkin gagal
-        // ────────────────────────────────────────────────────────────────────
-        // Contoh: "source":"https:\/\/203.188.166.128\/v4\/...\/master.m3u8?v=..."
-        // Catatan: ExoPlayer/Cronet menolak raw IP dengan ERR_CERT_AUTHORITY_INVALID.
-        // Link ini tetap di-emit sebagai fallback; player CloudStream kadang
-        // bisa bypass SSL check lewat OkHttp custom trust manager.
+        // ── [6-A] field "source" — raw IP fallback ─────────────────────────
         val sourceUrl = Regex(""""source"\s*:\s*"([^"]+)"""")
             .find(rawJson)?.groupValues?.get(1)
             ?.unescapeJsonSlashes()
             ?.takeIf { it.startsWith("http") && ".m3u8" in it }
 
         if (sourceUrl != null) {
-            Log.d(TAG, "✅ [6-A] source → $sourceUrl")
-            // Tandai nama dengan "(IP)" agar user tahu ini mungkin SSL error
+            val isIp = isRawIp(sourceUrl)
+            Log.d(TAG, if (isIp) "⚠️  [6-A] source (raw IP) → $sourceUrl"
+                       else      "✅ [6-A] source → $sourceUrl")
             callback(newExtractorLink(
-                source = name,
-                name   = "Strp2p (IP)",
-                url    = sourceUrl,
-                type   = ExtractorLinkType.M3U8
+                source = name, name = "Strp2p (IP)",
+                url = sourceUrl, type = ExtractorLinkType.M3U8
             ) {
                 this.referer = "$baseDomain/"
                 this.quality = Qualities.Unknown.value
             })
             linkFound = true
         } else {
-            Log.w(TAG, "⚠️  [6-A] field 'source' tidak ada / bukan M3U8.")
+            Log.w(TAG, "⚠️  [6-A] source tidak ada.")
         }
 
-        // ────────────────────────────────────────────────────────────────────
-        //  SUMBER 3: field "hlsVideoTiktok" — path relatif via TikTok CDN
-        // ────────────────────────────────────────────────────────────────────
-        // Contoh JSON: "hlsVideoTiktok":"\/hls\/gRbL4ZlMf8lo6fMc3yECcw\/5c\/...\/master.m3u8"
-        //
-        // FIX 404: CDN base domain bisa bervariasi per-session. Strategi:
-        //   1. Coba baca field "hlsVideoTiktokDomain" (jika server kirim eksplisit)
-        //   2. Jika tidak ada, gunakan CDN_BASE_FALLBACK (soq.corporateoperations.sbs)
-        //
-        // Path setelah unescape harus diawali '/' untuk penggabungan yang benar.
+        // ── [6-B] field "hlsVideoTiktok" — TikTok CDN ──────────────────────
+        // CDN base diambil dari streamingConfig.adjust.Tiktok.domain (dinamis).
+        // Fallback 1: metric.cfDomain → "soq.{cfDomain}"
+        // Fallback 2: hardcode soq.corporateoperations.sbs
         val tiktokPath = Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""")
             .find(rawJson)?.groupValues?.get(1)
             ?.unescapeJsonSlashes()
             ?.takeIf { ".m3u8" in it }
 
         if (tiktokPath != null) {
-            // Deteksi CDN base dari JSON (field opsional dari server)
-            val cdnBase = Regex(""""hlsVideoTiktokDomain"\s*:\s*"([^"]+)"""")
-                .find(rawJson)?.groupValues?.get(1)
-                ?.unescapeJsonSlashes()
-                ?.trimEnd('/')
-                ?.let { if (it.startsWith("http")) it else "https://$it" }
-                ?: CDN_BASE_FALLBACK
+            val cdnBase = extractTiktokCdnBase(jsonObj, rawJson)
+            Log.d(TAG, "    [6-B] TikTok CDN base: $cdnBase")
 
             val tiktokUrl = when {
                 tiktokPath.startsWith("http") -> tiktokPath
@@ -244,20 +181,13 @@ class Strp2p : ExtractorApi() {
                 else                          -> "$cdnBase/$tiktokPath"
             }
 
-            // Validasi dasar: URL harus mengandung host yang valid (bukan raw IP)
-            val tiktokHost = Regex("""https?://([^/]+)""").find(tiktokUrl)
-                ?.groupValues?.get(1) ?: ""
-            val isRawIp = tiktokHost.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?"""))
-
-            if (isRawIp) {
-                Log.w(TAG, "⚠️  [6-B] hlsVideoTiktok mengarah ke raw IP ($tiktokHost) — dilewati untuk menghindari SSL error.")
+            if (isRawIp(tiktokUrl)) {
+                Log.w(TAG, "⚠️  [6-B] TikTok URL raw IP — dilewati.")
             } else {
-                Log.d(TAG, "✅ [6-B] hlsVideoTiktok → $tiktokUrl (CDN base: $cdnBase)")
+                Log.d(TAG, "✅ [6-B] hlsVideoTiktok → $tiktokUrl")
                 callback(newExtractorLink(
-                    source = name,
-                    name   = "Strp2p [TikTok CDN]",
-                    url    = tiktokUrl,
-                    type   = ExtractorLinkType.M3U8
+                    source = name, name = "Strp2p [TikTok CDN]",
+                    url = tiktokUrl, type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = "$baseDomain/"
                     this.quality = Qualities.Unknown.value
@@ -265,29 +195,79 @@ class Strp2p : ExtractorApi() {
                 linkFound = true
             }
         } else {
-            Log.w(TAG, "⚠️  [6-B] field 'hlsVideoTiktok' tidak ada / bukan M3U8.")
+            Log.w(TAG, "⚠️  [6-B] hlsVideoTiktok tidak ada.")
         }
 
-        if (!linkFound) {
-            Log.e(TAG, "❌ [6] Tidak ada link ditemukan. JSON dump:\n$rawJson")
-        }
-        Log.d(TAG, "══════════ STRP2P END (found=$linkFound) ══════════")
+        if (!linkFound) Log.e(TAG, "❌ [6] Tidak ada link. JSON:\n$rawJson")
+        Log.d(TAG, "══════════ STRP2P v4 END (found=$linkFound) ══════════")
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
+    /**
+     * Ekstrak TikTok CDN base domain dari JSON.
+     *
+     * Strategi (urutan prioritas):
+     *  1. streamingConfig (string JSON-in-JSON) → adjust.Tiktok.domain
+     *  2. metric.cfDomain → "soq.{cfDomain}"
+     *  3. Hardcode fallback
+     *
+     * Contoh streamingConfig:
+     *   {"order":["Tiktok","Google","Cloudflare","In-House"],
+     *    "adjust":{"Tiktok":{"disabled":false,"domain":"soq.corporateoperations.sbs"}}}
+     */
+    private fun extractTiktokCdnBase(jsonObj: JSONObject?, rawJson: String): String {
+        // [1] Parse streamingConfig
+        try {
+            val scRaw = jsonObj?.optString("streamingConfig") ?: ""
+            if (scRaw.isNotBlank()) {
+                val sc = JSONObject(scRaw)
+                val domain = sc.optJSONObject("adjust")
+                    ?.optJSONObject("Tiktok")
+                    ?.optString("domain", "") ?: ""
+                if (domain.isNotBlank()) {
+                    val base = domain.trimEnd('/')
+                    return if (base.startsWith("http")) base else "https://$base"
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "streamingConfig parse gagal: ${e.message}")
+        }
 
-    /** Unescape JSON slash: "\/" → "/" */
+        // [2] Fallback: regex langsung pada rawJson
+        val m = Regex(""""Tiktok"\s*:\s*\{[^}]*"domain"\s*:\s*"([^"]+)"""")
+            .find(rawJson)?.groupValues?.get(1)
+        if (!m.isNullOrBlank()) {
+            val base = m.trimEnd('/')
+            return if (base.startsWith("http")) base else "https://$base"
+        }
+
+        // [3] Fallback: metric.cfDomain → "soq.{cfDomain}"
+        try {
+            val cfDomain = jsonObj?.optJSONObject("metric")
+                ?.optString("cfDomain", "") ?: ""
+            if (cfDomain.isNotBlank()) {
+                return "https://soq.$cfDomain"
+            }
+        } catch (e: Exception) { /* ignore */ }
+
+        // [4] Hardcode last resort
+        Log.w(TAG, "Semua parse CDN base gagal — pakai hardcode fallback.")
+        return "https://soq.corporateoperations.sbs"
+    }
+
+    /** Cek apakah host URL adalah raw IPv4 */
+    private fun isRawIp(url: String): Boolean {
+        val host = Regex("""https?://([^/]+)""").find(url)
+            ?.groupValues?.get(1)?.substringBefore(":") ?: return false
+        return host.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"""))
+    }
+
     private fun String.unescapeJsonSlashes() = replace("\\/", "/")
 
-    /** Hex string → ByteArray */
     private fun String.decodeHex(): ByteArray {
-        check(length % 2 == 0) { "Hex length ganjil: $length" }
+        check(length % 2 == 0) { "Hex ganjil: $length" }
         return ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
 
-    /** AES-128-CBC / PKCS5Padding decrypt */
     private fun decryptAesCbc(hex: String, key: ByteArray, iv: ByteArray): String {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
