@@ -1,5 +1,6 @@
 package com.KlikXXI
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
@@ -12,11 +13,13 @@ class KlikXXI : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    private val TAG = "KlikXXI"
+
     override val mainPage = mainPageOf(
-        // ── Beranda ──────────────────────────────────────────────────────
+        // ── Beranda ──────────────────────────────────────────────────────────
         "$mainUrl/?s=&search=advanced&post_type=movie&index=&orderby=&genre=&movieyear=&country=&quality=" to "Latest Movies",
         "$mainUrl/tv"                          to "TV Series",
-        // ── Kategori ─────────────────────────────────────────────────────
+        // ── Kategori ─────────────────────────────────────────────────────────
         "$mainUrl/category/action/"            to "Action",
         "$mainUrl/category/adventure/"         to "Adventure",
         "$mainUrl/category/crime/"             to "Crime",
@@ -29,11 +32,9 @@ class KlikXXI : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = when {
-            // URL dengan query string (?s=...) → sisipkan /page/N/ sebelum tanda ?
             request.data.contains("?") ->
                 if (page <= 1) request.data
                 else request.data.replace("/?", "/page/$page/?")
-            // URL bersih (kategori, /tv, dsb.) → tambahkan /page/N/
             else ->
                 if (page <= 1) request.data
                 else "${request.data.removeSuffix("/")}/page/$page/"
@@ -68,7 +69,6 @@ class KlikXXI : MainAPI() {
         val year        = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
         val description = document.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
 
-        // Rating: ambil nilai dari .gmr-rating-item (format "8.5" atau "8,5")
         val ratingValue = document.selectFirst(".gmr-rating-item")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
 
@@ -209,7 +209,7 @@ class KlikXXI : MainAPI() {
                         ) {
                             this.referer = referer
                             this.quality = if (pendingHeight > 0) pendingHeight
-                                    else Qualities.Unknown.value
+                            else Qualities.Unknown.value
                         }
                     )
                     pendingBandwidth = -1
@@ -225,10 +225,18 @@ class KlikXXI : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d(TAG, "loadLinks dipanggil untuk: $data")
+
         val document = app.get(data).document
         val ajaxId   = document
             .selectFirst(".gmr-server-wrap, #muvipro_player_content_id")
-            ?.attr("data-id") ?: return false
+            ?.attr("data-id")
+
+        if (ajaxId == null) {
+            Log.e(TAG, "❌ loadLinks: data-id tidak ditemukan di halaman $data")
+            return false
+        }
+        Log.d(TAG, "✅ loadLinks: ajaxId = $ajaxId")
 
         val servers = document
             .select("ul.muvipro-player-tabs li a, .gmr-player-nav li a")
@@ -237,65 +245,102 @@ class KlikXXI : MainAPI() {
                 if (href.startsWith("#p")) href.replace("#p", "") else null
             }
 
-        servers.distinct().forEach { serverNum ->
-            val response = app.post(
-                url     = "$mainUrl/wp-admin/admin-ajax.php",
-                data    = mapOf(
-                    "action"  to "muvipro_player_content",
-                    "tab"     to "p$serverNum",
-                    "post_id" to ajaxId
-                ),
-                referer = data,
-                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-            ).text
+        Log.d(TAG, "✅ loadLinks: ${servers.size} server ditemukan → $servers")
 
+        if (servers.isEmpty()) {
+            Log.e(TAG, "❌ loadLinks: Tidak ada server/tab ditemukan di halaman $data")
+            return false
+        }
+
+        servers.distinct().forEach { serverNum ->
+            Log.d(TAG, "→ Memproses server tab: p$serverNum")
+
+            val response = try {
+                app.post(
+                    url     = "$mainUrl/wp-admin/admin-ajax.php",
+                    data    = mapOf(
+                        "action"  to "muvipro_player_content",
+                        "tab"     to "p$serverNum",
+                        "post_id" to ajaxId
+                    ),
+                    referer = data,
+                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                ).text
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ loadLinks: AJAX gagal untuk server p$serverNum. ${e.message}")
+                return@forEach
+            }
+
+            Log.d(TAG, "   AJAX response (150 char): ${response.take(150)}")
+
+            // Ekstrak src iframe — coba kutip tunggal dulu, lalu kutip ganda
             val iframeUrl =
                 Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
                     ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
 
-            iframeUrl?.let { raw ->
-                val finalUrl = if (raw.startsWith("//")) "https:$raw" else raw
+            if (iframeUrl == null) {
+                Log.w(TAG, "   ⚠️  Tidak ada iframe src di respons server p$serverNum")
+                return@forEach
+            }
 
-                when {
-                    // ── PERBAIKAN: Routing ke Strp2p dengan parameter & header yang benar ──
-                    finalUrl.contains("strp2p.site", ignoreCase = true) -> {
-                        Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
-                    }
+            val finalUrl = if (iframeUrl.startsWith("//")) "https:$iframeUrl" else iframeUrl
+            Log.d(TAG, "   iframe URL: $finalUrl")
 
-                    // ── HGCloud (logika asli tidak diubah) ─────────────────────────────────
-                    finalUrl.contains("hgcloud.to", ignoreCase = true) -> {
-                        try {
-                            val fileId        = finalUrl.substringAfter("/e/")
-                            val playerPageUrl = "https://masukestin.com/e/$fileId"
+            when {
+                // ── STRP2P ─────────────────────────────────────────────────────────
+                // PERBAIKAN UTAMA:
+                // Sebelumnya: Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
+                // Masalah   : getUrl adalah suspend fun. Memanggil dari dalam forEach lambda
+                //             non-suspend (forEach bukan suspend-aware) bisa menyebabkan
+                //             Strp2p tidak pernah dieksekusi atau di-skip tanpa error.
+                // Solusi    : Gunakan getSafeUrl() — wrapper suspend yang sudah ada di
+                //             base class ExtractorApi, dirancang untuk dipanggil dengan aman
+                //             dari konteks suspend (loadLinks sendiri adalah suspend fun).
+                finalUrl.contains("strp2p.site", ignoreCase = true) -> {
+                    Log.d(TAG, "   → Routing ke Strp2p extractor")
+                    // getSafeUrl menangani try-catch dan log error internal jika ada
+                    Strp2p().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                    Log.d(TAG, "   ← Strp2p selesai")
+                }
 
-                            val playerPageHtml = app.get(
-                                url     = playerPageUrl,
-                                headers = mapOf("Referer" to "https://hgcloud.to/")
-                            ).text
+                // ── HGCLOUD ────────────────────────────────────────────────────────
+                finalUrl.contains("hgcloud.to", ignoreCase = true) -> {
+                    Log.d(TAG, "   → Routing ke HGCloud extractor")
+                    try {
+                        val fileId        = finalUrl.substringAfter("/e/")
+                        val playerPageUrl = "https://masukestin.com/e/$fileId"
 
-                            val unpackedJs    = getAndUnpack(playerPageHtml)
-                            val masterUrl     = extractHlsUrl(unpackedJs) ?: run {
-                                loadExtractor(finalUrl, data, subtitleCallback, callback)
-                                return@let
-                            }
-                            val qualityLabels = extractQualityLabels(unpackedJs)
+                        val playerPageHtml = app.get(
+                            url     = playerPageUrl,
+                            headers = mapOf("Referer" to "https://hgcloud.to/")
+                        ).text
 
-                            parseMasterM3u8(
-                                masterUrl     = masterUrl,
-                                referer       = playerPageUrl,
-                                sourceName    = this.name,
-                                qualityLabels = qualityLabels,
-                                callback      = callback
-                            )
-                        } catch (e: Exception) {
+                        val unpackedJs    = getAndUnpack(playerPageHtml)
+                        val masterUrl     = extractHlsUrl(unpackedJs) ?: run {
+                            Log.w(TAG, "   ⚠️  HGCloud: HLS URL tidak ditemukan, fallback ke loadExtractor")
                             loadExtractor(finalUrl, data, subtitleCallback, callback)
+                            return@forEach
                         }
-                    }
+                        val qualityLabels = extractQualityLabels(unpackedJs)
+                        Log.d(TAG, "   HGCloud masterUrl: $masterUrl")
 
-                    // ── Server lain → fallback ke loadExtractor bawaan ─────────────────────
-                    else -> {
+                        parseMasterM3u8(
+                            masterUrl     = masterUrl,
+                            referer       = playerPageUrl,
+                            sourceName    = this.name,
+                            qualityLabels = qualityLabels,
+                            callback      = callback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "   ❌ HGCloud error: ${e.message}, fallback ke loadExtractor")
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
+                }
+
+                // ── SERVER LAIN → loadExtractor bawaan framework ──────────────────
+                else -> {
+                    Log.d(TAG, "   → Fallback loadExtractor untuk: $finalUrl")
+                    loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
         }
@@ -315,13 +360,11 @@ class KlikXXI : MainAPI() {
         }
         val posterUrl = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
 
-        // ── Quality label (HD / CAM / BluRay / WebRip dsb.) ──────────────
         val qualityStr = this
             .selectFirst(".gmr-quality-item, .quality, .qualitylabel, span.quality")
             ?.text()?.trim()
         val searchQuality = getQualityFromString(qualityStr)
 
-        // ── Score / Rating ────────────────────────────────────────────────
         val ratingValue = this
             .selectFirst(".gmr-rating-item, .rating, .star-rating")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
