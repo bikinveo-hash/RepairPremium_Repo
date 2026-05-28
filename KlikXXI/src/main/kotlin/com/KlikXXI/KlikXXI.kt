@@ -7,27 +7,28 @@ import org.jsoup.nodes.Element
 
 class KlikXXI : MainAPI() {
     override var mainUrl = "https://klikxxi.me"
-    override var name = "KlikXXI"
-    override val hasMainPage = true
-    override var lang = "id"
+    override var name    = "KlikXXI"
+    override val hasMainPage       = true
+    override var lang              = "id"
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val supportedTypes    = setOf(TvType.Movie, TvType.TvSeries)
 
     private val TAG = "KlikXXI"
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  MAIN PAGE
+    // ─────────────────────────────────────────────────────────────────────────
     override val mainPage = mainPageOf(
-        // ── Beranda ──────────────────────────────────────────────────────────
         "$mainUrl/?s=&search=advanced&post_type=movie&index=&orderby=&genre=&movieyear=&country=&quality=" to "Latest Movies",
-        "$mainUrl/tv"                          to "TV Series",
-        // ── Kategori ─────────────────────────────────────────────────────────
-        "$mainUrl/category/action/"            to "Action",
-        "$mainUrl/category/adventure/"         to "Adventure",
-        "$mainUrl/category/crime/"             to "Crime",
-        "$mainUrl/category/drama/"             to "Drama",
-        "$mainUrl/category/korea/"             to "Korea",
-        "$mainUrl/category/fantasy/"           to "Fantasy",
-        "$mainUrl/category/horror/"            to "Horror",
-        "$mainUrl/category/india-series/"      to "India Series",
+        "$mainUrl/tv"                     to "TV Series",
+        "$mainUrl/category/action/"       to "Action",
+        "$mainUrl/category/adventure/"    to "Adventure",
+        "$mainUrl/category/crime/"        to "Crime",
+        "$mainUrl/category/drama/"        to "Drama",
+        "$mainUrl/category/korea/"        to "Korea",
+        "$mainUrl/category/fantasy/"      to "Fantasy",
+        "$mainUrl/category/horror/"       to "Horror",
+        "$mainUrl/category/india-series/" to "India Series",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -39,69 +40,59 @@ class KlikXXI : MainAPI() {
                 if (page <= 1) request.data
                 else "${request.data.removeSuffix("/")}/page/$page/"
         }
-
-        val document = app.get(url).document
-        val items = document
+        val items = app.get(url).document
             .select("article.item, article.item-infinite, div.gmr-item-modulepost")
             .mapNotNull { it.toSearchResult() }
-
         return newHomePageResponse(request.name, items)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
-        return document
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SEARCH
+    // ─────────────────────────────────────────────────────────────────────────
+    override suspend fun search(query: String): List<SearchResponse> =
+        app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
             .select("article.item, article.item-infinite")
             .mapNotNull { it.toSearchResult() }
-    }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  LOAD (detail halaman film/series)
+    // ─────────────────────────────────────────────────────────────────────────
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-        val title = document.selectFirst("h1.entry-title")?.text()
+        val doc   = app.get(url).document
+        val title = doc.selectFirst("h1.entry-title")?.text()
             ?.replace("Streaming Film", "")?.trim() ?: ""
 
-        val posterHtml = document
+        val posterRaw = doc
             .selectFirst(".gmr-movie-data img, .content-thumbnail img, figure img")
             ?.let { it.attr("data-lazy-src").ifEmpty { it.attr("src") } }
-        val poster = fixUrlNull(posterHtml)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
+        val poster = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
 
-        val tags        = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
-        val year        = document.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
-        val description = document.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
-
-        val ratingValue = document.selectFirst(".gmr-rating-item")
+        val tags    = doc.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
+        val year    = doc.selectFirst(".gmr-moviedata:contains(Year) a")?.text()?.toIntOrNull()
+        val plot    = doc.selectFirst(".entry-content-single p, .gmr-movie-content")?.text()
+        val rating  = doc.selectFirst(".gmr-rating-item")
             ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
 
-        val episodeElements = document.select(".gmr-season-episodes a.button-shadow")
-
-        return if (episodeElements.isNotEmpty()) {
-            val episodes = episodeElements.mapNotNull {
-                val epHref = it.attr("href")
+        val epElements = doc.select(".gmr-season-episodes a.button-shadow")
+        return if (epElements.isNotEmpty()) {
+            val episodes = epElements.mapNotNull {
+                val href   = it.attr("href")
                 val epName = it.text()
                 if (epName.contains("Batch", true)) return@mapNotNull null
-                val sMatch = Regex("""S(\d+)""").find(epName)
-                val eMatch = Regex("""Eps(\d+)""").find(epName)
-                newEpisode(epHref) {
+                newEpisode(href) {
                     this.name    = epName
-                    this.season  = sMatch?.groupValues?.get(1)?.toIntOrNull()
-                    this.episode = eMatch?.groupValues?.get(1)?.toIntOrNull()
+                    this.season  = Regex("""S(\d+)""").find(epName)?.groupValues?.get(1)?.toIntOrNull()
+                    this.episode = Regex("""Eps(\d+)""").find(epName)?.groupValues?.get(1)?.toIntOrNull()
                 }
             }.reversed()
-
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
-                this.year      = year
-                this.plot      = description
-                this.tags      = tags
-                this.score     = Score.from10(ratingValue)
+                this.posterUrl = poster; this.year = year; this.plot = plot
+                this.tags = tags; this.score = Score.from10(rating)
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
-                this.year      = year
-                this.plot      = description
-                this.tags      = tags
-                this.score     = Score.from10(ratingValue)
+                this.posterUrl = poster; this.year = year; this.plot = plot
+                this.tags = tags; this.score = Score.from10(rating)
             }
         }
     }
@@ -109,153 +100,42 @@ class KlikXXI : MainAPI() {
     // ─────────────────────────────────────────────────────────────────────────
     //  LOAD LINKS
     // ─────────────────────────────────────────────────────────────────────────
-
-    private fun extractHlsUrl(unpackedJs: String): String? {
-        listOf("hls4", "hls3", "hls2").forEach { key ->
-            val match = Regex(""""$key"\s*:\s*"([^"]+)"""").find(unpackedJs)
-                ?: Regex("""'$key'\s*:\s*'([^']+)'""").find(unpackedJs)
-            val url = match?.groupValues?.get(1) ?: return@forEach
-            if (url.isBlank()) return@forEach
-            return when {
-                url.startsWith("http") -> url
-                url.startsWith("//")   -> "https:$url"
-                url.startsWith("/")    -> "https://masukestin.com$url"
-                else                   -> "https://masukestin.com/$url"
-            }
-        }
-        return null
-    }
-
-    private fun extractQualityLabels(unpackedJs: String): Map<Int, Int> {
-        val result = mutableMapOf<Int, Int>()
-        val block = Regex("""['"]qualityLabels['"]\s*:\s*\{([^}]+)\}""")
-            .find(unpackedJs)?.groupValues?.get(1) ?: return result
-        Regex(""""(\d+)"\s*:\s*"(\d+)p"""").findAll(block).forEach { m ->
-            val bw     = m.groupValues[1].toIntOrNull() ?: return@forEach
-            val height = m.groupValues[2].toIntOrNull() ?: return@forEach
-            result[bw] = height
-        }
-        return result
-    }
-
-    private suspend fun parseMasterM3u8(
-        masterUrl: String,
-        referer: String,
-        sourceName: String,
-        qualityLabels: Map<Int, Int>,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val content = try {
-            app.get(masterUrl, headers = mapOf("Referer" to referer)).text
-        } catch (e: Exception) {
-            callback.invoke(
-                newExtractorLink(
-                    source = sourceName,
-                    name   = "HGCloud",
-                    url    = masterUrl,
-                    type   = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = referer
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            return
-        }
-
-        if (!content.contains("#EXT-X-STREAM-INF")) {
-            callback.invoke(
-                newExtractorLink(
-                    source = sourceName,
-                    name   = "HGCloud",
-                    url    = masterUrl,
-                    type   = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = referer
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            return
-        }
-
-        val baseUrl          = masterUrl.substringBeforeLast("/")
-        var pendingBandwidth = -1
-        var pendingHeight    = -1
-
-        content.lines().forEach { line ->
-            when {
-                line.startsWith("#EXT-X-STREAM-INF") -> {
-                    val bwBps  = Regex("""BANDWIDTH=(\d+)""").find(line)
-                        ?.groupValues?.get(1)?.toIntOrNull() ?: -1
-                    val height = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
-                        ?.groupValues?.get(1)?.toIntOrNull() ?: run {
-                        if (bwBps > 0) qualityLabels[bwBps / 1000] ?: -1 else -1
-                    }
-                    pendingBandwidth = bwBps
-                    pendingHeight    = height
-                }
-                !line.startsWith("#") && line.isNotBlank() && pendingHeight != -1 -> {
-                    val variantUrl = when {
-                        line.trim().startsWith("http") -> line.trim()
-                        line.trim().startsWith("/")    -> "https://masukestin.com${line.trim()}"
-                        else                           -> "$baseUrl/${line.trim()}"
-                    }
-                    val label = if (pendingHeight > 0) "${pendingHeight}p" else "HGCloud"
-                    callback.invoke(
-                        newExtractorLink(
-                            source = sourceName,
-                            name   = "HGCloud $label",
-                            url    = variantUrl,
-                            type   = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = referer
-                            this.quality = if (pendingHeight > 0) pendingHeight
-                            else Qualities.Unknown.value
-                        }
-                    )
-                    pendingBandwidth = -1
-                    pendingHeight    = -1
-                }
-            }
-        }
-    }
-
     override suspend fun loadLinks(
         data: String,
         isDataJob: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "loadLinks dipanggil untuk: $data")
+        Log.d(TAG, "══ loadLinks ══ $data")
 
-        val document = app.get(data).document
-        val ajaxId   = document
-            .selectFirst(".gmr-server-wrap, #muvipro_player_content_id")
+        val doc    = app.get(data).document
+        val ajaxId = doc.selectFirst(".gmr-server-wrap, #muvipro_player_content_id")
             ?.attr("data-id")
 
-        if (ajaxId == null) {
-            Log.e(TAG, "❌ loadLinks: data-id tidak ditemukan di halaman $data")
+        if (ajaxId.isNullOrBlank()) {
+            Log.e(TAG, "❌ data-id tidak ditemukan di halaman.")
             return false
         }
-        Log.d(TAG, "✅ loadLinks: ajaxId = $ajaxId")
+        Log.d(TAG, "✅ data-id: $ajaxId")
 
-        val servers = document
+        val servers = doc
             .select("ul.muvipro-player-tabs li a, .gmr-player-nav li a")
-            .mapNotNull {
-                val href = it.attr("href")
-                if (href.startsWith("#p")) href.replace("#p", "") else null
-            }
+            .mapNotNull { a ->
+                val href = a.attr("href")
+                if (href.startsWith("#p")) href.removePrefix("#p") else null
+            }.distinct()
 
-        Log.d(TAG, "✅ loadLinks: ${servers.size} server ditemukan → $servers")
+        Log.d(TAG, "✅ ${servers.size} server tab ditemukan: $servers")
 
         if (servers.isEmpty()) {
-            Log.e(TAG, "❌ loadLinks: Tidak ada server/tab ditemukan di halaman $data")
+            Log.e(TAG, "❌ Tidak ada server tab.")
             return false
         }
 
-        servers.distinct().forEach { serverNum ->
-            Log.d(TAG, "→ Memproses server tab: p$serverNum")
+        servers.forEach { serverNum ->
+            Log.d(TAG, "→ Tab p$serverNum")
 
-            val response = try {
+            val ajaxResponse = try {
                 app.post(
                     url     = "$mainUrl/wp-admin/admin-ajax.php",
                     data    = mapOf(
@@ -267,80 +147,68 @@ class KlikXXI : MainAPI() {
                     headers = mapOf("X-Requested-With" to "XMLHttpRequest")
                 ).text
             } catch (e: Exception) {
-                Log.e(TAG, "❌ loadLinks: AJAX gagal untuk server p$serverNum. ${e.message}")
+                Log.e(TAG, "❌ AJAX gagal p$serverNum: ${e.message}")
                 return@forEach
             }
-
-            Log.d(TAG, "   AJAX response (150 char): ${response.take(150)}")
 
             // Ekstrak src iframe — coba kutip tunggal dulu, lalu kutip ganda
-            val iframeUrl =
-                Regex("""(?i)src='([^"']+)""").find(response)?.groupValues?.get(1)
-                    ?: Regex("""(?i)src="([^"']+)""").find(response)?.groupValues?.get(1)
+            val rawSrc =
+                Regex("""(?i)src='([^"']+)""").find(ajaxResponse)?.groupValues?.get(1)
+                    ?: Regex("""(?i)src="([^"']+)""").find(ajaxResponse)?.groupValues?.get(1)
 
-            if (iframeUrl == null) {
-                Log.w(TAG, "   ⚠️  Tidak ada iframe src di respons server p$serverNum")
+            if (rawSrc == null) {
+                Log.w(TAG, "⚠️  Tidak ada iframe src di p$serverNum")
                 return@forEach
             }
 
-            val finalUrl = if (iframeUrl.startsWith("//")) "https:$iframeUrl" else iframeUrl
-            Log.d(TAG, "   iframe URL: $finalUrl")
+            val iframeUrl = if (rawSrc.startsWith("//")) "https:$rawSrc" else rawSrc
+            Log.d(TAG, "   iframe: $iframeUrl")
 
             when {
-                // ── STRP2P ─────────────────────────────────────────────────────────
-                // PERBAIKAN UTAMA:
-                // Sebelumnya: Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
-                // Masalah   : getUrl adalah suspend fun. Memanggil dari dalam forEach lambda
-                //             non-suspend (forEach bukan suspend-aware) bisa menyebabkan
-                //             Strp2p tidak pernah dieksekusi atau di-skip tanpa error.
-                // Solusi    : Gunakan getSafeUrl() — wrapper suspend yang sudah ada di
-                //             base class ExtractorApi, dirancang untuk dipanggil dengan aman
-                //             dari konteks suspend (loadLinks sendiri adalah suspend fun).
-                finalUrl.contains("strp2p.site", ignoreCase = true) -> {
-                    Log.d(TAG, "   → Routing ke Strp2p extractor")
-                    // getSafeUrl menangani try-catch dan log error internal jika ada
-                    Strp2p().getSafeUrl(finalUrl, data, subtitleCallback, callback)
-                    Log.d(TAG, "   ← Strp2p selesai")
+                // ── STRP2P + UPNS.ONE ───────────────────────────────────────
+                // Menangkap semua domain alias Strp2p yang dikonfirmasi:
+                //   • klikxxi.strp2p.site  (domain utama)
+                //   • klikxxi.upns.one     (domain alias, API identik)
+                // Format URL yang didukung Strp2p.kt:
+                //   • /e/{videoId}   (format lama)
+                //   • /#{videoId}    (format baru — hash fragment)
+                //
+                // WAJIB pakai getSafeUrl(), bukan getUrl() langsung!
+                // getSafeUrl = suspend wrapper dari ExtractorApi base class,
+                // aman dipanggil dari dalam forEach di konteks suspend ini.
+                iframeUrl.contains("strp2p.site", ignoreCase = true)
+                        || iframeUrl.contains("upns.one", ignoreCase = true) -> {
+                    Log.d(TAG, "   → Strp2p extractor")
+                    Strp2p().getSafeUrl(iframeUrl, data, subtitleCallback, callback)
+                    Log.d(TAG, "   ← Strp2p done")
                 }
 
-                // ── HGCLOUD ────────────────────────────────────────────────────────
-                finalUrl.contains("hgcloud.to", ignoreCase = true) -> {
-                    Log.d(TAG, "   → Routing ke HGCloud extractor")
+                // ── HGCLOUD ─────────────────────────────────────────────────
+                iframeUrl.contains("hgcloud.to", ignoreCase = true) -> {
+                    Log.d(TAG, "   → HGCloud extractor")
                     try {
-                        val fileId        = finalUrl.substringAfter("/e/")
-                        val playerPageUrl = "https://masukestin.com/e/$fileId"
-
-                        val playerPageHtml = app.get(
-                            url     = playerPageUrl,
-                            headers = mapOf("Referer" to "https://hgcloud.to/")
-                        ).text
-
-                        val unpackedJs    = getAndUnpack(playerPageHtml)
-                        val masterUrl     = extractHlsUrl(unpackedJs) ?: run {
-                            Log.w(TAG, "   ⚠️  HGCloud: HLS URL tidak ditemukan, fallback ke loadExtractor")
-                            loadExtractor(finalUrl, data, subtitleCallback, callback)
+                        val fileId     = iframeUrl.substringAfter("/e/")
+                        val playerUrl  = "https://masukestin.com/e/$fileId"
+                        val html       = app.get(playerUrl,
+                            headers = mapOf("Referer" to "https://hgcloud.to/")).text
+                        val unpacked   = getAndUnpack(html)
+                        val masterUrl  = extractHlsUrl(unpacked) ?: run {
+                            Log.w(TAG, "   HGCloud: HLS URL tidak ada, fallback")
+                            loadExtractor(iframeUrl, data, subtitleCallback, callback)
                             return@forEach
                         }
-                        val qualityLabels = extractQualityLabels(unpackedJs)
-                        Log.d(TAG, "   HGCloud masterUrl: $masterUrl")
-
-                        parseMasterM3u8(
-                            masterUrl     = masterUrl,
-                            referer       = playerPageUrl,
-                            sourceName    = this.name,
-                            qualityLabels = qualityLabels,
-                            callback      = callback
-                        )
+                        parseMasterM3u8(masterUrl, playerUrl, name,
+                            extractQualityLabels(unpacked), callback)
                     } catch (e: Exception) {
-                        Log.e(TAG, "   ❌ HGCloud error: ${e.message}, fallback ke loadExtractor")
-                        loadExtractor(finalUrl, data, subtitleCallback, callback)
+                        Log.e(TAG, "   HGCloud error: ${e.message}, fallback")
+                        loadExtractor(iframeUrl, data, subtitleCallback, callback)
                     }
                 }
 
-                // ── SERVER LAIN → loadExtractor bawaan framework ──────────────────
+                // ── SERVER LAIN → fallback framework ────────────────────────
                 else -> {
-                    Log.d(TAG, "   → Fallback loadExtractor untuk: $finalUrl")
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+                    Log.d(TAG, "   → loadExtractor fallback")
+                    loadExtractor(iframeUrl, data, subtitleCallback, callback)
                 }
             }
         }
@@ -348,42 +216,105 @@ class KlikXXI : MainAPI() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  HELPER — toSearchResult()
+    //  HELPERS — HGCloud M3U8 parsing
+    // ─────────────────────────────────────────────────────────────────────────
+    private fun extractHlsUrl(js: String): String? {
+        listOf("hls4", "hls3", "hls2").forEach { key ->
+            val url = (Regex(""""$key"\s*:\s*"([^"]+)"""").find(js)
+                ?: Regex("""'$key'\s*:\s*'([^']+)'""").find(js))
+                ?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: return@forEach
+            return when {
+                url.startsWith("http") -> url
+                url.startsWith("//")   -> "https:$url"
+                url.startsWith("/")    -> "https://masukestin.com$url"
+                else                   -> "https://masukestin.com/$url"
+            }
+        }
+        return null
+    }
+
+    private fun extractQualityLabels(js: String): Map<Int, Int> {
+        val result = mutableMapOf<Int, Int>()
+        val block  = Regex("""['"]qualityLabels['"]\s*:\s*\{([^}]+)\}""")
+            .find(js)?.groupValues?.get(1) ?: return result
+        Regex(""""(\d+)"\s*:\s*"(\d+)p"""").findAll(block).forEach { m ->
+            result[m.groupValues[1].toIntOrNull() ?: return@forEach] =
+                m.groupValues[2].toIntOrNull() ?: return@forEach
+        }
+        return result
+    }
+
+    private suspend fun parseMasterM3u8(
+        masterUrl: String, referer: String, sourceName: String,
+        qualityLabels: Map<Int, Int>, callback: (ExtractorLink) -> Unit
+    ) {
+        val content = try {
+            app.get(masterUrl, headers = mapOf("Referer" to referer)).text
+        } catch (e: Exception) {
+            callback(newExtractorLink(sourceName, "HGCloud", masterUrl, ExtractorLinkType.M3U8) {
+                this.referer = referer; this.quality = Qualities.Unknown.value })
+            return
+        }
+
+        if (!content.contains("#EXT-X-STREAM-INF")) {
+            callback(newExtractorLink(sourceName, "HGCloud", masterUrl, ExtractorLinkType.M3U8) {
+                this.referer = referer; this.quality = Qualities.Unknown.value })
+            return
+        }
+
+        val baseUrl = masterUrl.substringBeforeLast("/")
+        var pendingH = -1
+
+        content.lines().forEach { line ->
+            when {
+                line.startsWith("#EXT-X-STREAM-INF") -> {
+                    val bw = Regex("""BANDWIDTH=(\d+)""").find(line)
+                        ?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                    pendingH = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
+                        ?.groupValues?.get(1)?.toIntOrNull()
+                        ?: (if (bw > 0) qualityLabels[bw / 1000] ?: -1 else -1)
+                }
+                !line.startsWith("#") && line.isNotBlank() && pendingH != -1 -> {
+                    val variantUrl = when {
+                        line.trim().startsWith("http") -> line.trim()
+                        line.trim().startsWith("/")    -> "https://masukestin.com${line.trim()}"
+                        else                           -> "$baseUrl/${line.trim()}"
+                    }
+                    val label = if (pendingH > 0) "${pendingH}p" else "HGCloud"
+                    callback(newExtractorLink(sourceName, "HGCloud $label", variantUrl,
+                        ExtractorLinkType.M3U8) {
+                        this.referer = referer
+                        this.quality = if (pendingH > 0) pendingH else Qualities.Unknown.value
+                    })
+                    pendingH = -1
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  HELPER — SearchResponse builder
     // ─────────────────────────────────────────────────────────────────────────
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleLink = this.selectFirst(".entry-title a") ?: return null
-        val title     = titleLink.text()
-        val href      = titleLink.attr("href")
-
-        val posterRaw = this.selectFirst("img")?.let {
-            it.attr("data-lazy-src").ifEmpty { it.attr("src") }
-        }
-        val posterUrl = fixUrlNull(posterRaw)?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
-
-        val qualityStr = this
-            .selectFirst(".gmr-quality-item, .quality, .qualitylabel, span.quality")
-            ?.text()?.trim()
-        val searchQuality = getQualityFromString(qualityStr)
-
-        val ratingValue = this
-            .selectFirst(".gmr-rating-item, .rating, .star-rating")
-            ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull()
-        val score = Score.from10(ratingValue)
-
-        val isTvSeries = this.selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
-
-        return if (isTvSeries) {
+        val a     = selectFirst(".entry-title a") ?: return null
+        val title = a.text()
+        val href  = a.attr("href")
+        val poster = fixUrlNull(
+            selectFirst("img")?.let {
+                it.attr("data-lazy-src").ifEmpty { it.attr("src") }
+            }
+        )?.replace(Regex("-[0-9]+x[0-9]+(?=\\.)"), "")
+        val quality = getQualityFromString(
+            selectFirst(".gmr-quality-item, .quality, .qualitylabel, span.quality")?.text())
+        val score = Score.from10(
+            selectFirst(".gmr-rating-item, .rating, .star-rating")
+                ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull())
+        val isTv = selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
+        return if (isTv)
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
-                this.quality   = searchQuality
-                this.score     = score
-            }
-        } else {
+                this.posterUrl = poster; this.quality = quality; this.score = score }
+        else
             newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = posterUrl
-                this.quality   = searchQuality
-                this.score     = score
-            }
-        }
+                this.posterUrl = poster; this.quality = quality; this.score = score }
     }
 }
