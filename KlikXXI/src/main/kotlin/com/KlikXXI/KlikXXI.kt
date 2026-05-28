@@ -128,7 +128,7 @@ class KlikXXI : MainAPI() {
 
     private fun extractQualityLabels(unpackedJs: String): Map<Int, Int> {
         val result = mutableMapOf<Int, Int>()
-        val block = Regex("""['"']qualityLabels['"']\s*:\s*\{([^}]+)\}""")
+        val block = Regex("""['"]qualityLabels['"]\s*:\s*\{([^}]+)\}""")
             .find(unpackedJs)?.groupValues?.get(1) ?: return result
         Regex(""""(\d+)"\s*:\s*"(\d+)p"""").findAll(block).forEach { m ->
             val bw     = m.groupValues[1].toIntOrNull() ?: return@forEach
@@ -256,38 +256,46 @@ class KlikXXI : MainAPI() {
             iframeUrl?.let { raw ->
                 val finalUrl = if (raw.startsWith("//")) "https:$raw" else raw
 
-                // --- MODIFIKASI STRp2p DITAMBAHKAN DI SINI ---
-                if (finalUrl.contains("klikxxi.strp2p.site")) {
-                    Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
-                } else if (finalUrl.contains("hgcloud.to")) {
-                    try {
-                        val fileId        = finalUrl.substringAfter("/e/")
-                        val playerPageUrl = "https://masukestin.com/e/$fileId"
+                when {
+                    // ── PERBAIKAN: Routing ke Strp2p dengan parameter & header yang benar ──
+                    finalUrl.contains("strp2p.site", ignoreCase = true) -> {
+                        Strp2p().getUrl(finalUrl, data, subtitleCallback, callback)
+                    }
 
-                        val playerPageHtml = app.get(
-                            url     = playerPageUrl,
-                            headers = mapOf("Referer" to "https://hgcloud.to/")
-                        ).text
+                    // ── HGCloud (logika asli tidak diubah) ─────────────────────────────────
+                    finalUrl.contains("hgcloud.to", ignoreCase = true) -> {
+                        try {
+                            val fileId        = finalUrl.substringAfter("/e/")
+                            val playerPageUrl = "https://masukestin.com/e/$fileId"
 
-                        val unpackedJs    = getAndUnpack(playerPageHtml)
-                        val masterUrl     = extractHlsUrl(unpackedJs) ?: run {
+                            val playerPageHtml = app.get(
+                                url     = playerPageUrl,
+                                headers = mapOf("Referer" to "https://hgcloud.to/")
+                            ).text
+
+                            val unpackedJs    = getAndUnpack(playerPageHtml)
+                            val masterUrl     = extractHlsUrl(unpackedJs) ?: run {
+                                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                                return@let
+                            }
+                            val qualityLabels = extractQualityLabels(unpackedJs)
+
+                            parseMasterM3u8(
+                                masterUrl     = masterUrl,
+                                referer       = playerPageUrl,
+                                sourceName    = this.name,
+                                qualityLabels = qualityLabels,
+                                callback      = callback
+                            )
+                        } catch (e: Exception) {
                             loadExtractor(finalUrl, data, subtitleCallback, callback)
-                            return@let
                         }
-                        val qualityLabels = extractQualityLabels(unpackedJs)
+                    }
 
-                        parseMasterM3u8(
-                            masterUrl     = masterUrl,
-                            referer       = playerPageUrl,
-                            sourceName    = this.name,
-                            qualityLabels = qualityLabels,
-                            callback      = callback
-                        )
-                    } catch (e: Exception) {
+                    // ── Server lain → fallback ke loadExtractor bawaan ─────────────────────
+                    else -> {
                         loadExtractor(finalUrl, data, subtitleCallback, callback)
                     }
-                } else {
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             }
         }
