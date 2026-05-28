@@ -7,7 +7,10 @@ import android.content.Context
 @CloudstreamPlugin
 class KlikXXIPlugin : Plugin() {
     override fun load(context: Context) {
-        // Registrasi provider utama kita
+        // Mendaftarkan MainAPI KlikXXI
         registerMainAPI(KlikXXI())
+        
+        // Mendaftarkan Extractor Strp2p yang baru kita buat
+        registerExtractorAPI(Strp2p())
     }
 }
