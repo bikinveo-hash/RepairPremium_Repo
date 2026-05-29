@@ -85,3 +85,31 @@ data class Adimoviebox2Caption(
     @JsonProperty("lanName") val lanName: String? = null,
     @JsonProperty("lan") val lan: String? = null
 )
+
+// ================== KISSKH DATA CLASSES ==================
+data class KisskhMedia(
+    @JsonProperty("id") val id: Int? = null,
+    @JsonProperty("title") val title: String? = null
+)
+data class KisskhMediaDetail(
+    @JsonProperty("releaseDate") val releaseDate: String? = null,
+    @JsonProperty("type") val type: String? = null,
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("episodes") val episodes: ArrayList<KisskhEpisodes>? = arrayListOf()
+)
+data class KisskhEpisodes(
+    @JsonProperty("id") val id: Int? = null,
+    @JsonProperty("number") val number: Double? = null
+)
+data class KisskhSources(
+    @JsonProperty("Video") val video: String? = null,
+    @JsonProperty("ThirdParty") val thirdParty: String? = null
+)
+data class KisskhKey(
+    @JsonProperty("key") val key: String? = null
+)
+data class KisskhSubtitle(
+    @JsonProperty("src") val src: String? = null,
+    @JsonProperty("label") val label: String? = null
+)
+
