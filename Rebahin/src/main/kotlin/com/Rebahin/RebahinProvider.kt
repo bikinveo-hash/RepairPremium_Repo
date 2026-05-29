@@ -2,7 +2,7 @@ package com.Rebahin
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.* // Import penting agar Qualities, ExtractorLinkType, loadExtractor, dll terbaca
+import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -41,6 +41,7 @@ class RebahinProvider : MainAPI() {
         val title = a.attr("title")
         val href = fixUrlNull(a.attr("href")) ?: return null
         
+        // Memprioritaskan data-original untuk mengatasi Lazy Loading
         val img = this.selectFirst("img.mli-thumb")
         val posterUrl = fixUrlNull(img?.attr("data-original")?.takeIf { it.isNotBlank() } ?: img?.attr("src"))
         
@@ -72,25 +73,29 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
+        // Prioritaskan mengambil judul dari tag meta agar tidak crash jika susunan h3 berubah
         val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
             ?: document.selectFirst("h3[itemprop=name]")?.text()
             ?: return null
         
+        // Menarik URL pemutar video sekaligus Latar Belakang (Banner)
         val mviCover = document.selectFirst("a.mvi-cover")
         val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
         val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
 
+        // Menarik Poster
         val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
             ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
 
-        val plot = document.selectFirst("div.sinopsis-indo, div.desc")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
+        // Membersihkan sampah deskripsi Iklan SEO
+        val plot = document.selectFirst("div.sinopsis-indo, div.desc, div.rt-Text")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
         
+        // Memakai Score system CloudStream 3
         val ratingText = document.selectFirst("span.irank-voters, span.rating, div.btn-danger.averagerate")?.text()?.replace(",", ".")?.trim()
         val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
 
         var year: Int? = null
         var duration: Int? = null
-        val actors = mutableListOf<String>()
 
         document.select("div.mvic-info p").forEach { p ->
             val text = p.text()
@@ -101,9 +106,6 @@ class RebahinProvider : MainAPI() {
                 }
                 text.contains("Duration:") -> {
                     duration = text.replace(Regex("[^0-9]"), "").toIntOrNull()
-                }
-                text.contains("Actors:") -> {
-                    p.select("a[rel=tag]").forEach { actors.add(it.text()) }
                 }
             }
         }
@@ -137,6 +139,7 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
+            // URL pemutar film layar lebar langsung diteruskan ke fungsi loadLinks
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -157,8 +160,8 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
+        // Mengelompokkan URL dari parameter data (baik berupa Base64 maupun URL /play)
         if (!data.startsWith("http")) {
-            // TV Series Base64 Decryption
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
                 if (decodedUrl.startsWith("http")) {
@@ -166,7 +169,6 @@ class RebahinProvider : MainAPI() {
                 }
             } catch (e: Exception) {}
         } else {
-            // Movie /play Scraping
             val document = app.get(data).document
             document.select("div.server").forEach { server ->
                 val encodedUrl = server.attr("data-iframe")
@@ -179,13 +181,13 @@ class RebahinProvider : MainAPI() {
             }
             document.select("iframe").forEach { iframe ->
                 val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                if (!src.contains("http://googleusercontent.com/youtube.com") && src.isNotBlank()) {
+                if (!src.contains("googleusercontent.com") && src.isNotBlank()) {
                     urlToExtract.add(src)
                 }
             }
         }
 
-        // Loop untuk mengeksekusi semua URL Player yang ditemukan
+        // Mengeksekusi URL Player yang ditemukan
         urlToExtract.forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
@@ -195,20 +197,26 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // 1. Coba ekstraktor bawaan CloudStream (jika hoster dikenali)
+            // 1. Uji dengan ekstraktor bawaan CloudStream
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
-            // 2. Jika gagal (Custom Player / IP Address), kita gali paksa (Manual Regex Scrape)
+            // 2. Fallback: Eksekusi manual jika hoster custom (199.x.x.x / abyssplayer) dll
             if (!isExtractorLoaded) {
                 try {
+                    // Ambil HTML mentah dari halaman pemutar video
                     val playerHtml = app.get(targetUrl).text
-                    val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(playerHtml)
+                    
+                    // KUNCI RAHASIA: Bongkar enkripsi JS eval(function(p,a,c...)) bawaan CloudStream
+                    val unpackedHtml = getAndUnpack(playerHtml)
+
+                    // Tarik URL berakhiran .m3u8 atau .mp4 dari hasil HTML yang sudah telanjang
+                    val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(unpackedHtml)
                     
                     videoLinks.forEach { match ->
                         val link = match.groupValues[1]
                         val isM3u8 = link.contains(".m3u8")
                         
-                        // MENGGUNAKAN STANDAR BUILDER BARU (newExtractorLink)
+                        // Menyerahkan hasil ekstraksi ke pemutar CloudStream
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
@@ -222,7 +230,7 @@ class RebahinProvider : MainAPI() {
                         )
                     }
                 } catch (e: Exception) {
-                    // Ignore agar loop terus berjalan ke link berikutnya
+                    // Abaikan jika gagal memproses satu server, maju ke server selanjutnya
                 }
             }
         }
