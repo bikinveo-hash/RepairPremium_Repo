@@ -45,7 +45,6 @@ class RebahinProvider : MainAPI() {
         val img = this.selectFirst("img.mli-thumb")
         val posterUrl = fixUrlNull(img?.attr("data-original")?.takeIf { it.isNotBlank() } ?: img?.attr("src"))
         
-        // Perbaikan: Mapping SearchQuality manual tanpa perlu fungsi getQualityFromString yang hilang
         val qualityStr = this.selectFirst("span.mli-quality")?.text()?.lowercase()
         val qualityResult = when {
             qualityStr == null -> null
@@ -74,28 +73,41 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val titleElement = document.selectFirst("div.mvic-desc h3")
-        val title = titleElement?.ownText()?.trim() ?: return null
+        // PERBAIKAN FATAL: Membaca Title lewat tag Meta yang lebih tahan banting
+        val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
+            ?: document.selectFirst("h3[itemprop=name]")?.text()
+            ?: return null
         
-        val background = fixUrlNull(document.selectFirst("a.mvi-cover")?.attr("style")?.substringAfter("url(")?.substringBefore(")"))
-        val poster = fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")) ?: fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content"))
+        // PERBAIKAN BANNER: Menarik URL pemutar video sekaligus Background Banner
+        val mviCover = document.selectFirst("a.mvi-cover")
+        val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
+        val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
 
-        val plot = document.selectFirst("div.sinopsis-indo, div.rt-Text")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(), "")?.trim()
+        // PERBAIKAN POSTER KECIL
+        val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
+            ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
+
+        val plot = document.selectFirst("div.sinopsis-indo, div.desc")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
         
         val ratingText = document.selectFirst("span.irank-voters, span.rating, div.btn-danger.averagerate")?.text()?.replace(",", ".")?.trim()
         val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
 
         var year: Int? = null
         var duration: Int? = null
+        val actors = mutableListOf<String>()
 
         document.select("div.mvic-info p").forEach { p ->
             val text = p.text()
             when {
                 text.contains("Release Date:") -> {
                     year = p.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
+                        ?: text.substringAfter("Release Date:").trim().substringBefore("-").toIntOrNull()
                 }
                 text.contains("Duration:") -> {
                     duration = text.replace(Regex("[^0-9]"), "").toIntOrNull()
+                }
+                text.contains("Actors:") -> {
+                    p.select("a[rel=tag]").forEach { actors.add(it.text()) }
                 }
             }
         }
@@ -103,9 +115,7 @@ class RebahinProvider : MainAPI() {
         val isTvSeries = url.contains("/series/")
 
         return if (isTvSeries) {
-            val watchUrl = if (url.endsWith("/")) "${url}watch" else "$url/watch"
-            val watchDocument = app.get(watchUrl).document
-
+            val watchDocument = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
             val episodeButtons = watchDocument.select("div#list-eps a.btn-eps")
             
@@ -113,9 +123,13 @@ class RebahinProvider : MainAPI() {
                 val epName = epElem.text().trim()
                 val base64Iframe = epElem.attr("data-iframe")
                 
+                // Cloudstream akan otomatis mengurutkan Episode berdasarkan namanya (Ep 1, Ep 2, dst)
+                val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
+
                 if (base64Iframe.isNotBlank()) {
                     episodes.add(newEpisode(base64Iframe) {
                         this.name = epName
+                        this.episode = epNum
                     })
                 }
             }
@@ -124,19 +138,16 @@ class RebahinProvider : MainAPI() {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
-                // Perbaikan: assignment menggunakan 'score', bukan 'rating'
                 this.score = parsedScore 
                 this.year = year
                 this.duration = duration
             }
         } else {
-            val playUrl = if (url.endsWith("/")) "${url}play" else "$url/play"
-
+            // URL pemutar film layar lebar langsung diteruskan ke fungsi loadLinks
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
-                // Perbaikan: assignment menggunakan 'score', bukan 'rating'
                 this.score = parsedScore 
                 this.year = year
                 this.duration = duration
@@ -151,6 +162,7 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
+        // Pembedaan yang pintar: Jika string tidak berawalan HTTP, berarti itu enkripsi Base64 dari TV Series!
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
@@ -160,6 +172,7 @@ class RebahinProvider : MainAPI() {
             } catch (e: Exception) {
             }
         } else {
+            // Jika string berawalan HTTP, berarti ini halaman /play dari sebuah Movie
             val document = app.get(data).document
             
             document.select("div.server").forEach { server ->
