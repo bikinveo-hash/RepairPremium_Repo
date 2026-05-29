@@ -1,5 +1,6 @@
 package com.adixtream
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
@@ -125,7 +126,6 @@ object AdiXtreamExtractor : AdiXtream() {
 
         val searchUrl = "$apiUrl/wefeed-h5api-bff/subject/search"
         
-        // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val searchBody = mapOf("keyword" to searchKeyword, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         
@@ -141,7 +141,6 @@ object AdiXtreamExtractor : AdiXtream() {
             
             val isYearMatch = year == null || itemYear == year
 
-            // Pencocokan dua arah: TMDB ke API, atau API ke TMDB
             val isTitleMatch = cleanItemTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() &&
                     (cleanItemTitle == cleanSearchTitle || 
                     ((cleanItemTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanItemTitle)) && isYearMatch))
@@ -196,10 +195,8 @@ object AdiXtreamExtractor : AdiXtream() {
         val apiUrl = "https://api3.aoneroom.com"
         val (brand, model) = Adimoviebox2Helper.randomBrandModel()
 
-        // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         
-        // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to searchKeyword).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -214,7 +211,6 @@ object AdiXtreamExtractor : AdiXtream() {
             
             val isYearMatch = year == null || subjectYear == year
             
-            // Pencocokan dua arah seperti di V1
             val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
                     (cleanSubjectTitle == cleanSearchTitle || 
                     ((cleanSubjectTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanSubjectTitle)) && isYearMatch))
@@ -230,7 +226,6 @@ object AdiXtreamExtractor : AdiXtream() {
 
         val mainSubjectId = matchedSubject.subjectId ?: return
         
-        // 2. Mengambil Detail dan Audio (Dubs)
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
@@ -258,7 +253,6 @@ object AdiXtreamExtractor : AdiXtream() {
         val s = season ?: 0
         val e = episode ?: 0
 
-        // 3. Mengambil Link Video
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
             val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
@@ -278,7 +272,6 @@ object AdiXtreamExtractor : AdiXtream() {
                 })
 
                 if (stream.id != null) {
-                    // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -286,7 +279,6 @@ object AdiXtreamExtractor : AdiXtream() {
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
-                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -296,6 +288,125 @@ object AdiXtreamExtractor : AdiXtream() {
                 }
             }
         }
+    }
+
+    // ================== EKSTRAKTOR KISSKH (SUPPLEMENTARY) ==================
+    suspend fun invokeKisskh(
+        title: String, year: Int?, season: Int?, episode: Int?, isTvSeries: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
+        originalTitle: String? = null
+    ) {
+        // ATURAN 1: Query Sanitization (Buang subjudul TMDB)
+        val searchKeyword = title.substringBefore(":").trim()
+        val searchUrl = "https://kisskh.ovh/api/DramaList/Search?q=$searchKeyword&type=0"
+        
+        val searchRes = app.get(searchUrl).parsedSafe<Array<KisskhMedia>>() ?: return
+        
+        // ATURAN 2: Alphanumeric Cleanup untuk pencocokan
+        val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+        val cleanOrigTitle = originalTitle?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase()
+        
+        var matchedId: Int? = null
+
+        for (item in searchRes) {
+            val cleanApiTitle = item.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
+
+            // Cek Exact Match terlebih dahulu
+            val isTitleExact = cleanSearchTitle.isNotEmpty() && cleanApiTitle == cleanSearchTitle
+            val isOrigExact = cleanOrigTitle != null && cleanOrigTitle.isNotEmpty() && cleanApiTitle == cleanOrigTitle
+
+            if (isTitleExact || isOrigExact) {
+                matchedId = item.id
+                break
+            }
+
+            // ATURAN 3: Two-Way Partial Match
+            val isTitlePartial = cleanApiTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() &&
+                    (cleanApiTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanApiTitle))
+            val isOrigPartial = cleanApiTitle.isNotEmpty() && cleanOrigTitle != null && cleanOrigTitle.isNotEmpty() &&
+                    (cleanApiTitle.contains(cleanOrigTitle) || cleanOrigTitle.contains(cleanApiTitle))
+
+            if (isTitlePartial || isOrigPartial) {
+                // ATURAN 4: Year-Gated Validation (Jika partial match, tahun WAJIB sama)
+                val detailUrl = "https://kisskh.ovh/api/DramaList/Drama/${item.id}?isq=false"
+                val detailRes = app.get(detailUrl).parsedSafe<KisskhMediaDetail>()
+                val apiYear = detailRes?.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
+
+                if (year == null || apiYear == year) {
+                    matchedId = item.id
+                    break // Lolos filter, break loop
+                }
+            }
+        }
+
+        if (matchedId == null) return // Tidak ada yang lolos 4 filter ketat
+
+        // Mengambil Detail Episode
+        val detailUrl = "https://kisskh.ovh/api/DramaList/Drama/$matchedId?isq=false"
+        val detailRes = app.get(detailUrl).parsedSafe<KisskhMediaDetail>() ?: return
+        
+        val targetEpNum = if (isTvSeries) episode ?: 1 else 1
+        val epObj = detailRes.episodes?.find { it.number?.toInt() == targetEpNum } ?: return
+        val epsId = epObj.id ?: return
+
+        // Mengambil Stream Links
+        val kisskhApiUrl = "https://script.google.com/macros/s/AKfycbzn8B31PuDxzaMa9_CQ0VGEDasFqfzI5bXvjaIZH4DM8DNq9q6xj1ALvZNz_JT3jF0suA/exec?id="
+        val kkey = app.get("$kisskhApiUrl$epsId&version=2.8.10", timeout = 10000).parsedSafe<KisskhKey>()?.key ?: ""
+        
+        val sourceRes = app.get("https://kisskh.ovh/api/DramaList/Episode/$epsId.png?err=false&ts=null&time=null&kkey=$kkey").parsedSafe<KisskhSources>()
+        
+        listOf(sourceRes?.video, sourceRes?.thirdParty).forEach { link ->
+            if (link.isNullOrBlank()) return@forEach
+            if (link.contains(".m3u8")) {
+                M3u8Helper.generateM3u8(this.name, link, "https://kisskh.ovh/").forEach(callback)
+            } else if (link.contains("mp4")) {
+                callback.invoke(newExtractorLink(this.name, "Kisskh", link, INFER_TYPE) {
+                    this.referer = "https://kisskh.ovh/"
+                    this.quality = Qualities.P720.value
+                })
+            } else {
+                loadExtractor(link.substringBefore("=http"), "https://kisskh.ovh/", subtitleCallback, callback)
+            }
+        }
+
+        // Mengambil dan Melempar Subtitle Terenkripsi
+        val kisskhSubUrl = "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
+        val kkey1 = app.get("$kisskhSubUrl$epsId&version=2.8.10", timeout = 10000).parsedSafe<KisskhKey>()?.key ?: ""
+        val subResText = app.get("https://kisskh.ovh/api/Sub/$epsId?kkey=$kkey1").text
+        
+        tryParseJson<List<KisskhSubtitle>>(subResText)?.forEach { sub ->
+            val lang = if (sub.label == "Indonesia") "Indonesian" else sub.label ?: "Unknown"
+            subtitleCallback.invoke(newSubtitleFile("$lang (Kisskh)", sub.src ?: return@forEach))
+        }
+    }
+
+    // ================== MESIN DEKRIPSI SUBTITLE KISSKH ==================
+    fun decryptKisskhSub(encryptedB64: String): String {
+        val keys = listOf("AmSmZVcH93UQUezi", "8056483646328763", "sWODXX04QRTkHdlZ")
+        val ivs = listOf(
+            intArrayOf(1382367819, 1465333859, 1902406224, 1164854838),
+            intArrayOf(909653298, 909193779, 925905208, 892483379),
+            intArrayOf(946894696, 1634749029, 1127508082, 1396271183)
+        )
+        
+        fun IntArray.toByteArray(): ByteArray = ByteArray(size * 4).also { bytes ->
+            forEachIndexed { index, value ->
+                bytes[index * 4] = (value shr 24).toByte()
+                bytes[index * 4 + 1] = (value shr 16).toByte()
+                bytes[index * 4 + 2] = (value shr 8).toByte()
+                bytes[index * 4 + 3] = value.toByte()
+            }
+        }
+
+        val encryptedBytes = android.util.Base64.decode(encryptedB64, android.util.Base64.DEFAULT)
+        for (i in keys.indices) {
+            try {
+                val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keys[i].toByteArray(Charsets.UTF_8), "AES"), javax.crypto.spec.IvParameterSpec(ivs[i].toByteArray()))
+                return String(cipher.doFinal(encryptedBytes), Charsets.UTF_8)
+            } catch (e: Exception) { continue }
+        }
+        return "DECRYPT_FAILED"
     }
 
     private object Adimoviebox2Helper {
@@ -343,3 +454,11 @@ object AdiXtreamExtractor : AdiXtream() {
         private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
     }
 }
+
+// ================== DATA CLASSES UNTUK KISSKH ==================
+data class KisskhMedia(@JsonProperty("id") val id: Int?, @JsonProperty("title") val title: String?)
+data class KisskhMediaDetail(@JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("episodes") val episodes: ArrayList<KisskhEpisodes>? = arrayListOf())
+data class KisskhEpisodes(@JsonProperty("id") val id: Int?, @JsonProperty("number") val number: Double?)
+data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
+data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
+data class KisskhKey(val key: String)
