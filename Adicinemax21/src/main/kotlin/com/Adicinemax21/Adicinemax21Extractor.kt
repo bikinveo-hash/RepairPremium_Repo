@@ -36,8 +36,16 @@ object Adicinemax21Extractor : Adicinemax21() {
             try {
                 val searchRes = app.get("$mainUrl/api/DramaList/Search?q=$query&type=0").text
                 val searchList = tryParseJson<ArrayList<KisskhMedia>>(searchRes) ?: return null
-                return searchList.find { it.title?.contains(query, true) == true } 
-                    ?: searchList.firstOrNull { it.title?.contains(query, true) == true }
+                
+                val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+                
+                return searchList.find { 
+                    val cleanItemTitle = it.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
+                    cleanItemTitle.contains(cleanQuery) 
+                } ?: searchList.firstOrNull { 
+                    val cleanItemTitle = it.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
+                    cleanItemTitle.contains(cleanQuery) 
+                }
             } catch (e: Exception) {
                 return null
             }
@@ -94,10 +102,15 @@ object Adicinemax21Extractor : Adicinemax21() {
             val searchBody = mapOf("keyword" to query, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
             val searchRes = app.post(searchUrl, requestBody = searchBody).text
             val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return null
+            
+            val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+            
             return items.find { item ->
                 val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-                (item.title?.contains(query, true) == true && itemYear == year) ||
-                (item.title.equals(query, true))
+                val cleanItemTitle = item.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
+                
+                cleanItemTitle.isNotEmpty() && cleanQuery.isNotEmpty() && 
+                (cleanItemTitle == cleanQuery || (cleanItemTitle.contains(cleanQuery) && itemYear == year))
             }
         }
         
@@ -144,7 +157,7 @@ object Adicinemax21Extractor : Adicinemax21() {
         callback.invoke(newExtractorLink("Vidlink", "Vidlink", videoLink ?: return, ExtractorLinkType.M3U8) { this.referer = "${Adicinemax21.vidlinkAPI}/" })
     }
 
-    // ================== ADIMOVIEBOX 2 SOURCE (PERBAIKAN HEADER) ==================
+    // ================== ADIMOVIEBOX 2 SOURCE ==================
     suspend fun invokeAdimoviebox2(
         title: String,
         orgTitle: String? = null,
@@ -157,14 +170,23 @@ object Adicinemax21Extractor : Adicinemax21() {
 
         suspend fun searchSubject(query: String): Adimoviebox2Subject? {
             val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
-            val jsonBody = """{"page": 1, "perPage": 10, "keyword": "$query"}"""
+            
+            // MODIFIKASI: Membangun JSON dengan Map agar karakter escape terproses otomatis
+            val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to query).toJson()
             val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
             val searchRes = app.post(searchUrl, headers = headersSearch, requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
+            
+            // MODIFIKASI: Sanitasi judul untuk membuang karakter spesial
+            val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+            
             return searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
                 val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-                val isTitleMatch = subject.title?.contains(query, true) == true
+                val cleanSubjectTitle = subject.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
+                
+                val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanQuery.isNotEmpty() && cleanSubjectTitle.contains(cleanQuery)
                 val isYearMatch = year == null || subjectYear == year
                 val isTypeMatch = if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
+                
                 isTitleMatch && isYearMatch && isTypeMatch
             }
         }
@@ -218,7 +240,6 @@ object Adicinemax21Extractor : Adicinemax21() {
                 val quality = getQualityFromName(stream.resolutions)
                 val signCookie = stream.signCookie
 
-                // Header untuk streaming video: hanya Cookie dan User-Agent umum
                 val videoHeaders = mutableMapOf<String, String>()
                 if (!signCookie.isNullOrEmpty()) {
                     videoHeaders["Cookie"] = signCookie
