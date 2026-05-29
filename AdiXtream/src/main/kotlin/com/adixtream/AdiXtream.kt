@@ -6,6 +6,8 @@ import com.adixtream.AdiXtreamExtractor.invokeVidSrc
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
 import com.adixtream.AdiXtreamExtractor.invokeKisskh
+import okhttp3.ResponseBody.Companion.toResponseBody
+import com.michat88.decrypt // <-- Tambahkan ini jika SubDecryptor.kt masih pakai package lama
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
