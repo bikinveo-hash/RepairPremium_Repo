@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.adixtream.AdiXtreamExtractor.invokeVidSrc
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
+import com.adixtream.AdiXtreamExtractor.invokeKisskh
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
@@ -200,7 +201,8 @@ open class AdiXtream : MainAPI() {
         runAllAsync(
             { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
             { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) },
+            { if (title.isNotEmpty()) invokeKisskh(title, year, season, episode, subtitleCallback, callback, originalTitle) }
         )
         return true
     }
