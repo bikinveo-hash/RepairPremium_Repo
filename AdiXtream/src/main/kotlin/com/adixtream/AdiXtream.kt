@@ -2,12 +2,10 @@ package com.adixtream
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.adixtream.AdiXtreamExtractor.invokeVidSrc
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
-import com.adixtream.AdiXtreamExtractor.invokeKisskh
-import okhttp3.ResponseBody.Companion.toResponseBody
-import com.michat88.decrypt // <-- Tambahkan ini jika SubDecryptor.kt masih pakai package lama
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
@@ -48,7 +46,7 @@ open class AdiXtream : MainAPI() {
         val filmList = response.results.map { movie ->
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
             val targetUrl = "$mainUrl/$urlPrefix/${movie.id}"
-            
+
             if (isTvSeries) {
                 newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
                     this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -67,14 +65,14 @@ open class AdiXtream : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "https://api.themoviedb.org/3/search/multi?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
         val response = app.get(url).parsedSafe<TmdbResponse>() ?: return emptyList()
-        
+
         return response.results.filter { it.mediaType == "movie" || it.mediaType == "tv" }.map { movie ->
             val isTvSeries = movie.mediaType == "tv"
             val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
             val urlPrefix = if (isTvSeries) "tv" else "movie"
             val targetUrl = "$mainUrl/$urlPrefix/${movie.id}"
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
-            
+
             if (isTvSeries) {
                 newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
                     this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -93,8 +91,8 @@ open class AdiXtream : MainAPI() {
         val isTvSeries = url.contains("/tv/")
         if (isTvSeries) {
             val tmdbId = url.substringAfter("/tv/").substringBefore("/")
-            val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbTvDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal mengambil data Series dari TMDB")
+            val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbTvDetailResponse>()
+                ?: throw ErrorLoadingException("Gagal mengambil data Series dari TMDB")
 
             val episodes = mutableListOf<Episode>()
             tvDetail.seasons?.forEach { season ->
@@ -108,7 +106,7 @@ open class AdiXtream : MainAPI() {
                             this.posterUrl = ep.stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
                             this.description = ep.overview
                             this.score = Score.from10(ep.voteAverage)
-                            ep.airDate?.let { addDate(it) } 
+                            ep.airDate?.let { addDate(it) }
                         })
                     }
                 }
@@ -124,15 +122,13 @@ open class AdiXtream : MainAPI() {
                 this.actors = tvDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
-                
-                val trailer = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
-                        referer = null,
-                        raw = false
-                    ))
-                }
+
+                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
+                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
+                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
+                val trailerVideo = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
+                addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
+
                 this.recommendations = tvDetail.recommendations?.results?.map { rec ->
                     newTvSeriesSearchResponse(rec.name ?: rec.title ?: "Tanpa Judul", "$mainUrl/tv/${rec.id}", TvType.TvSeries) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -141,8 +137,8 @@ open class AdiXtream : MainAPI() {
             }
         } else {
             val tmdbId = url.substringAfter("/movie/").substringBefore("/")
-            val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal mengambil data Movie dari TMDB")
+            val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbDetailResponse>()
+                ?: throw ErrorLoadingException("Gagal mengambil data Movie dari TMDB")
 
             return newMovieLoadResponse(movieDetail.title ?: "Tanpa Judul", url, TvType.Movie, tmdbId) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
@@ -155,15 +151,13 @@ open class AdiXtream : MainAPI() {
                 this.actors = movieDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
-                
-                val trailer = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
-                        referer = null,
-                        raw = false
-                    ))
-                }
+
+                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
+                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
+                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
+                val trailerVideo = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
+                addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
+
                 this.recommendations = movieDetail.recommendations?.results?.map { rec ->
                     newMovieSearchResponse(rec.title ?: rec.name ?: "Tanpa Judul", "$mainUrl/movie/${rec.id}", TvType.Movie) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -181,7 +175,7 @@ open class AdiXtream : MainAPI() {
     ): Boolean {
         val isTvSeries = data.contains("/tv/")
         val parts = data.split("/")
-        
+
         val tmdbId = if (isTvSeries) parts[parts.size - 3] else data.substringAfter("/movie/").substringBefore("/")
         val season = if (isTvSeries) parts[parts.size - 2].toIntOrNull() else null
         val episode = if (isTvSeries) parts.last().toIntOrNull() else null
@@ -206,55 +200,8 @@ open class AdiXtream : MainAPI() {
         runAllAsync(
             { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
             { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeKisskh(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
         )
-        
         return true
-    }
-
-    private val CHUNK_REGEX1 by lazy { Regex("^\\d+$", RegexOption.MULTILINE) }
-    
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
-        return object : okhttp3.Interceptor {
-            override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
-                val request = chain.request().newBuilder().build()
-                val response = chain.proceed(request)
-                
-                if (response.request.url.toString().contains(".txt")) {
-                    val responseBody = response.body?.string() ?: return response
-                    val chunks = responseBody.split(CHUNK_REGEX1)
-                        .filter(String::isNotBlank)
-                        .map(String::trim)
-                        
-                    val decrypted = chunks.mapIndexed { index, chunk ->
-                        if (chunk.isBlank()) return@mapIndexed ""
-                        val parts = chunk.split("\n")
-                        if (parts.isEmpty()) return@mapIndexed ""
-
-                        val header = parts.first()
-                        val text = parts.drop(1)
-                        val d = text.joinToString("\n") { line ->
-                            try {
-                                // Pastikan SubDecryptor.kt berada di package com.adixtream
-                                decrypt(line)
-                            } catch (e: Exception) {
-                                "DECRYPT_ERROR:${e.message}"
-                            }
-                        }
-                        listOf(index + 1, header, d).joinToString("\n")
-                    }.filter { it.isNotEmpty() }.joinToString("\n\n")
-                    
-                    val newBody = okhttp3.ResponseBody.Companion.toResponseBody(
-                        decrypted, 
-                        response.body?.contentType()
-                    )
-                    return response.newBuilder()
-                        .body(newBody)
-                        .build()
-                }
-                return response
-            }
-        }
     }
 }
