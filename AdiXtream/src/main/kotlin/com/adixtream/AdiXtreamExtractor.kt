@@ -18,7 +18,11 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.annotation.SuppressLint
 
-object AdiXtreamExtractor : AdiXtream() {
+// DIPERBAIKI: Menghapus inheritance dari AdiXtream() agar jadi object mandiri
+object AdiXtreamExtractor {
+    
+    // API key didefinisikan agar object mandiri tetap bisa mengaksesnya
+    private const val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
 
     // ================== EKSTRAKTOR VIDSRC ==================
     suspend fun invokeVidSrc(
@@ -69,7 +73,8 @@ object AdiXtreamExtractor : AdiXtream() {
                 .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
 
             callback.invoke(
-                newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
+                // DIPERBAIKI: Mengganti this.name dengan "AdiXtream" secara eksplisit
+                newExtractorLink("AdiXtream", "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                     this.referer = "https://cloudnestra.com/"
                 }
             )
@@ -120,7 +125,6 @@ object AdiXtreamExtractor : AdiXtream() {
         val searchRes = app.post(searchUrl, requestBody = searchBody).text
         val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return
         
-        // MODIFIKASI: Sanitasi judul untuk membuang karakter spesial
         val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
         val cleanOrigTitle = originalTitle?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase()
         
@@ -134,11 +138,15 @@ object AdiXtreamExtractor : AdiXtream() {
             val isOrigMatch = cleanOrigTitle != null && cleanItemTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() &&
                     (cleanItemTitle == cleanOrigTitle || (cleanItemTitle.contains(cleanOrigTitle) && itemYear == year))
 
-            isTitleMatch || isOrigMatch
+            // DIPERBAIKI: Tambahan filter subjectType seperti V2
+            val isTypeMatch = if (season != null) item.subjectType == 2 else (item.subjectType == 1 || item.subjectType == 3)
+
+            (isTitleMatch || isOrigMatch) && isTypeMatch
         } ?: return
         
         val subjectId = matchedMedia.subjectId ?: return
-        val detailPath = matchedMedia.detailPath
+        // DIPERBAIKI: Fallback ke subjectId jika detailPath null
+        val detailPath = matchedMedia.detailPath ?: subjectId 
         val se = season ?: 0
         val ep = episode ?: 0
         val playUrl = "$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=$subjectId&se=$se&ep=$ep"
@@ -147,9 +155,14 @@ object AdiXtreamExtractor : AdiXtream() {
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
         
         streams.reversed().distinctBy { it.url }.forEach { source ->
-             callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox", source.url ?: return@forEach, INFER_TYPE) {
-                    this.referer = "$apiUrl/"; this.quality = getQualityFromName(source.resolutions)
-             })
+            val streamUrl = source.url ?: return@forEach
+            // DIPERBAIKI: Pengecekan `.contains(".m3u8")` sebelum menggunakan INFER_TYPE
+            callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox", streamUrl, 
+                if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE
+            ) {
+                this.referer = "$apiUrl/"
+                this.quality = getQualityFromName(source.resolutions)
+            })
         }
         
         val id = streams.firstOrNull()?.id
@@ -173,12 +186,10 @@ object AdiXtreamExtractor : AdiXtream() {
 
         // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
-        // MODIFIKASI: Membangun JSON dengan Map agar karakter double-quote (\") ter-escape otomatis
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to title).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
         val searchRes = app.post(searchUrl, headers = headersSearch, requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
 
-        // MODIFIKASI: Sanitasi judul untuk membuang karakter spesial
         val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
         val cleanOrigTitle = originalTitle?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase()
 
