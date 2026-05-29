@@ -73,17 +73,14 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // PERBAIKAN FATAL: Membaca Title lewat tag Meta yang lebih tahan banting
         val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
             ?: document.selectFirst("h3[itemprop=name]")?.text()
             ?: return null
         
-        // PERBAIKAN BANNER: Menarik URL pemutar video sekaligus Background Banner
         val mviCover = document.selectFirst("a.mvi-cover")
         val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
         val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
 
-        // PERBAIKAN POSTER KECIL
         val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
             ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
 
@@ -122,8 +119,6 @@ class RebahinProvider : MainAPI() {
             episodeButtons.forEach { epElem ->
                 val epName = epElem.text().trim()
                 val base64Iframe = epElem.attr("data-iframe")
-                
-                // Cloudstream akan otomatis mengurutkan Episode berdasarkan namanya (Ep 1, Ep 2, dst)
                 val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
 
                 if (base64Iframe.isNotBlank()) {
@@ -143,7 +138,6 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
-            // URL pemutar film layar lebar langsung diteruskan ke fungsi loadLinks
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -162,36 +156,81 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // Pembedaan yang pintar: Jika string tidak berawalan HTTP, berarti itu enkripsi Base64 dari TV Series!
+        val urlToExtract = mutableListOf<String>()
+
         if (!data.startsWith("http")) {
+            // TV Series Base64 Decryption
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
                 if (decodedUrl.startsWith("http")) {
-                     loadExtractor(decodedUrl, mainUrl, subtitleCallback, callback)
+                     urlToExtract.add(decodedUrl)
                 }
-            } catch (e: Exception) {
-            }
+            } catch (e: Exception) {}
         } else {
-            // Jika string berawalan HTTP, berarti ini halaman /play dari sebuah Movie
+            // Movie /play Scraping
             val document = app.get(data).document
-            
             document.select("div.server").forEach { server ->
                 val encodedUrl = server.attr("data-iframe")
                 if (encodedUrl.isNotBlank()) {
                     val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
                     if (decodedUrl.startsWith("http")) {
-                        loadExtractor(decodedUrl, mainUrl, subtitleCallback, callback)
+                        urlToExtract.add(decodedUrl)
                     }
                 }
             }
-            
             document.select("iframe").forEach { iframe ->
                 val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                if (!src.contains("http://googleusercontent.com/youtube.com") && src.isNotBlank()) {
-                    loadExtractor(src, mainUrl, subtitleCallback, callback)
+                if (!src.contains("youtube.com") && src.isNotBlank()) {
+                    urlToExtract.add(src)
                 }
             }
         }
+
+        // Loop untuk mengeksekusi semua URL Player yang ditemukan
+        urlToExtract.forEach { rawUrl ->
+            
+            // Rebahin kadang menanam iframe lewat /iembed/?source=Base64
+            var targetUrl = rawUrl
+            if (rawUrl.contains("/iembed/?source=")) {
+                val base64 = rawUrl.substringAfter("source=")
+                try {
+                    targetUrl = String(Base64.decode(base64, Base64.DEFAULT))
+                } catch(e: Exception) {}
+            }
+
+            // 1. Coba ekstraktor bawaan CloudStream (jika hoster dikenali)
+            val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+
+            // 2. Jika gagal (Custom Player / IP Address), kita gali paksa (Manual Regex Scrape)
+            if (!isExtractorLoaded) {
+                try {
+                    // Masuk ke halaman player
+                    val playerHtml = app.get(targetUrl).text
+                    
+                    // Regex ini akan mencari format 'file:"http...m3u8"' atau 'src="http...mp4"'
+                    val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(playerHtml)
+                    
+                    videoLinks.forEach { match ->
+                        val link = match.groupValues[1]
+                        val isM3u8 = link.contains(".m3u8")
+                        
+                        callback.invoke(
+                            ExtractorLink(
+                                source = this.name,
+                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
+                                url = link,
+                                referer = targetUrl,
+                                quality = Qualities.Unknown.value,
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Ignore agar loop terus berjalan ke link berikutnya
+                }
+            }
+        }
+
         return true
     }
 }
