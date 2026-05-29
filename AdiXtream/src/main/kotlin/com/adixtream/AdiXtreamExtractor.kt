@@ -20,6 +20,8 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
+    private const val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
+
     // ================== EKSTRAKTOR VIDSRC ==================
     suspend fun invokeVidSrc(
         tmdbId: String,
@@ -114,9 +116,8 @@ object AdiXtreamExtractor : AdiXtream() {
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
         originalTitle: String? = null
     ) {
-        val apiUrl = "https://lok-lok.cc" // API baru sesuai kode asli yang berjalan
+        val apiUrl = "https://lok-lok.cc"
 
-        // Header wajib agar server tidak memblokir request
         val commonHeaders = mapOf(
             "origin" to apiUrl,
             "referer" to "$apiUrl/",
@@ -125,7 +126,10 @@ object AdiXtreamExtractor : AdiXtream() {
         )
 
         val searchUrl = "$apiUrl/wefeed-h5api-bff/subject/search"
-        val searchBody = mapOf("keyword" to title, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        
+        // MODIFIKASI: Hilangkan subtitle judul (setelah tanda titik dua) untuk query API agar pencarian lebih akurat
+        val searchKeyword = title.substringBefore(":").trim()
+        val searchBody = mapOf("keyword" to searchKeyword, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         
         val searchRes = app.post(searchUrl, headers = commonHeaders, requestBody = searchBody).text
         val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return
@@ -137,11 +141,16 @@ object AdiXtreamExtractor : AdiXtream() {
             val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             val cleanItemTitle = item.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
             
+            val isYearMatch = year == null || itemYear == year
+
+            // MODIFIKASI: Pencocokan judul sekarang mengecek kedua arah (TMDB mengandung API, atau API mengandung TMDB)
             val isTitleMatch = cleanItemTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() &&
-                    (cleanItemTitle == cleanSearchTitle || (cleanItemTitle.contains(cleanSearchTitle) && itemYear == year))
+                    (cleanItemTitle == cleanSearchTitle || 
+                    ((cleanItemTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanItemTitle)) && isYearMatch))
 
             val isOrigMatch = cleanOrigTitle != null && cleanItemTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() &&
-                    (cleanItemTitle == cleanOrigTitle || (cleanItemTitle.contains(cleanOrigTitle) && itemYear == year))
+                    (cleanItemTitle == cleanOrigTitle || 
+                    ((cleanItemTitle.contains(cleanOrigTitle) || cleanOrigTitle.contains(cleanItemTitle)) && isYearMatch))
 
             val isTypeMatch = if (season != null) item.subjectType == 2 else (item.subjectType == 1 || item.subjectType == 3)
 
@@ -153,7 +162,6 @@ object AdiXtreamExtractor : AdiXtream() {
         val se = season ?: 0
         val ep = episode ?: 0
         
-        // Memasukkan detailPath sesuai format API lok-lok
         val playUrl = "$apiUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
         val validReferer = "$apiUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
         val specificHeaders = commonHeaders + mapOf("referer" to validReferer)
@@ -192,12 +200,13 @@ object AdiXtreamExtractor : AdiXtream() {
 
         // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
-        // MODIFIKASI: Membangun JSON dengan Map agar karakter double-quote (\") ter-escape otomatis
-        val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to title).toJson()
+        
+        // MODIFIKASI: Sama seperti V1, hilangkan subtitle judul untuk query API
+        val searchKeyword = title.substringBefore(":").trim()
+        val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to searchKeyword).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
         val searchRes = app.post(searchUrl, headers = headersSearch, requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
 
-        // MODIFIKASI: Sanitasi judul untuk membuang karakter spesial
         val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
         val cleanOrigTitle = originalTitle?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase()
 
@@ -205,13 +214,20 @@ object AdiXtreamExtractor : AdiXtream() {
             val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             val cleanSubjectTitle = subject.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
             
-            val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && cleanSubjectTitle.contains(cleanSearchTitle)
-            val isOriginalTitleMatch = cleanOrigTitle != null && cleanSubjectTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() && cleanSubjectTitle.contains(cleanOrigTitle)
-            
             val isYearMatch = year == null || subjectYear == year
+            
+            // MODIFIKASI: Pencocokan dua arah seperti di V1
+            val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
+                    (cleanSubjectTitle == cleanSearchTitle || 
+                    ((cleanSubjectTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanSubjectTitle)) && isYearMatch))
+            
+            val isOriginalTitleMatch = cleanOrigTitle != null && cleanSubjectTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() && 
+                    (cleanSubjectTitle == cleanOrigTitle || 
+                    ((cleanSubjectTitle.contains(cleanOrigTitle) || cleanOrigTitle.contains(cleanSubjectTitle)) && isYearMatch))
+            
             val isTypeMatch = if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
             
-            (isTitleMatch || isOriginalTitleMatch) && isYearMatch && isTypeMatch
+            (isTitleMatch || isOriginalTitleMatch) && isTypeMatch
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
@@ -259,7 +275,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 if (!signCookie.isNullOrEmpty()) baseHeaders["Cookie"] = signCookie
 
                 val sourceName = "Adimoviebox2 ($languageName)"
-                callback.invoke(newExtractorLink(sourceName, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
+                callback.invoke(newExtractorLink(this.name, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
                     this.quality = quality; this.headers = baseHeaders
                 })
 
