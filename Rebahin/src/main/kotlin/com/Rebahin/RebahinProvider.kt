@@ -2,8 +2,7 @@ package com.Rebahin
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.* // Import penting agar Qualities, ExtractorLinkType, loadExtractor, dll terbaca
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -180,7 +179,7 @@ class RebahinProvider : MainAPI() {
             }
             document.select("iframe").forEach { iframe ->
                 val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                if (!src.contains("youtube.com") && src.isNotBlank()) {
+                if (!src.contains("http://googleusercontent.com/youtube.com") && src.isNotBlank()) {
                     urlToExtract.add(src)
                 }
             }
@@ -188,8 +187,6 @@ class RebahinProvider : MainAPI() {
 
         // Loop untuk mengeksekusi semua URL Player yang ditemukan
         urlToExtract.forEach { rawUrl ->
-            
-            // Rebahin kadang menanam iframe lewat /iembed/?source=Base64
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
                 val base64 = rawUrl.substringAfter("source=")
@@ -204,25 +201,24 @@ class RebahinProvider : MainAPI() {
             // 2. Jika gagal (Custom Player / IP Address), kita gali paksa (Manual Regex Scrape)
             if (!isExtractorLoaded) {
                 try {
-                    // Masuk ke halaman player
                     val playerHtml = app.get(targetUrl).text
-                    
-                    // Regex ini akan mencari format 'file:"http...m3u8"' atau 'src="http...mp4"'
                     val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(playerHtml)
                     
                     videoLinks.forEach { match ->
                         val link = match.groupValues[1]
                         val isM3u8 = link.contains(".m3u8")
                         
+                        // MENGGUNAKAN STANDAR BUILDER BARU (newExtractorLink)
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this.name,
                                 name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
                                 url = link,
-                                referer = targetUrl,
-                                quality = Qualities.Unknown.value,
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            )
+                            ) {
+                                this.referer = targetUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 } catch (e: Exception) {
