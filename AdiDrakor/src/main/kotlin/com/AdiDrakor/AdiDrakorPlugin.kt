@@ -7,11 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class AdiDrakorPlugin : Plugin() {
     override fun load(context: Context) {
-        // Register Main Provider
+        // Mendaftarkan provider AdiDrakor agar dikenali oleh Cloudstream
         registerMainAPI(AdiDrakor())
-        
-        // Register Extractors
-        // Mendaftarkan Jeniusplay yang baru (dari IdlixProvider)
-        registerExtractorAPI(Jeniusplay())
     }
 }
