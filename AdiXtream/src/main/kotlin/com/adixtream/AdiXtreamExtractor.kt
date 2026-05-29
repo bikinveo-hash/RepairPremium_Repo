@@ -48,9 +48,7 @@ object AdiXtreamExtractor : AdiXtream() {
 
             val prorcpHtml = app.get(prorcpUrl, referer = rcpUrl).text
 
-            // test_doms ada di dalam blok event handler (multiline),
-            // pakai DOT_MATCHES_ALL agar \[(.*?)\] bisa melewati newline
-            val testDomsRegex = Regex("""var test_doms\s*=\s*\[(.*?)\]""", RegexOption.DOT_MATCHES_ALL)
+            val testDomsRegex = Regex("""var test_doms\s*=\s*\[(.*?)\];""")
             val testDomsMatch = testDomsRegex.find(prorcpHtml)
             val domains = if (testDomsMatch != null) {
                 testDomsMatch.groupValues[1]
@@ -59,34 +57,22 @@ object AdiXtreamExtractor : AdiXtream() {
                     .filter { it.isNotBlank() }
                     .map { it.removePrefix("https://").removeSuffix("/") }
             } else {
-                listOf(
-                    "tmstr1.neonhorizonworkshops.com",
-                    "fasdf1.wanderlynest.com",
-                    "tmstr1.orchidpixelgardens.com",
-                    "tmstr1.cloudnestra.com"
-                )
+                listOf("tmstr1.neonhorizonworkshops.com")
             }
 
-            // Ambil semua URL dari nilai file: "url1 or url2 or ..."
-            // lalu replace tiap {vN} dengan domains[N-1] sesuai index-nya
             val fileRegex = Regex("""file:\s*"([^"]+)"""")
             val fileMatch = fileRegex.find(prorcpHtml) ?: return
-            val allUrls = fileMatch.groupValues[1].split(" or ").map { it.trim() }
+            val m3u8Template = fileMatch.groupValues[1].substringBefore(" or ")
 
-            val placeholderRegex = Regex("""\{v(\d+)\}""")
+            val m3u8Url = m3u8Template
+                .replace(Regex("""tmstr[0-9]+\.\{v\d+\}"""), domains.first())
+                .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
 
-            for (rawUrl in allUrls) {
-                val resolvedUrl = placeholderRegex.replace(rawUrl) { mr ->
-                    val idx = mr.groupValues[1].toIntOrNull()?.minus(1) ?: 0
-                    domains.getOrElse(idx) { domains.first() }
+            callback.invoke(
+                newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
+                    this.referer = "https://cloudnestra.com/"
                 }
-                if (resolvedUrl.contains("{v")) continue // skip kalau masih ada placeholder belum resolved
-                callback.invoke(
-                    newExtractorLink(this.name, "VidSrc HD", resolvedUrl, ExtractorLinkType.M3U8) {
-                        this.referer = "https://cloudnestra.com/"
-                    }
-                )
-            }
+            )
         } catch (e: Exception) {
             logError(e)
         }
