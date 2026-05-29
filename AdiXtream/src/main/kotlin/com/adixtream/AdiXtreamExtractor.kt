@@ -20,8 +20,6 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
-    private const val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
-
     // ================== EKSTRAKTOR VIDSRC ==================
     suspend fun invokeVidSrc(
         tmdbId: String,
@@ -127,7 +125,7 @@ object AdiXtreamExtractor : AdiXtream() {
 
         val searchUrl = "$apiUrl/wefeed-h5api-bff/subject/search"
         
-        // MODIFIKASI: Hilangkan subtitle judul (setelah tanda titik dua) untuk query API agar pencarian lebih akurat
+        // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val searchBody = mapOf("keyword" to searchKeyword, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         
@@ -143,7 +141,7 @@ object AdiXtreamExtractor : AdiXtream() {
             
             val isYearMatch = year == null || itemYear == year
 
-            // MODIFIKASI: Pencocokan judul sekarang mengecek kedua arah (TMDB mengandung API, atau API mengandung TMDB)
+            // Pencocokan dua arah: TMDB ke API, atau API ke TMDB
             val isTitleMatch = cleanItemTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() &&
                     (cleanItemTitle == cleanSearchTitle || 
                     ((cleanItemTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanItemTitle)) && isYearMatch))
@@ -201,7 +199,7 @@ object AdiXtreamExtractor : AdiXtream() {
         // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
         
-        // MODIFIKASI: Sama seperti V1, hilangkan subtitle judul untuk query API
+        // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to searchKeyword).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -216,7 +214,7 @@ object AdiXtreamExtractor : AdiXtream() {
             
             val isYearMatch = year == null || subjectYear == year
             
-            // MODIFIKASI: Pencocokan dua arah seperti di V1
+            // Pencocokan dua arah seperti di V1
             val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
                     (cleanSubjectTitle == cleanSearchTitle || 
                     ((cleanSubjectTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanSubjectTitle)) && isYearMatch))
