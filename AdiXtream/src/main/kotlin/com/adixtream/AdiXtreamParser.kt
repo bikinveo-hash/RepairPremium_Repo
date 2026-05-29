@@ -31,6 +31,7 @@ data class AdimovieboxItem(
     @JsonProperty("title") val title: String? = null,
     @JsonProperty("releaseDate") val releaseDate: String? = null,
     @JsonProperty("detailPath") val detailPath: String? = null,
+    @JsonProperty("subjectType") val subjectType: Int? = null // DITAMBAHKAN SESUAI AUDIT
 )
 data class AdimovieboxStreamItem(
     @JsonProperty("id") val id: String? = null,
