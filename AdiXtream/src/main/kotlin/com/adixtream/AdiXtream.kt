@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import com.adixtream.AdiXtreamExtractor.invokeVidSrc
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
+import com.adixtream.AdiXtreamExtractor.invokeKisskh
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
@@ -203,8 +204,55 @@ open class AdiXtream : MainAPI() {
         runAllAsync(
             { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
             { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) },
+            { if (title.isNotEmpty()) invokeKisskh(title, year, season, episode, subtitleCallback, callback, originalTitle) }
         )
+        
         return true
+    }
+
+    private val CHUNK_REGEX1 by lazy { Regex("^\\d+$", RegexOption.MULTILINE) }
+    
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
+        return object : okhttp3.Interceptor {
+            override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
+                val request = chain.request().newBuilder().build()
+                val response = chain.proceed(request)
+                
+                if (response.request.url.toString().contains(".txt")) {
+                    val responseBody = response.body?.string() ?: return response
+                    val chunks = responseBody.split(CHUNK_REGEX1)
+                        .filter(String::isNotBlank)
+                        .map(String::trim)
+                        
+                    val decrypted = chunks.mapIndexed { index, chunk ->
+                        if (chunk.isBlank()) return@mapIndexed ""
+                        val parts = chunk.split("\n")
+                        if (parts.isEmpty()) return@mapIndexed ""
+
+                        val header = parts.first()
+                        val text = parts.drop(1)
+                        val d = text.joinToString("\n") { line ->
+                            try {
+                                // Pastikan SubDecryptor.kt berada di package com.adixtream
+                                decrypt(line)
+                            } catch (e: Exception) {
+                                "DECRYPT_ERROR:${e.message}"
+                            }
+                        }
+                        listOf(index + 1, header, d).joinToString("\n")
+                    }.filter { it.isNotEmpty() }.joinToString("\n\n")
+                    
+                    val newBody = okhttp3.ResponseBody.Companion.toResponseBody(
+                        decrypted, 
+                        response.body?.contentType()
+                    )
+                    return response.newBuilder()
+                        .body(newBody)
+                        .build()
+                }
+                return response
+            }
+        }
     }
 }
