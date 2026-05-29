@@ -18,11 +18,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.annotation.SuppressLint
 
-// DIPERBAIKI: Menghapus inheritance dari AdiXtream() agar jadi object mandiri
-object AdiXtreamExtractor {
-    
-    // API key didefinisikan agar object mandiri tetap bisa mengaksesnya
-    private const val tmdbApiKey = "422bcadf9cfb5ff5b6951cef66b4a0b6"
+object AdiXtreamExtractor : AdiXtream() {
 
     // ================== EKSTRAKTOR VIDSRC ==================
     suspend fun invokeVidSrc(
@@ -73,8 +69,7 @@ object AdiXtreamExtractor {
                 .replace(Regex("""app[0-9]+\.\{v\d+\}"""), domains.first())
 
             callback.invoke(
-                // DIPERBAIKI: Mengganti this.name dengan "AdiXtream" secara eksplisit
-                newExtractorLink("AdiXtream", "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
+                newExtractorLink(this.name, "VidSrc HD", m3u8Url, ExtractorLinkType.M3U8) {
                     this.referer = "https://cloudnestra.com/"
                 }
             )
@@ -119,10 +114,20 @@ object AdiXtreamExtractor {
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit,
         originalTitle: String? = null
     ) {
-        val apiUrl = "https://filmboom.top"
-        val searchUrl = "$apiUrl/wefeed-h5-bff/web/subject/search"
+        val apiUrl = "https://lok-lok.cc" // API baru sesuai kode asli yang berjalan
+
+        // Header wajib agar server tidak memblokir request
+        val commonHeaders = mapOf(
+            "origin" to apiUrl,
+            "referer" to "$apiUrl/",
+            "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}",
+            "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+        )
+
+        val searchUrl = "$apiUrl/wefeed-h5api-bff/subject/search"
         val searchBody = mapOf("keyword" to title, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        val searchRes = app.post(searchUrl, requestBody = searchBody).text
+        
+        val searchRes = app.post(searchUrl, headers = commonHeaders, requestBody = searchBody).text
         val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return
         
         val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
@@ -138,26 +143,27 @@ object AdiXtreamExtractor {
             val isOrigMatch = cleanOrigTitle != null && cleanItemTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() &&
                     (cleanItemTitle == cleanOrigTitle || (cleanItemTitle.contains(cleanOrigTitle) && itemYear == year))
 
-            // DIPERBAIKI: Tambahan filter subjectType seperti V2
             val isTypeMatch = if (season != null) item.subjectType == 2 else (item.subjectType == 1 || item.subjectType == 3)
 
             (isTitleMatch || isOrigMatch) && isTypeMatch
         } ?: return
         
         val subjectId = matchedMedia.subjectId ?: return
-        // DIPERBAIKI: Fallback ke subjectId jika detailPath null
         val detailPath = matchedMedia.detailPath ?: subjectId 
         val se = season ?: 0
         val ep = episode ?: 0
-        val playUrl = "$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=$subjectId&se=$se&ep=$ep"
+        
+        // Memasukkan detailPath sesuai format API lok-lok
+        val playUrl = "$apiUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
         val validReferer = "$apiUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
-        val playRes = app.get(playUrl, referer = validReferer).text
+        val specificHeaders = commonHeaders + mapOf("referer" to validReferer)
+        
+        val playRes = app.get(playUrl, headers = specificHeaders).text
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
         
         streams.reversed().distinctBy { it.url }.forEach { source ->
             val streamUrl = source.url ?: return@forEach
-            // DIPERBAIKI: Pengecekan `.contains(".m3u8")` sebelum menggunakan INFER_TYPE
-            callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox", streamUrl, 
+            callback.invoke(newExtractorLink(this.name, "Adimoviebox", streamUrl, 
                 if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE
             ) {
                 this.referer = "$apiUrl/"
@@ -167,9 +173,9 @@ object AdiXtreamExtractor {
         
         val id = streams.firstOrNull()?.id
         val format = streams.firstOrNull()?.format
-        if (id != null) {
-            val subUrl = "$apiUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=$subjectId"
-            app.get(subUrl, referer = validReferer).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
+        if (id != null && format != null) {
+            val subUrl = "$apiUrl/wefeed-h5api-bff/subject/caption?format=$format&id=$id&subjectId=$subjectId"
+            app.get(subUrl, headers = specificHeaders).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
                  subtitleCallback.invoke(newSubtitleFile(sub.lanName ?: "Unknown", sub.url ?: return@forEach))
             }
         }
@@ -186,10 +192,12 @@ object AdiXtreamExtractor {
 
         // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
+        // MODIFIKASI: Membangun JSON dengan Map agar karakter double-quote (\") ter-escape otomatis
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to title).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
         val searchRes = app.post(searchUrl, headers = headersSearch, requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())).parsedSafe<Adimoviebox2SearchResponse>()
 
+        // MODIFIKASI: Sanitasi judul untuk membuang karakter spesial
         val cleanSearchTitle = title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
         val cleanOrigTitle = originalTitle?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase()
 
