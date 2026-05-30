@@ -217,7 +217,6 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // 1. Coba eksekusi dengan extractor standar
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
             if (!isExtractorLoaded) {
@@ -231,65 +230,54 @@ class RebahinProvider : MainAPI() {
                 var linkFound = false
 
                 // =========================================================
-                // TEKNIK BARU: API HIJACKING (SADAP JWPLAYER)
+                // API HIJACKING (MEMBAJAK JWPLAYER DI LATAR BELAKANG)
                 // =========================================================
                 val jwPlayerHijackScript = """
-                    if (!window.cs_hooked) {
-                        window.cs_hooked = true;
-                        var sentUrls = {};
-                        
-                        function sendUrl(url) {
-                            if (url && !url.startsWith('blob:') && !sentUrls[url]) {
-                                sentUrls[url] = true;
-                                // Mengirim sinyal ke WebViewResolver bahwa link ditemukan!
-                                var img = new Image();
-                                img.src = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(url); 
-                            }
+                    var clickAttempted = false;
+                    var cs_check = setInterval(function() {
+                        // Paksa sentuh layar agar server mau mulai dekripsi
+                        if (!clickAttempted) {
+                            try { document.querySelector('.jw-icon-display').click(); } catch(e) {}
+                            try { document.querySelector('.vjs-big-play-button').click(); } catch(e) {}
+                            clickAttempted = true;
                         }
-
-                        function wrapJwplayer(origJwplayer) {
-                            return function() {
-                                var p = origJwplayer.apply(this, arguments);
-                                if (!p.setupHooked) {
-                                    p.setupHooked = true;
-                                    var origSetup = p.setup;
-                                    p.setup = function(config) {
-                                        if (config.file) sendUrl(config.file);
-                                        if (config.playlist && config.playlist.length > 0 && config.playlist[0].file) {
-                                            sendUrl(config.playlist[0].file);
-                                        }
-                                        return origSetup.apply(this, arguments);
-                                    };
+                        
+                        // Sadap playlist m3u8 dari JWPlayer API
+                        try {
+                            if (window.jwplayer) {
+                                var pl = window.jwplayer().getPlaylist();
+                                if (pl && pl.length > 0 && pl[0].file) {
+                                    var url = pl[0].file;
+                                    if (url.indexOf('blob:') === -1) {
+                                        clearInterval(cs_check);
+                                        // Kirim link balik ke Cloudstream melalui Dummy URL
+                                        window.location.href = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(url);
+                                    }
                                 }
-                                return p;
-                            };
-                        }
-
-                        if (window.jwplayer) {
-                            window.jwplayer = wrapJwplayer(window.jwplayer);
-                        } else {
-                            var _jwplayer;
-                            Object.defineProperty(window, 'jwplayer', {
-                                get: function() { return _jwplayer; },
-                                set: function(val) { _jwplayer = wrapJwplayer(val); }
-                            });
-                        }
+                            }
+                        } catch(e) {}
                         
-                        // Jaga-jaga kalau server diam-diam pakai tag video murni
-                        setInterval(function() {
+                        // Fallback: Sadap tag video mentah jika server memakai player HTML5 biasa
+                        try {
                             var vids = document.querySelectorAll('video');
                             for (var i = 0; i < vids.length; i++) {
-                                if (vids[i].src) sendUrl(vids[i].src);
-                                var src = vids[i].querySelector('source');
-                                if (src && src.src) sendUrl(src.src);
+                                var vsrc = vids[i].src;
+                                if (!vsrc) {
+                                    var srcTag = vids[i].querySelector('source');
+                                    if (srcTag) vsrc = srcTag.src;
+                                }
+                                if (vsrc && vsrc.indexOf('blob:') === -1) {
+                                    clearInterval(cs_check);
+                                    window.location.href = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(vsrc);
+                                }
                             }
-                        }, 1000);
-                    }
+                        } catch(e) {}
+                    }, 500);
                 """.trimIndent()
 
-                // 2. Gunakan WebViewResolver dengan penangkapan Dummy URL
                 try {
                     val webViewResolver = WebViewResolver(
+                        // Cloudstream akan menangkap URL pancingan kita ini
                         interceptUrl = Regex("""cloudstream\.video\.extracted/\?url=(.*)"""), 
                         script = jwPlayerHijackScript 
                     )
@@ -300,6 +288,7 @@ class RebahinProvider : MainAPI() {
                     )
                     
                     request?.url?.toString()?.let { dummyUrl ->
+                        // Ekstrak URL asli yang berhasil disadap
                         val actualUrlMatch = Regex("""\?url=(.*)""").find(dummyUrl)
                         val encodedUrl = actualUrlMatch?.groupValues?.get(1)
                         if (encodedUrl != null) {
@@ -323,7 +312,6 @@ class RebahinProvider : MainAPI() {
                     }
                 } catch (e: Exception) {}
 
-                // 3. Fallback jika WebView tidak merespons (server normal)
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
