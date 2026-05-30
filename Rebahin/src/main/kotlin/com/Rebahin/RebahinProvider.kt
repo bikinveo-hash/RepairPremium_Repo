@@ -15,16 +15,12 @@ class RebahinProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // ==========================================
-    // PERBAIKAN: JALANKAN REQUEST SECARA BERGILIRAN (Anti Rate-Limit)
+    // PERBAIKAN 1: ANTI RATE-LIMIT CLOUDSTREAM
     // ==========================================
     override var sequentialMainPage = true
-    override var sequentialMainPageDelay: Long = 400L // Beri jeda 400 milidetik antar kategori
-    override var sequentialMainPageScrollDelay: Long = 200L // Jeda saat scroll halaman
-    // ==========================================
+    override var sequentialMainPageDelay: Long = 800L // Naikkan jeda jadi 800ms agar lebih aman
+    override var sequentialMainPageScrollDelay: Long = 200L
 
-    // ==========================================
-    // PERBAIKAN: KATEGORI BARU
-    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/" to "Movies",
         "$mainUrl/country/indonesia/page/" to "Indonesia",
@@ -42,11 +38,27 @@ class RebahinProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val document = app.get(request.data + page).document
+        // PERBAIKAN 2: HINDARI JEBAKAN REDIRECT /page/1
+        // Jika halaman 1, buang teks "page/", jika halaman 2 dst, biarkan.
+        val url = if (page == 1) {
+            request.data.removeSuffix("page/")
+        } else {
+            request.data + page
+        }
+
+        // Tambahkan referer agar dipercaya server
+        val document = app.get(url, referer = mainUrl).document
         val home = document.select("div.ml-item").mapNotNull {
             it.toSearchResult()
         }
-        // Pastikan menggunakan 'request' secara utuh sesuai standar MainAPI.kt terbaru
+
+        // PERBAIKAN 3: ERROR HANDLING SESUAI MainAPI.kt
+        // Jika server mengembalikan kosong di halaman 1, paksa Cloudstream 
+        // memunculkan error agar user bisa tap untuk retry, bukan menampilkan row kosong.
+        if (home.isEmpty() && page == 1) {
+            throw ErrorLoadingException("Server membatasi request, silakan refresh kategori ini.")
+        }
+
         return newHomePageResponse(request, home)
     }
 
@@ -182,10 +194,8 @@ class RebahinProvider : MainAPI() {
                 }
             } catch (e: Exception) {}
         } else {
-            // PERBAIKAN: Tambahkan referer agar request ke halaman /play tidak di block Server
             val document = app.get(data, referer = mainUrl).document
             
-            // PERBAIKAN: Gunakan "[data-iframe]" secara universal 
             document.select("[data-iframe]").forEach { element ->
                 val encodedUrl = element.attr("data-iframe")
                 if (encodedUrl.isNotBlank()) {
@@ -198,7 +208,6 @@ class RebahinProvider : MainAPI() {
                 }
             }
             
-            // PERBAIKAN: Ambil iframe fallback jika data-src digunakan alih-alih src
             document.select("iframe").forEach { iframe ->
                 val src = fixUrlNull(iframe.attr("src")) ?: fixUrlNull(iframe.attr("data-src"))
                 if (src != null && !src.contains("googleusercontent.com") && src.isNotBlank()) {
@@ -207,7 +216,6 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // PERBAIKAN: Gunakan .distinct() untuk menghindari proses ganda yang bikin muter-muter
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
@@ -217,12 +225,9 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // 1. Ekstraktor Standar CloudStream
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
             if (!isExtractorLoaded) {
-                
-                // MENGATASI 403 FORBIDDEN DI EXOPLAYER:
                 val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
                 val fixedReferer = if (targetUrl.contains("abyssplayer")) "https://abysscdn.com/" else "$domain/"
                 val reqHeaders = mapOf(
@@ -232,7 +237,6 @@ class RebahinProvider : MainAPI() {
 
                 var linkFound = false
 
-                // 2. Metode A: WebViewResolver (Pencegat Cloudflare/Request Gaib)
                 try {
                     val webViewResolver = WebViewResolver(
                         interceptUrl = Regex("""\.(m3u8|mp4)""")
@@ -261,7 +265,6 @@ class RebahinProvider : MainAPI() {
                     }
                 } catch (e: Exception) {}
 
-                // 3. Metode B: JS Unpacker Manual (Fallback)
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
