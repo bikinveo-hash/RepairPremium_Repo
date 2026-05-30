@@ -1,6 +1,7 @@
 package com.LayarKacaProvider
 
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -23,8 +24,25 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 "Referer"    to "https://playeriframe.sbs/"
             )
 
-            val response = app.get("$mainUrl/t/$id", headers = baseHeaders)
-            val html     = response.text
+            // Gunakan Fallback WebViewResolver sejak awal jika halaman Iframe dilindungi Cloudflare
+            var html = ""
+            var response = runCatching { app.get("$mainUrl/t/$id", headers = baseHeaders) }.getOrNull()
+            
+            if (response == null || response.code != 200 || response.text.contains("Just a moment") || response.text.contains("cloudflare")) {
+                val webViewResolver = WebViewResolver(
+                    interceptUrl = Regex(".*emturbovid.*|.*turbovidhls.*"),
+                    useOkhttp = false
+                )
+                val wvResult = webViewResolver.resolveUsingWebView(
+                    url = "$mainUrl/t/$id",
+                    headers = baseHeaders
+                )
+                
+                response = runCatching { app.get("$mainUrl/t/$id", headers = baseHeaders) }.getOrNull()
+                html = response?.text ?: ""
+            } else {
+                html = response.text
+            }
 
             // Cari m3u8 URL mentah menggunakan var
             var m3u8UrlRaw = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
@@ -32,7 +50,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 m3u8UrlRaw = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
             
-            // FIX KOMPILASI KOTLIN: Kunci ke dalam 'val' agar menjadi tipe data String murni (Non-Null)
+            // Kunci tipe data
             val m3u8Url = m3u8UrlRaw?.takeIf { it.isNotBlank() } ?: return null
 
             val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
@@ -41,12 +59,28 @@ open class Lk21TurboExtractor : ExtractorApi() {
             var finalPlayableUrl = m3u8Url
 
             // ====================================================================
-            // GOD MODE SNIFFER: Bypass Cronet & Cleartext HTTP secara native
+            // SUPER GOD MODE SNIFFER: Bypass Cronet, HTTP Cleartext & Cloudflare
             // ====================================================================
             if (type == ExtractorLinkType.M3U8) {
                 try {
                     var finalM3u8Url = m3u8Url
-                    var finalM3u8Content = app.get(finalM3u8Url, headers = baseHeaders).text
+                    var finalM3u8Content = ""
+                    
+                    // Coba baca M3U8. Jika gagal karena Cloudflare 403, WebViewResolver turun tangan!
+                    val m3u8Res = runCatching { app.get(finalM3u8Url, headers = baseHeaders) }.getOrNull()
+                    if (m3u8Res == null || m3u8Res.code != 200) {
+                        val webViewResolver = WebViewResolver(
+                            interceptUrl = Regex(".*\\.m3u8.*"),
+                            useOkhttp = false
+                        )
+                        webViewResolver.resolveUsingWebView(
+                            url = finalM3u8Url,
+                            headers = baseHeaders
+                        )
+                        finalM3u8Content = app.get(finalM3u8Url, headers = baseHeaders).text
+                    } else {
+                        finalM3u8Content = m3u8Res.text
+                    }
                     
                     var depth = 0
                     while (finalM3u8Content.contains(".m3u8") && depth < 3) {
@@ -63,7 +97,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                         depth++
                     }
 
-                    // Karena finalM3u8Url asalnya dari m3u8Url (val non-null), Kotlin tidak akan error lagi di sini
+                    // Rewrite semua HTTP menjadi HTTPS
                     val baseUrl = finalM3u8Url.substringBeforeLast("/")
                     val rewrittenLines = finalM3u8Content.lines().map { line ->
                         val trimmed = line.trim()
@@ -89,7 +123,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                     url    = finalPlayableUrl,
                     type   = type
                 ) {
-                    this.referer = "" // Dikosongkan agar bebas 429 dari CDN Google
+                    this.referer = "" // Dikosongkan agar bebas 429
                     this.quality = Qualities.Unknown.value
                     this.headers = mapOf(
                         "Origin"  to mainUrl,
