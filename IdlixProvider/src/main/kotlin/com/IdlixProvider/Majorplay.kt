@@ -22,10 +22,11 @@ class Majorplay : ExtractorApi() {
         val claimToken = url.substringAfter("claim=").substringBefore("&")
         if (claimToken.isEmpty()) return
 
+        // Menggunakan domain z2 baru dan User-Agent Android yang terbukti lolos
         val safeHeaders = mapOf(
-            "Origin" to "https://z1.idlixku.com",
-            "Referer" to "https://z1.idlixku.com/",
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+            "Origin" to "https://z2.idlixku.com",
+            "Referer" to "https://z2.idlixku.com/",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
 
         val textMediaType = "text/plain".toMediaTypeOrNull()
@@ -40,7 +41,6 @@ class Majorplay : ExtractorApi() {
 
         val masterConfigUrl = response.url ?: return
         
-        // Memuat subtitle resmi menggunakan top-level builder 'newSubtitleFile' secara sah
         val subtitles = response.subtitles
         if (subtitles != null) {
             for (sub in subtitles) {
@@ -52,10 +52,8 @@ class Majorplay : ExtractorApi() {
             }
         }
         
-        // Trik menyamarkan ujung tautan manifest agar lolos filter seleksi Cloudstream Core
         val finalPlayableUrl = "$masterConfigUrl&.m3u8"
         
-        // Daftarkan link paket secara komplit mematuhi blueprint ExtractorLink asli
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -64,8 +62,8 @@ class Majorplay : ExtractorApi() {
                 type = ExtractorLinkType.M3U8
             ) {
                 this.headers = safeHeaders
-                this.referer = "https://z1.idlixku.com/"
-                this.quality = Qualities.Unknown.value // Inisialisasi wajib agar paket tidak dibuang core engine
+                this.referer = "https://z2.idlixku.com/"
+                this.quality = Qualities.Unknown.value 
             }
         )
     }
