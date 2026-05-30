@@ -210,6 +210,7 @@ class RebahinProvider : MainAPI() {
 
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
+            
             if (rawUrl.contains("/iembed/?source=")) {
                 val base64 = rawUrl.substringAfter("source=")
                 try {
@@ -217,11 +218,17 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
+            // Normalisasi URL AbyssCDN agar extractor bawaan Cloudstream (jika ada) bisa bekerja
+            if (targetUrl.contains("abyssplayer.com/")) {
+                targetUrl = targetUrl.replace("abyssplayer.com/", "abysscdn.com/?v=")
+            }
+
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
+            // Jika gagal, keluarkan JURUS NUKLIR WEBVIEW INTERCEPTOR (Safe Mode)
             if (!isExtractorLoaded) {
                 val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
-                val fixedReferer = if (targetUrl.contains("abyssplayer")) "https://abysscdn.com/" else "$domain/"
+                val fixedReferer = if (targetUrl.contains("abyss")) "https://abysscdn.com/" else "$domain/"
                 val reqHeaders = mapOf(
                     "Origin" to fixedReferer.removeSuffix("/"),
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -229,57 +236,69 @@ class RebahinProvider : MainAPI() {
 
                 var linkFound = false
 
-                // =========================================================
-                // API HIJACKING (MEMBAJAK JWPLAYER DI LATAR BELAKANG)
-                // =========================================================
-                val jwPlayerHijackScript = """
-                    var clickAttempted = false;
-                    var cs_check = setInterval(function() {
-                        // Paksa sentuh layar agar server mau mulai dekripsi
-                        if (!clickAttempted) {
-                            try { document.querySelector('.jw-icon-display').click(); } catch(e) {}
-                            try { document.querySelector('.vjs-big-play-button').click(); } catch(e) {}
-                            clickAttempted = true;
-                        }
+                // =========================================================================
+                // PERBAIKAN: AUTO-CLICKER AMAN (TIDAK MEMBAJAK FUNGSI NATIVE BROWSER)
+                // =========================================================================
+                val safeHijackScript = """
+                    (function() {
+                        if (window.cs_hook_active) return;
+                        window.cs_hook_active = true;
                         
-                        // Sadap playlist m3u8 dari JWPlayer API
-                        try {
-                            if (window.jwplayer) {
-                                var pl = window.jwplayer().getPlaylist();
-                                if (pl && pl.length > 0 && pl[0].file) {
-                                    var url = pl[0].file;
-                                    if (url.indexOf('blob:') === -1) {
-                                        clearInterval(cs_check);
-                                        // Kirim link balik ke Cloudstream melalui Dummy URL
-                                        window.location.href = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(url);
+                        // 1. Matikan Anti-Adblock dengan cara aman (Mock object)
+                        window.fuckAdBlock = { onDetected: function(){}, onNotDetected: function(){}, setOption: function(){} };
+                        window.FuckAdBlock = window.fuckAdBlock;
+
+                        // 2. Pantau JWPlayer & Eksekusi Auto-Click tanpa menyentuh fetch/XHR
+                        setInterval(function() {
+                            // Ekstrak URL dari JWPlayer API (AbyssCDN & JuicyCodes)
+                            try {
+                                if (window.jwplayer && typeof window.jwplayer === 'function') {
+                                    var pl = window.jwplayer().getPlaylist();
+                                    if (pl && pl.length > 0 && pl[0].file) {
+                                        var url = pl[0].file;
+                                        if (url.indexOf('blob:') === -1 && !window.cs_sent) {
+                                            window.cs_sent = true;
+                                            window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(url);
+                                        }
                                     }
                                 }
-                            }
-                        } catch(e) {}
-                        
-                        // Fallback: Sadap tag video mentah jika server memakai player HTML5 biasa
-                        try {
-                            var vids = document.querySelectorAll('video');
-                            for (var i = 0; i < vids.length; i++) {
-                                var vsrc = vids[i].src;
-                                if (!vsrc) {
-                                    var srcTag = vids[i].querySelector('source');
-                                    if (srcTag) vsrc = srcTag.src;
+                            } catch(e){}
+                            
+                            // Ambil URL dari tag video murni (Fallback)
+                            try {
+                                var vids = document.querySelectorAll('video');
+                                for (var i = 0; i < vids.length; i++) {
+                                    var vurl = vids[i].src;
+                                    if (!vurl) {
+                                        var srcTag = vids[i].querySelector('source');
+                                        if (srcTag && srcTag.src) vurl = srcTag.src;
+                                    }
+                                    if (vurl && vurl.indexOf('blob:') === -1 && !window.cs_sent) {
+                                        window.cs_sent = true;
+                                        window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(vurl);
+                                    }
                                 }
-                                if (vsrc && vsrc.indexOf('blob:') === -1) {
-                                    clearInterval(cs_check);
-                                    window.location.href = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(vsrc);
+                            } catch(e){}
+
+                            // Paksa Klik Tombol Play dan Overlay
+                            try {
+                                var overlay = document.getElementById('overlay');
+                                if (overlay) overlay.click();
+                                
+                                var btns = document.querySelectorAll('.jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid');
+                                for (var i=0; i<btns.length; i++) {
+                                    btns[i].click();
                                 }
-                            }
-                        } catch(e) {}
-                    }, 500);
+                            } catch(e){}
+                        }, 500);
+                    })();
                 """.trimIndent()
 
                 try {
                     val webViewResolver = WebViewResolver(
-                        // Cloudstream akan menangkap URL pancingan kita ini
-                        interceptUrl = Regex("""cloudstream\.video\.extracted/\?url=(.*)"""), 
-                        script = jwPlayerHijackScript 
+                        // Tangkap dummy URL kita ATAU URL video murni yang berkeliaran di network
+                        interceptUrl = Regex("""(cloudstream\.video\.extracted/\?url=.*|\.(m3u8|mp4)(?:[?#]|$))"""),
+                        script = safeHijackScript 
                     )
                     
                     val (request, _) = webViewResolver.resolveUsingWebView(
@@ -287,31 +306,35 @@ class RebahinProvider : MainAPI() {
                         referer = mainUrl
                     )
                     
-                    request?.url?.toString()?.let { dummyUrl ->
-                        // Ekstrak URL asli yang berhasil disadap
-                        val actualUrlMatch = Regex("""\?url=(.*)""").find(dummyUrl)
-                        val encodedUrl = actualUrlMatch?.groupValues?.get(1)
-                        if (encodedUrl != null) {
-                            val actualUrl = URLDecoder.decode(encodedUrl, "UTF-8")
-                            val isM3u8 = actualUrl.contains(".m3u8") || actualUrl.contains("m3u8")
-                            
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name + " (Web)",
-                                    name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                    url = actualUrl,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = fixedReferer
-                                    this.headers = reqHeaders 
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                            linkFound = true
+                    request?.url?.toString()?.let { resolvedUrl ->
+                        var finalUrl = resolvedUrl
+                        
+                        // Ekstrak dari dummy URL jika itu yang tertangkap oleh script
+                        if (resolvedUrl.contains("cloudstream.video.extracted")) {
+                            val encodedUrl = Regex("""\?url=(.*)""").find(resolvedUrl)?.groupValues?.get(1)
+                            if (encodedUrl != null) {
+                                finalUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+                            }
                         }
+
+                        val isM3u8 = finalUrl.contains(".m3u8") || finalUrl.contains("m3u8")
+                        
+                        callback.invoke(
+                            ExtractorLink(
+                                source = this.name + " (Web)",
+                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
+                                url = finalUrl,
+                                referer = fixedReferer,
+                                quality = Qualities.Unknown.value,
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                                headers = reqHeaders
+                            )
+                        )
+                        linkFound = true
                     }
                 } catch (e: Exception) {}
-
+                
+                // Fallback terakhir: JS Unpacker Standar
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
@@ -322,16 +345,15 @@ class RebahinProvider : MainAPI() {
                             val link = match.groupValues[1]
                             val isM3u8 = link.contains(".m3u8")
                             callback.invoke(
-                                newExtractorLink(
+                                ExtractorLink(
                                     source = this.name + " (Auto)",
                                     name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
                                     url = link,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = fixedReferer
-                                    this.headers = reqHeaders 
-                                    this.quality = Qualities.Unknown.value
-                                }
+                                    referer = fixedReferer,
+                                    quality = Qualities.Unknown.value,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                                    headers = reqHeaders
+                                )
                             )
                         }
                     } catch (e: Exception) {}
