@@ -14,9 +14,18 @@ class RebahinProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    // 1. UPDATE KATEGORI SESUAI PERMINTAAN
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/" to "Movies",
-        "$mainUrl/series/page/" to "TV Series"
+        "$mainUrl/country/indonesia/page/" to "Indonesia",
+        "$mainUrl/genre/series-indonesia/page/" to "Series Indonesia",
+        "$mainUrl/country/south-korea/page/" to "South Korea",
+        "$mainUrl/genre/drama-korea/page/" to "Drama Korea",
+        "$mainUrl/genre/action/page/" to "Action",
+        "$mainUrl/genre/adventure/page/" to "Adventure",
+        "$mainUrl/genre/war/page/" to "War",
+        "$mainUrl/genre/adult/page/" to "Adult",
+        "$mainUrl/country/philippines/page/" to "Philippines"
     )
 
     override suspend fun getMainPage(
@@ -162,25 +171,34 @@ class RebahinProvider : MainAPI() {
                 }
             } catch (e: Exception) {}
         } else {
-            val document = app.get(data).document
-            document.select("div.server").forEach { server ->
-                val encodedUrl = server.attr("data-iframe")
+            // PERBAIKAN 1: Tambahkan referer agar request ke halaman /play tidak di block Cloudflare/Server
+            val document = app.get(data, referer = mainUrl).document
+            
+            // PERBAIKAN 2: Gunakan "[data-iframe]" secara universal, bukan cuma "div.server"
+            // Karena kadang admin web mengubahnya menjadi tag <li>, <a>, atau <button>
+            document.select("[data-iframe]").forEach { element ->
+                val encodedUrl = element.attr("data-iframe")
                 if (encodedUrl.isNotBlank()) {
-                    val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
-                    if (decodedUrl.startsWith("http")) {
-                        urlToExtract.add(decodedUrl)
-                    }
+                    try {
+                        val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
+                        if (decodedUrl.startsWith("http")) {
+                            urlToExtract.add(decodedUrl)
+                        }
+                    } catch (e: Exception) {}
                 }
             }
+            
+            // PERBAIKAN 3: Ambil iframe fallback jika data-src digunakan alih-alih src
             document.select("iframe").forEach { iframe ->
-                val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                if (!src.contains("googleusercontent.com") && src.isNotBlank()) {
+                val src = fixUrlNull(iframe.attr("src")) ?: fixUrlNull(iframe.attr("data-src"))
+                if (src != null && !src.contains("googleusercontent.com") && src.isNotBlank()) {
                     urlToExtract.add(src)
                 }
             }
         }
 
-        urlToExtract.forEach { rawUrl ->
+        // PERBAIKAN 4: Gunakan .distinct() untuk menghindari eksekusi extractor berkali-kali pada URL yang sama
+        urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
                 val base64 = rawUrl.substringAfter("source=")
@@ -195,7 +213,6 @@ class RebahinProvider : MainAPI() {
             if (!isExtractorLoaded) {
                 
                 // MENGATASI 403 FORBIDDEN DI EXOPLAYER:
-                // Kita harus memberikan Header "Origin" dan "Referer" yang persis sama dengan domain aslinya
                 val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
                 val fixedReferer = if (targetUrl.contains("abyssplayer")) "https://abysscdn.com/" else "$domain/"
                 val reqHeaders = mapOf(
@@ -226,7 +243,7 @@ class RebahinProvider : MainAPI() {
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = fixedReferer
-                                this.headers = reqHeaders // <-- INI OBAT ANTI 403 FORBIDDEN
+                                this.headers = reqHeaders 
                                 this.quality = Qualities.Unknown.value
                             }
                         )
@@ -252,7 +269,7 @@ class RebahinProvider : MainAPI() {
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
                                     this.referer = fixedReferer
-                                    this.headers = reqHeaders // <-- INI OBAT ANTI 403 FORBIDDEN
+                                    this.headers = reqHeaders 
                                     this.quality = Qualities.Unknown.value
                                 }
                             )
