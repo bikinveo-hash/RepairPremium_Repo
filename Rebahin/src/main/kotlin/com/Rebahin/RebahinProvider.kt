@@ -132,7 +132,6 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // Decode base64 data-iframe, tangani double encoding
     private fun decodeIframeSrc(raw: String): String? {
         if (raw.isBlank()) return null
         if (raw.startsWith("http")) return raw
@@ -167,14 +166,12 @@ class RebahinProvider : MainAPI() {
             }
             else -> {
                 val playDoc = app.get(data).document
-                // Selector sesuai hasil inspect: div.server dan div.server-active
                 playDoc.select("div.server, div.server-active").forEach { server ->
                     val raw = server.attr("data-iframe")
                     if (raw.isNotBlank()) {
                         decodeIframeSrc(raw)?.let { playerUrls.add(it) }
                     }
                 }
-                // Fallback iframe
                 if (playerUrls.isEmpty()) {
                     playDoc.select("iframe").forEach { iframe ->
                         val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
@@ -196,38 +193,28 @@ class RebahinProvider : MainAPI() {
         playerUrls.distinct().forEach { playerUrl ->
             if (!playerUrl.startsWith("http")) return@forEach
 
-            val domain = playerUrl.substringBefore("/", "").let {
-                Regex("""https?://[^/]+""").find(playerUrl)?.value ?: playerUrl
-            }
+            val domain = Regex("""https?://[^/]+""").find(playerUrl)?.value ?: playerUrl
 
-            // ── Coba loadExtractor standar dulu ──────────────────────
             val extractorLoaded = loadExtractor(playerUrl, mainUrl, subtitleCallback, callback)
             if (extractorLoaded) return@forEach
 
-            // ── WebViewResolver: buka player di browser, intercept video request ──
+            // --- WEBVIEW RESOLVER ANTI-BADAI ---
             try {
                 val cookieManager = CookieManager.getInstance()
-
-                // Intercept semua request yang merupakan video
-                val videoRegex = Regex(
-                    """https?://[^\s"'<>]+(?:\.m3u8|\.mp4|\.ts)(?:[^\s"'<>]*)?"""
-                )
+                
+                // HANYA mencegat file video. Tapi kita TIDAK mematikan proses JS (requestCallback dihapus)
+                // agar sistem Juicy_Session/XSRF-Token mereka sempat memvalidasi "signature" ping.
+                val videoRegex = Regex("""https?://[^\s"'<>]+(?:\.m3u8|\.mp4)(?:[^\s"'<>]*)?""")
 
                 val (interceptedRequest, collectedRequests) = WebViewResolver(
                     interceptUrl  = videoRegex,
                     additionalUrls = listOf(videoRegex),
-                    timeout        = 30_000L
+                    timeout        = 10_000L // Beri waktu WebView bernapas untuk proses JS dan token ping
                 ).resolveUsingWebView(
                     url     = playerUrl,
-                    referer = mainUrl,
-                    requestCallBack = { req ->
-                        val u = req.url.toString()
-                        // Stop segera setelah dapat URL video
-                        u.contains(".m3u8") || u.contains(".mp4")
-                    }
+                    referer = mainUrl
                 )
 
-                // Gabung: request utama + semua collected requests
                 val allRequests = buildList {
                     interceptedRequest?.let { add(it) }
                     addAll(collectedRequests)
@@ -239,34 +226,31 @@ class RebahinProvider : MainAPI() {
                     val isMp4  = url.contains(".mp4")
                     if (!isM3u8 && !isMp4) return@forEach
 
-                    // ── Kunci anti-403: ambil cookie dari WebView ──────
                     val finalHeaders = mutableMapOf<String, String>()
 
-                    // Salin semua header dari request WebView
+                    // Ambil Header hasil sadapan WebView
                     req.headers.forEach { (k, v) -> finalHeaders[k] = v }
 
-                    // Ambil cookie dari WebView CookieManager untuk domain player
+                    // Tarik cookie lengkap dari CookieManager
                     val cookiePlayer  = cookieManager.getCookie(playerUrl) ?: ""
                     val cookieVideo   = cookieManager.getCookie(url)       ?: ""
                     val cookieDomain  = cookieManager.getCookie(domain)    ?: ""
                     val allCookies = listOf(cookiePlayer, cookieVideo, cookieDomain)
                         .filter { it.isNotBlank() }
                         .joinToString("; ")
+                    
                     if (allCookies.isNotBlank()) {
                         finalHeaders["Cookie"] = allCookies
                     }
 
-                    // Pastikan Origin & Referer sesuai domain player
+                    // Tentukan Origin dan Referer yang disukai Cloudflare
                     finalHeaders["Origin"]  = domain
                     finalHeaders["Referer"] = "$domain/"
                     finalHeaders["Accept"]  = "*/*"
 
-                    // Gunakan UA dari WebView (PENTING: server cek UA)
-                    if (!finalHeaders.containsKey("User-Agent") &&
-                        !finalHeaders.containsKey("user-agent")) {
-                        finalHeaders["User-Agent"] =
-                            WebViewResolver.webViewUserAgent
-                                ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                    // WAJIB: User-Agent ExoPlayer harus identik dengan WebView
+                    if (!finalHeaders.containsKey("User-Agent") && !finalHeaders.containsKey("user-agent")) {
+                        finalHeaders["User-Agent"] = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                     }
 
                     callback.invoke(
@@ -284,7 +268,7 @@ class RebahinProvider : MainAPI() {
                 }
 
             } catch (e: Exception) {
-                // Silent fail — lanjut ke URL berikutnya
+                // Lanjut ke playerUrl selanjutnya
             }
         }
 
