@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
 
 class RebahinProvider : MainAPI() {
     override var mainUrl = "https://rebahinxxi3.autos"
@@ -14,16 +15,10 @@ class RebahinProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // ==========================================
-    // ANTI RATE-LIMIT (Pencegah Kategori Kosong)
-    // ==========================================
     override var sequentialMainPage = true
     override var sequentialMainPageDelay: Long = 800L
     override var sequentialMainPageScrollDelay: Long = 200L
 
-    // ==========================================
-    // KATEGORI UPDATE
-    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/" to "Movies",
         "$mainUrl/country/indonesia/page/" to "Indonesia",
@@ -41,7 +36,6 @@ class RebahinProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // HINDARI JEBAKAN REDIRECT /page/1
         val url = if (page == 1) {
             request.data.removeSuffix("page/")
         } else {
@@ -223,7 +217,7 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // 1. Coba lewati Extractor bawaan dulu (jika ada yang support abyssplayer dsb)
+            // 1. Coba eksekusi dengan extractor standar
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
             if (!isExtractorLoaded) {
@@ -237,26 +231,67 @@ class RebahinProvider : MainAPI() {
                 var linkFound = false
 
                 // =========================================================
-                // PERBAIKAN: JAVASCRIPT AUTO-PLAY UNTUK MENEMBUS JUICYCODES
+                // TEKNIK BARU: API HIJACKING (SADAP JWPLAYER)
                 // =========================================================
-                val autoPlayScript = """
-                    var attemptPlay = function() {
-                        try { if(typeof jwplayer === 'function') jwplayer().play(); } catch(e) {}
-                        try { document.querySelector('.jw-icon-display').click(); } catch(e) {}
-                        try { document.querySelector('.vjs-big-play-button').click(); } catch(e) {}
-                        try { document.querySelector('video').play(); } catch(e) {}
-                    };
-                    setTimeout(attemptPlay, 1000);
-                    setTimeout(attemptPlay, 2000);
-                    setTimeout(attemptPlay, 3500);
-                    setTimeout(attemptPlay, 5000);
+                val jwPlayerHijackScript = """
+                    if (!window.cs_hooked) {
+                        window.cs_hooked = true;
+                        var sentUrls = {};
+                        
+                        function sendUrl(url) {
+                            if (url && !url.startsWith('blob:') && !sentUrls[url]) {
+                                sentUrls[url] = true;
+                                // Mengirim sinyal ke WebViewResolver bahwa link ditemukan!
+                                var img = new Image();
+                                img.src = "https://cloudstream.video.extracted/?url=" + encodeURIComponent(url); 
+                            }
+                        }
+
+                        function wrapJwplayer(origJwplayer) {
+                            return function() {
+                                var p = origJwplayer.apply(this, arguments);
+                                if (!p.setupHooked) {
+                                    p.setupHooked = true;
+                                    var origSetup = p.setup;
+                                    p.setup = function(config) {
+                                        if (config.file) sendUrl(config.file);
+                                        if (config.playlist && config.playlist.length > 0 && config.playlist[0].file) {
+                                            sendUrl(config.playlist[0].file);
+                                        }
+                                        return origSetup.apply(this, arguments);
+                                    };
+                                }
+                                return p;
+                            };
+                        }
+
+                        if (window.jwplayer) {
+                            window.jwplayer = wrapJwplayer(window.jwplayer);
+                        } else {
+                            var _jwplayer;
+                            Object.defineProperty(window, 'jwplayer', {
+                                get: function() { return _jwplayer; },
+                                set: function(val) { _jwplayer = wrapJwplayer(val); }
+                            });
+                        }
+                        
+                        // Jaga-jaga kalau server diam-diam pakai tag video murni
+                        setInterval(function() {
+                            var vids = document.querySelectorAll('video');
+                            for (var i = 0; i < vids.length; i++) {
+                                if (vids[i].src) sendUrl(vids[i].src);
+                                var src = vids[i].querySelector('source');
+                                if (src && src.src) sendUrl(src.src);
+                            }
+                        }, 1000);
+                    }
                 """.trimIndent()
 
-                // 2. Gunakan WebViewResolver untuk mengeksekusi Javascript dan menyadap network
+                // 2. Gunakan WebViewResolver dengan penangkapan Dummy URL
                 try {
                     val webViewResolver = WebViewResolver(
-                        interceptUrl = Regex("""\.(m3u8|mp4)(?:[?#]|$)"""), 
-                        script = autoPlayScript 
+                        interceptUrl = Regex("""cloudstream\.video\.extracted/\?url=(.*)"""), 
+                        script = jwPlayerHijackScript 
                     )
                     
                     val (request, _) = webViewResolver.resolveUsingWebView(
@@ -264,25 +299,31 @@ class RebahinProvider : MainAPI() {
                         referer = mainUrl
                     )
                     
-                    request?.url?.toString()?.let { resolvedUrl ->
-                        val isM3u8 = resolvedUrl.contains(".m3u8")
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name + " (Web)",
-                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                url = resolvedUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = fixedReferer
-                                this.headers = reqHeaders 
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                        linkFound = true
+                    request?.url?.toString()?.let { dummyUrl ->
+                        val actualUrlMatch = Regex("""\?url=(.*)""").find(dummyUrl)
+                        val encodedUrl = actualUrlMatch?.groupValues?.get(1)
+                        if (encodedUrl != null) {
+                            val actualUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+                            val isM3u8 = actualUrl.contains(".m3u8") || actualUrl.contains("m3u8")
+                            
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name + " (Web)",
+                                    name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
+                                    url = actualUrl,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = fixedReferer
+                                    this.headers = reqHeaders 
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                            linkFound = true
+                        }
                     }
                 } catch (e: Exception) {}
 
-                // 3. Fallback jika WebView gagal
+                // 3. Fallback jika WebView tidak merespons (server normal)
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
