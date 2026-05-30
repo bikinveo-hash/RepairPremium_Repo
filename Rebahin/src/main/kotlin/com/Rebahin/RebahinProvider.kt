@@ -14,7 +14,17 @@ class RebahinProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // 1. UPDATE KATEGORI SESUAI PERMINTAAN
+    // ==========================================
+    // PERBAIKAN: JALANKAN REQUEST SECARA BERGILIRAN (Anti Rate-Limit)
+    // ==========================================
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay: Long = 400L // Beri jeda 400 milidetik antar kategori
+    override var sequentialMainPageScrollDelay: Long = 200L // Jeda saat scroll halaman
+    // ==========================================
+
+    // ==========================================
+    // PERBAIKAN: KATEGORI BARU
+    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/" to "Movies",
         "$mainUrl/country/indonesia/page/" to "Indonesia",
@@ -36,7 +46,8 @@ class RebahinProvider : MainAPI() {
         val home = document.select("div.ml-item").mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(request.name, home)
+        // Pastikan menggunakan 'request' secara utuh sesuai standar MainAPI.kt terbaru
+        return newHomePageResponse(request, home)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -171,11 +182,10 @@ class RebahinProvider : MainAPI() {
                 }
             } catch (e: Exception) {}
         } else {
-            // PERBAIKAN 1: Tambahkan referer agar request ke halaman /play tidak di block Cloudflare/Server
+            // PERBAIKAN: Tambahkan referer agar request ke halaman /play tidak di block Server
             val document = app.get(data, referer = mainUrl).document
             
-            // PERBAIKAN 2: Gunakan "[data-iframe]" secara universal, bukan cuma "div.server"
-            // Karena kadang admin web mengubahnya menjadi tag <li>, <a>, atau <button>
+            // PERBAIKAN: Gunakan "[data-iframe]" secara universal 
             document.select("[data-iframe]").forEach { element ->
                 val encodedUrl = element.attr("data-iframe")
                 if (encodedUrl.isNotBlank()) {
@@ -188,7 +198,7 @@ class RebahinProvider : MainAPI() {
                 }
             }
             
-            // PERBAIKAN 3: Ambil iframe fallback jika data-src digunakan alih-alih src
+            // PERBAIKAN: Ambil iframe fallback jika data-src digunakan alih-alih src
             document.select("iframe").forEach { iframe ->
                 val src = fixUrlNull(iframe.attr("src")) ?: fixUrlNull(iframe.attr("data-src"))
                 if (src != null && !src.contains("googleusercontent.com") && src.isNotBlank()) {
@@ -197,7 +207,7 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // PERBAIKAN 4: Gunakan .distinct() untuk menghindari eksekusi extractor berkali-kali pada URL yang sama
+        // PERBAIKAN: Gunakan .distinct() untuk menghindari proses ganda yang bikin muter-muter
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
@@ -251,7 +261,7 @@ class RebahinProvider : MainAPI() {
                     }
                 } catch (e: Exception) {}
 
-                // 3. Metode B: JS Unpacker Manual (Fallback jika metode Webview gagal/lama)
+                // 3. Metode B: JS Unpacker Manual (Fallback)
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
