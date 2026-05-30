@@ -78,11 +78,10 @@ class RebahinProvider : MainAPI() {
             ?: document.selectFirst("h3[itemprop=name]")?.text()
             ?: return null
         
-        // Menarik URL pemutar video sekaligus Latar Belakang (Banner)
+        // Menarik Latar Belakang (Banner)
         val mviCover = document.selectFirst("a.mvi-cover")
         val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
-        val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
-
+        
         // Menarik Poster
         val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
             ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
@@ -113,6 +112,8 @@ class RebahinProvider : MainAPI() {
         val isTvSeries = url.contains("/series/")
 
         return if (isTvSeries) {
+            // URL pemutar TV series menggunakan /watch
+            val playUrl = fixUrlNull(mviCover?.attr("href")) ?: "$url/watch"
             val watchDocument = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
             val episodeButtons = watchDocument.select("div#list-eps a.btn-eps")
@@ -139,8 +140,8 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
-            // URL pemutar film layar lebar langsung diteruskan ke fungsi loadLinks
-            newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
+            // PERBAIKAN: Gunakan parameter url secara langsung, karena iframe ada di halaman utama
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
@@ -160,7 +161,7 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
-        // Mengelompokkan URL dari parameter data (baik berupa Base64 maupun URL /play)
+        // Mengelompokkan URL dari parameter data (baik berupa Base64 maupun URL halaman)
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
@@ -197,15 +198,14 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // --- [INTI PERBAIKAN: BYPASS DOMAIN ABYSS] ---
-            // Bypass redirect 302 abyssplayer/IP JuicyCodes, langsung tembak ke abysscdn
+            // --- BYPASS DOMAIN ABYSS / JUICY CODES ---
+            // Bypass redirect 302 abyssplayer/IP JuicyCodes, tembak langsung ke abysscdn
             if (targetUrl.contains("abyssplayer.com") || targetUrl.contains("199.87.210.226")) {
-                val videoId = targetUrl.substringAfterLast("/")
+                val videoId = targetUrl.substringAfterLast("/").substringBefore("?")
                 targetUrl = "https://abysscdn.com/?v=$videoId"
             }
 
             // 1. Uji dengan ekstraktor bawaan CloudStream 
-            // (Biasanya CS sudah support abysscdn jika domainnya valid)
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
             // 2. Fallback: Eksekusi manual jika hoster custom belum disupport CS
@@ -218,7 +218,6 @@ class RebahinProvider : MainAPI() {
                     val unpackedHtml = getAndUnpack(playerHtml)
 
                     // Tarik URL berakhiran .m3u8, .mp4, atau .fd dari hasil HTML yang sudah telanjang
-                    // Ditambahkan format .fd sesuai hasil sniffing curl
                     val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""").findAll(unpackedHtml)
                     
                     videoLinks.forEach { match ->
