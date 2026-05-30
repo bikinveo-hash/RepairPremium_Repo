@@ -1,6 +1,7 @@
 package com.Rebahin
 
 import android.util.Base64
+import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
@@ -218,39 +219,29 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // Normalisasi URL AbyssCDN agar extractor bawaan Cloudstream (jika ada) bisa bekerja
+            // Normalisasi AbyssCDN
             if (targetUrl.contains("abyssplayer.com/")) {
                 targetUrl = targetUrl.replace("abyssplayer.com/", "abysscdn.com/?v=")
             }
 
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
-            // Jika gagal, keluarkan JURUS NUKLIR WEBVIEW INTERCEPTOR (Safe Mode)
             if (!isExtractorLoaded) {
                 val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
                 val fixedReferer = if (targetUrl.contains("abyss")) "https://abysscdn.com/" else "$domain/"
-                val reqHeaders = mapOf(
-                    "Origin" to fixedReferer.removeSuffix("/"),
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                )
 
                 var linkFound = false
 
-                // =========================================================================
-                // PERBAIKAN: AUTO-CLICKER AMAN (TIDAK MEMBAJAK FUNGSI NATIVE BROWSER)
-                // =========================================================================
+                // Script Auto-Clicker untuk mencuri link dari memori player
                 val safeHijackScript = """
                     (function() {
                         if (window.cs_hook_active) return;
                         window.cs_hook_active = true;
                         
-                        // 1. Matikan Anti-Adblock dengan cara aman (Mock object)
                         window.fuckAdBlock = { onDetected: function(){}, onNotDetected: function(){}, setOption: function(){} };
                         window.FuckAdBlock = window.fuckAdBlock;
 
-                        // 2. Pantau JWPlayer & Eksekusi Auto-Click tanpa menyentuh fetch/XHR
                         setInterval(function() {
-                            // Ekstrak URL dari JWPlayer API (AbyssCDN & JuicyCodes)
                             try {
                                 if (window.jwplayer && typeof window.jwplayer === 'function') {
                                     var pl = window.jwplayer().getPlaylist();
@@ -264,7 +255,6 @@ class RebahinProvider : MainAPI() {
                                 }
                             } catch(e){}
                             
-                            // Ambil URL dari tag video murni (Fallback)
                             try {
                                 var vids = document.querySelectorAll('video');
                                 for (var i = 0; i < vids.length; i++) {
@@ -280,7 +270,6 @@ class RebahinProvider : MainAPI() {
                                 }
                             } catch(e){}
 
-                            // Paksa Klik Tombol Play dan Overlay
                             try {
                                 var overlay = document.getElementById('overlay');
                                 if (overlay) overlay.click();
@@ -296,7 +285,6 @@ class RebahinProvider : MainAPI() {
 
                 try {
                     val webViewResolver = WebViewResolver(
-                        // Tangkap dummy URL kita ATAU URL video murni yang berkeliaran di network
                         interceptUrl = Regex("""(cloudstream\.video\.extracted/\?url=.*|\.(m3u8|mp4)(?:[?#]|$))"""),
                         script = safeHijackScript 
                     )
@@ -309,13 +297,30 @@ class RebahinProvider : MainAPI() {
                     request?.url?.toString()?.let { resolvedUrl ->
                         var finalUrl = resolvedUrl
                         
-                        // Ekstrak dari dummy URL jika itu yang tertangkap oleh script
                         if (resolvedUrl.contains("cloudstream.video.extracted")) {
                             val encodedUrl = Regex("""\?url=(.*)""").find(resolvedUrl)?.groupValues?.get(1)
                             if (encodedUrl != null) {
                                 finalUrl = URLDecoder.decode(encodedUrl, "UTF-8")
                             }
                         }
+
+                        // =========================================================
+                        // PERBAIKAN FATAL: AMBIL SEMUA COOKIES UNTUK EXOPLAYER
+                        // =========================================================
+                        val cookieManager = CookieManager.getInstance()
+                        val embedCookies = cookieManager.getCookie(targetUrl) ?: ""
+                        val videoCookies = cookieManager.getCookie(finalUrl) ?: ""
+                        val finalCookies = listOf(embedCookies, videoCookies).filter { it.isNotBlank() }.joinToString("; ")
+
+                        val reqHeaders = mapOf(
+                            "Origin" to fixedReferer.removeSuffix("/"),
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                            "Cookie" to finalCookies, // <--- INI KUNCI UTAMANYA MENCEGAH 403!
+                            "Accept" to "*/*",
+                            "Sec-Fetch-Site" to "cross-site",
+                            "Sec-Fetch-Mode" to "cors",
+                            "Sec-Fetch-Dest" to "empty"
+                        )
 
                         val isM3u8 = finalUrl.contains(".m3u8") || finalUrl.contains("m3u8")
                         
@@ -334,7 +339,6 @@ class RebahinProvider : MainAPI() {
                     }
                 } catch (e: Exception) {}
                 
-                // Fallback terakhir: JS Unpacker Standar
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
@@ -352,7 +356,7 @@ class RebahinProvider : MainAPI() {
                                     referer = fixedReferer,
                                     quality = Qualities.Unknown.value,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                                    headers = reqHeaders
+                                    headers = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
                                 )
                             )
                         }
