@@ -5,6 +5,7 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.nicehttp.RequestBodyTypes
@@ -14,7 +15,6 @@ import kotlinx.coroutines.delay
 import java.util.UUID
 
 class IdlixProvider : MainAPI() {
-    // Ubah ke domain terbaru
     override var mainUrl = "https://z2.idlixku.com"
     override var name = "Idlix"
     override val hasMainPage = true
@@ -319,7 +319,7 @@ class IdlixProvider : MainAPI() {
             // Pancing CookieJar NiceHttp agar mengaktifkan Cloudflare Solver internal
             app.get(mainUrl)
 
-            // Setup Cookies buatan kita secara terpisah, tidak di-hardcode di dalam header!
+            // Setup Cookies buatan kita secara terpisah
             val randomDid = UUID.randomUUID().toString().replace("-", "")
             val customCookies = mapOf(
                 "did" to randomDid,
@@ -333,17 +333,48 @@ class IdlixProvider : MainAPI() {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
 
-            // 1. Ambil gateToken dari play-info
-            val playInfoResText = app.get(
-                url = "$mainUrl/api/watch/play-info/$contentType/$contentId",
-                headers = headers,
-                cookies = customCookies
-            ).text
-            val playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoResText)
+            val targetPlayInfoUrl = "$mainUrl/api/watch/play-info/$contentType/$contentId"
 
-            val gateToken = playInfoRes.gateToken ?: return false
+            // 1. Eksekusi Request API Reguler (Cepat)
+            var playInfoResText = runCatching {
+                app.get(
+                    url = targetPlayInfoUrl,
+                    headers = headers,
+                    cookies = customCookies
+                ).text
+            }.getOrNull() ?: ""
+
+            var playInfoRes = runCatching { AppUtils.parseJson<PlayInfoResponse>(playInfoResText) }.getOrNull()
+
+            // 2. FALLBACK WEBVIEWRESOLVER: Aktif jika API reguler diblokir Cloudflare (gateToken gagal diraih)
+            if (playInfoRes?.gateToken == null) {
+                Log.d("adixtream", "Terkena blokir Cloudflare. Menjalankan Fallback WebViewResolver...")
+                
+                val webViewResolver = WebViewResolver(
+                    interceptUrl = Regex(".*api/watch/play-info.*"),
+                    useOkhttp = false // Wajib false agar WebView merender JS Cloudflare
+                )
+                
+                // Buka WebView tersembunyi untuk memecahkan Cloudflare.
+                // Setelah selesai, cookie cf_clearance otomatis tersimpan di CookieManager aplikasi.
+                webViewResolver.resolveUsingWebView(
+                    url = targetPlayInfoUrl,
+                    headers = headers
+                )
+                
+                // Request ulang dengan API reguler (sekarang sudah berbekal tiket cf_clearance)
+                playInfoResText = app.get(
+                    url = targetPlayInfoUrl,
+                    headers = headers,
+                    cookies = customCookies
+                ).text
+                
+                playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoResText)
+            }
+
+            val gateToken = playInfoRes?.gateToken ?: return false
             
-            // 2. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
+            // 3. BYPASS PROTEKSI WAKTU IKLAN (TIME-LOCK)
             val serverNow = playInfoRes.serverNow ?: 0L
             val unlockAt = playInfoRes.unlockAt ?: 0L
             val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
@@ -354,7 +385,7 @@ class IdlixProvider : MainAPI() {
             val finalWaitMs = maxOf(baseWaitMs, diffTimeMs) + 1000L
             delay(finalWaitMs)
 
-            // 3. Handshake Tahap 2: Klaim token streaming
+            // 4. Handshake Tahap 2: Klaim token streaming
             val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
             val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
             
@@ -368,7 +399,7 @@ class IdlixProvider : MainAPI() {
             val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimResText)
             val claim = claimParsed.claim ?: return false
             
-            // 4. Bypass Majorplay
+            // 5. Bypass Majorplay
             val fakeUrl = "https://e2e.majorplay.net/play?claim=$claim"
             Majorplay().getUrl(fakeUrl, refererUrl, subtitleCallback, callback)
             
