@@ -112,7 +112,6 @@ class RebahinProvider : MainAPI() {
         val isTvSeries = url.contains("/series/")
 
         return if (isTvSeries) {
-            // URL pemutar TV series menggunakan /watch
             val playUrl = fixUrlNull(mviCover?.attr("href")) ?: "$url/watch"
             val watchDocument = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
@@ -140,7 +139,7 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
-            // PERBAIKAN: Gunakan parameter url secara langsung, karena iframe ada di halaman utama
+            // URL Player Film selalu ada di halaman utama
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -161,7 +160,7 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
-        // Mengelompokkan URL dari parameter data (baik berupa Base64 maupun URL halaman)
+        // Mengelompokkan URL dari parameter data
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
@@ -188,7 +187,6 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // Mengeksekusi URL Player yang ditemukan
         urlToExtract.forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
@@ -198,33 +196,22 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // --- BYPASS DOMAIN ABYSS / JUICY CODES ---
-            // Bypass redirect 302 abyssplayer/IP JuicyCodes, tembak langsung ke abysscdn
-            if (targetUrl.contains("abyssplayer.com") || targetUrl.contains("199.87.210.226")) {
-                val videoId = targetUrl.substringAfterLast("/").substringBefore("?")
-                targetUrl = "https://abysscdn.com/?v=$videoId"
-            }
-
-            // 1. Uji dengan ekstraktor bawaan CloudStream 
+            // 1. Ekstrak dengan extractor bawaan Cloudstream (AbyssPlayer sudah disupport)
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
-            // 2. Fallback: Eksekusi manual jika hoster custom belum disupport CS
+            // 2. Fallback manual jika extractor CS gagal
             if (!isExtractorLoaded) {
                 try {
-                    // Ambil HTML mentah dari halaman pemutar video
                     val playerHtml = app.get(targetUrl).text
-                    
-                    // Bongkar enkripsi JS eval(function(p,a,c...)) bawaan CloudStream
                     val unpackedHtml = getAndUnpack(playerHtml)
 
-                    // Tarik URL berakhiran .m3u8, .mp4, atau .fd dari hasil HTML yang sudah telanjang
                     val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""").findAll(unpackedHtml)
-                    
+                    var foundFallback = false
                     videoLinks.forEach { match ->
+                        foundFallback = true
                         val link = match.groupValues[1]
                         val isM3u8 = link.contains(".m3u8")
                         
-                        // Menyerahkan hasil ekstraksi ke pemutar CloudStream
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
@@ -232,15 +219,32 @@ class RebahinProvider : MainAPI() {
                                 url = link,
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
-                                // INI WAJIB: Bypass error 403 Forbidden dari Cloudflare/GCS
-                                this.referer = "https://abysscdn.com/"
+                                this.referer = targetUrl
                                 this.quality = Qualities.Unknown.value
                             }
                         )
                     }
-                } catch (e: Exception) {
-                    // Abaikan jika gagal memproses satu server, maju ke server selanjutnya
-                }
+                    
+                    // Ekstraksi darurat untuk JSON Sources yang tersembunyi
+                    if (!foundFallback) {
+                       val jsonLinks = Regex("""["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""").findAll(unpackedHtml)
+                       jsonLinks.forEach { match ->
+                            val link = match.groupValues[1]
+                            val isM3u8 = link.contains(".m3u8")
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = this.name + " (Backup)",
+                                    url = link,
+                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = targetUrl
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                       }
+                    }
+                } catch (e: Exception) {}
             }
         }
 
