@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 open class Lk21TurboExtractor : ExtractorApi() {
     override var name      = "LK21 TurboVIP"
-    // Update domain selaras dengan temuan iframe asli di HTML
     override var mainUrl   = "https://emturbovid.com"
     override val requiresReferer = false
 
@@ -27,12 +26,14 @@ open class Lk21TurboExtractor : ExtractorApi() {
             val response = app.get("$mainUrl/t/$id", headers = baseHeaders)
             val html     = response.text
 
-            // Cari m3u8 URL — coba data-hash dulu, fallback ke urlPlay
-            var m3u8Url = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
-            if (m3u8Url.isNullOrBlank()) {
-                m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
+            // Cari m3u8 URL mentah menggunakan var
+            var m3u8UrlRaw = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
+            if (m3u8UrlRaw.isNullOrBlank()) {
+                m3u8UrlRaw = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
-            if (m3u8Url.isNullOrBlank()) return null
+            
+            // FIX KOMPILASI KOTLIN: Kunci ke dalam 'val' agar menjadi tipe data String murni (Non-Null)
+            val m3u8Url = m3u8UrlRaw?.takeIf { it.isNotBlank() } ?: return null
 
             val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
             val type  = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
@@ -62,6 +63,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                         depth++
                     }
 
+                    // Karena finalM3u8Url asalnya dari m3u8Url (val non-null), Kotlin tidak akan error lagi di sini
                     val baseUrl = finalM3u8Url.substringBeforeLast("/")
                     val rewrittenLines = finalM3u8Content.lines().map { line ->
                         val trimmed = line.trim()
