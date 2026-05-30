@@ -18,15 +18,15 @@ open class Lk21TurboExtractor : ExtractorApi() {
             val id = url.substringAfter("/t/").substringBefore("?")
             if (id.isEmpty()) return null
 
-            val headers = mapOf(
+            val baseHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
                 "Referer"    to "https://playeriframe.sbs/"
             )
 
-            val response = app.get("$mainUrl/t/$id", headers = headers)
+            val response = app.get("$mainUrl/t/$id", headers = baseHeaders)
             val html     = response.text
 
-            // Cari m3u8 URL — coba data-hash dulu, fallback ke urlPlay
+            // Cari m3u8 URL
             var m3u8Url = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
             if (m3u8Url.isNullOrBlank()) {
                 m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
@@ -35,6 +35,26 @@ open class Lk21TurboExtractor : ExtractorApi() {
 
             val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
             val type  = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+
+            // ====================================================================
+            // SMART SNIFFING: Intip isi M3U8 untuk menentukan Header secara dinamis
+            // Bekerja 100% melampaui limitasi CronetDataSource
+            // ====================================================================
+            var finalHeaders = mapOf(
+                "Origin"  to mainUrl,
+                "Referer" to "$mainUrl/",
+                "User-Agent" to baseHeaders["User-Agent"]!!
+            )
+            
+            try {
+                val m3u8Content = app.get(m3u8Url, headers = baseHeaders).text
+                if (m3u8Content.contains("googleusercontent")) {
+                    // Jika terdeteksi Google Drive, HARAM hukumnya menyuntik Origin & Referer
+                    finalHeaders = mapOf("User-Agent" to baseHeaders["User-Agent"]!!)
+                }
+            } catch (e: Exception) {
+                // Abaikan jika gagal mengintip, tetap gunakan header default
+            }
 
             sources.add(
                 newExtractorLink(
@@ -45,10 +65,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 ) {
                     this.referer = "$mainUrl/"
                     this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "Origin"  to mainUrl,
-                        "Referer" to "$mainUrl/"
-                    )
+                    this.headers = finalHeaders
                 }
             )
         } catch (e: Exception) {
