@@ -2,8 +2,9 @@ package com.Rebahin
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.getQualityFromString
+import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -41,31 +42,22 @@ class RebahinProvider : MainAPI() {
         val a = this.selectFirst("a.ml-mask") ?: return null
         val title = a.attr("title")
         val href = fixUrlNull(a.attr("href")) ?: return null
+        val posterUrl = fixUrlNull(this.selectFirst("img.mli-thumb")?.attr("src"))
         
-        val img = this.selectFirst("img.mli-thumb")
-        val posterUrl = fixUrlNull(img?.attr("data-original")?.takeIf { it.isNotBlank() } ?: img?.attr("src"))
-        
-        val qualityStr = this.selectFirst("span.mli-quality")?.text()?.lowercase()
-        val qualityResult = when {
-            qualityStr == null -> null
-            qualityStr.contains("fhd") || qualityStr.contains("hd") -> SearchQuality.HD
-            qualityStr.contains("blu") -> SearchQuality.BlueRay
-            qualityStr.contains("cam") -> SearchQuality.Cam
-            qualityStr.contains("sd") -> SearchQuality.SD
-            else -> null
-        }
+        val qualityStr = this.selectFirst("span.mli-quality")?.text()
+        val quality = getQualityFromString(qualityStr)
         
         val isTvSeries = href.contains("/series/") || href.contains("season")
 
         return if (isTvSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
-                this.quality = qualityResult
+                this.quality = quality
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
-                this.quality = qualityResult
+                this.quality = quality
             }
         }
     }
@@ -73,74 +65,77 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
-            ?: document.selectFirst("h3[itemprop=name]")?.text()
-            ?: return null
+        // Mengambil Title dengan presisi dari tag h3
+        val titleElement = document.selectFirst("div.mvic-desc h3")
+        val title = titleElement?.ownText()?.trim() ?: return null
         
-        val mviCover = document.selectFirst("a.mvi-cover")
-        val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
-        val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
+        // Mengambil Cover (Backdrop) dan Poster
+        val background = fixUrlNull(document.selectFirst("a.mvi-cover")?.attr("style")?.substringAfter("url(")?.substringBefore(")"))
+        val poster = fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")) ?: fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content"))
 
-        val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
-            ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
-
-        val plot = document.selectFirst("div.sinopsis-indo, div.desc, div.rt-Text")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
+        // Mengambil Sinopsis dan membersihkan teks sampah (seo iklan)
+        val plot = document.selectFirst("div.sinopsis-indo")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(), "")?.trim()
         
-        val ratingText = document.selectFirst("span.irank-voters, span.rating, div.btn-danger.averagerate")?.text()?.replace(",", ".")?.trim()
-        val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
+        // Sistem Score terbaru Cloudstream (from10)
+        val ratingText = document.selectFirst("span.irank-voters, span.rating")?.text()?.replace(",", ".")?.trim()
+        val score = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
 
+        // Ekstraksi info tambahan
         var year: Int? = null
         var duration: Int? = null
+        val actors = mutableListOf<String>()
 
         document.select("div.mvic-info p").forEach { p ->
             val text = p.text()
             when {
                 text.contains("Release Date:") -> {
                     year = p.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
-                        ?: text.substringAfter("Release Date:").trim().substringBefore("-").toIntOrNull()
                 }
                 text.contains("Duration:") -> {
                     duration = text.replace(Regex("[^0-9]"), "").toIntOrNull()
                 }
+                text.contains("Actors:") -> {
+                    p.select("a[rel=tag]").forEach { actors.add(it.text()) }
+                }
             }
         }
 
-        val isTvSeries = url.contains("/series/")
+        // Cek apakah ini series (terdapat tombol episode atau url mengandung /series/)
+        val episodeButtons = document.select("a.btn-eps")
+        val isTvSeries = episodeButtons.isNotEmpty() || url.contains("/series/")
 
         return if (isTvSeries) {
-            val watchDocument = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
-            val episodeButtons = watchDocument.select("div#list-eps a.btn-eps")
-            
-            episodeButtons.forEach { epElem ->
-                val epName = epElem.text().trim()
-                val base64Iframe = epElem.attr("data-iframe")
-                val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
-
-                if (base64Iframe.isNotBlank()) {
-                    episodes.add(newEpisode(base64Iframe) {
-                        this.name = epName
-                        this.episode = epNum
-                    })
-                }
+            episodeButtons.forEach {
+                val epUrl = fixUrlNull(it.attr("href")) ?: return@forEach
+                val epName = it.text()
+                
+                episodes.add(newEpisode(epUrl) {
+                    this.name = epName
+                })
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
-                this.score = parsedScore 
+                this.rating = score
                 this.year = year
                 this.duration = duration
+                // this.actors = actors // (Opsional)
             }
         } else {
+            // Karena ini Movie, link extractor aslinya berada di url dengan tambahan "/play"
+            val playUrl = if (url.endsWith("/")) "${url}play" else "$url/play"
+
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
-                this.score = parsedScore 
+                this.rating = score
                 this.year = year
                 this.duration = duration
+                // this.actors = actors // (Opsional)
             }
         }
     }
@@ -151,114 +146,28 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Melakukan request ke halaman `/play`
+        val document = app.get(data).document
         
-        val urlToExtract = mutableListOf<String>()
-
-        if (!data.startsWith("http")) {
-            try {
-                val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
+        // Membongkar atribut `data-iframe` yang di-encode menggunakan Base64
+        document.select("div.server").forEach { server ->
+            val encodedUrl = server.attr("data-iframe")
+            if (encodedUrl.isNotBlank()) {
+                // Proses decode Base64 URL 
+                val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
+                
                 if (decodedUrl.startsWith("http")) {
-                     urlToExtract.add(decodedUrl)
-                }
-            } catch (e: Exception) {}
-        } else {
-            val document = app.get(data).document
-            document.select("div.server").forEach { server ->
-                val encodedUrl = server.attr("data-iframe")
-                if (encodedUrl.isNotBlank()) {
-                    val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
-                    if (decodedUrl.startsWith("http")) {
-                        urlToExtract.add(decodedUrl)
-                    }
-                }
-            }
-            document.select("iframe").forEach { iframe ->
-                val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                if (!src.contains("googleusercontent.com") && src.isNotBlank()) {
-                    urlToExtract.add(src)
+                    loadExtractor(decodedUrl, mainUrl, subtitleCallback, callback)
                 }
             }
         }
-
-        urlToExtract.forEach { rawUrl ->
-            var targetUrl = rawUrl
-            if (rawUrl.contains("/iembed/?source=")) {
-                val base64 = rawUrl.substringAfter("source=")
-                try {
-                    targetUrl = String(Base64.decode(base64, Base64.DEFAULT))
-                } catch(e: Exception) {}
-            }
-
-            // 1. Ekstraktor Standar CloudStream
-            val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
-
-            if (!isExtractorLoaded) {
-                
-                // MENGATASI 403 FORBIDDEN DI EXOPLAYER:
-                // Kita harus memberikan Header "Origin" dan "Referer" yang persis sama dengan domain aslinya
-                val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
-                val fixedReferer = if (targetUrl.contains("abyssplayer")) "https://abysscdn.com/" else "$domain/"
-                val reqHeaders = mapOf(
-                    "Origin" to fixedReferer.removeSuffix("/"),
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                )
-
-                var linkFound = false
-
-                // 2. Metode A: WebViewResolver (Pencegat Cloudflare/Request Gaib)
-                try {
-                    val webViewResolver = WebViewResolver(
-                        interceptUrl = Regex("""\.(m3u8|mp4)""")
-                    )
-                    
-                    val (request, _) = webViewResolver.resolveUsingWebView(
-                        url = targetUrl,
-                        referer = mainUrl
-                    )
-                    
-                    request?.url?.toString()?.let { resolvedUrl ->
-                        val isM3u8 = resolvedUrl.contains(".m3u8")
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name + " (Web)",
-                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                url = resolvedUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = fixedReferer
-                                this.headers = reqHeaders // <-- INI OBAT ANTI 403 FORBIDDEN
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                        linkFound = true
-                    }
-                } catch (e: Exception) {}
-
-                // 3. Metode B: JS Unpacker Manual (Fallback jika metode Webview gagal/lama)
-                if (!linkFound) {
-                    try {
-                        val playerHtml = app.get(targetUrl, referer = mainUrl).text
-                        val unpackedHtml = getAndUnpack(playerHtml)
-                        val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(unpackedHtml)
-                        
-                        videoLinks.forEach { match ->
-                            val link = match.groupValues[1]
-                            val isM3u8 = link.contains(".m3u8")
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name + " (Auto)",
-                                    name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                    url = link,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = fixedReferer
-                                    this.headers = reqHeaders // <-- INI OBAT ANTI 403 FORBIDDEN
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    } catch (e: Exception) {}
-                }
+        
+        // Jalur Cadangan (Fallback): Jika provider lupa membungkus iframe di dalam base64
+        document.select("iframe").forEach { iframe ->
+            val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
+            // Hindari link YouTube bawaan Rebahin yang dipakai untuk iframe trailer palsu
+            if (!src.contains("youtube.com") && src.isNotBlank()) {
+                loadExtractor(src, mainUrl, subtitleCallback, callback)
             }
         }
 
