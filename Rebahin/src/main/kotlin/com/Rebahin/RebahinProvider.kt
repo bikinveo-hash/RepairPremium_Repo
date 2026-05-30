@@ -2,6 +2,7 @@ package com.Rebahin
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
@@ -76,7 +77,6 @@ class RebahinProvider : MainAPI() {
                 ?.substringAfter("url(")?.substringBefore(")")
                 ?.removeSurrounding("'")?.removeSurrounding("\"")
         )
-
         val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
             ?: fixUrlNull(
                 document.selectFirst("div.mvic-thumb")?.attr("style")
@@ -96,7 +96,6 @@ class RebahinProvider : MainAPI() {
 
         var year: Int? = null
         var duration: Int? = null
-
         document.select("div.mvic-info p").forEach { p ->
             val text = p.text()
             when {
@@ -112,22 +111,16 @@ class RebahinProvider : MainAPI() {
             }
         }
 
+        val playUrl = fixUrlNull(mviCover?.attr("href")) ?: "$url/play"
         val isTvSeries = url.contains("/series/")
 
         return if (isTvSeries) {
-            // ----------------------------------------------------------------
-            // TV SERIES: fetch halaman /play untuk ambil daftar episode
-            // URL play bisa dari mvi-cover href, fallback ke url/play
-            // ----------------------------------------------------------------
-            val playUrl = fixUrlNull(mviCover?.attr("href")) ?: "$url/play"
             val watchDocument = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
-
             watchDocument.select("div#list-eps a.btn-eps").forEach { epElem ->
                 val epName = epElem.text().trim()
                 val base64Iframe = epElem.attr("data-iframe")
                 val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
-
                 if (base64Iframe.isNotBlank()) {
                     episodes.add(newEpisode(base64Iframe) {
                         this.name = epName
@@ -135,7 +128,6 @@ class RebahinProvider : MainAPI() {
                     })
                 }
             }
-
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -145,11 +137,6 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
-            // ----------------------------------------------------------------
-            // MOVIE: kirim URL halaman /play sebagai data ke loadLinks
-            // FIX: sebelumnya kirim url utama, sekarang kirim url/play
-            // ----------------------------------------------------------------
-            val playUrl = fixUrlNull(mviCover?.attr("href")) ?: "$url/play"
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -161,37 +148,23 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Decode base64 data-iframe → URL player asli
-    // Mendukung dua lapis encoding:
-    //   Layer 1: data-iframe (base64) → /iembed/?source=BASE64 atau URL langsung
-    //   Layer 2: ?source= param (base64) → URL player asli (misal AbyssPlayer)
-    // ------------------------------------------------------------------------
     private fun decodeIframeSrc(raw: String): String? {
         if (raw.isBlank()) return null
-
-        // Sudah berupa URL langsung (TV Series kadang langsung dapat URL)
         if (raw.startsWith("http")) return raw
-
         return try {
             val decoded = String(Base64.decode(raw.trim(), Base64.DEFAULT))
             when {
-                // Hasil decode adalah /iembed/?source=BASE64 → decode lagi
-                decoded.contains("/iembed/?source=") || decoded.contains("iembed") -> {
-                    val innerBase64 = decoded.substringAfter("source=").substringBefore("&").trim()
+                decoded.contains("iembed") && decoded.contains("source=") -> {
+                    val inner = decoded.substringAfter("source=").substringBefore("&").trim()
                     try {
-                        String(Base64.decode(innerBase64, Base64.DEFAULT))
-                    } catch (e: Exception) {
-                        decoded // Gagal decode layer 2, pakai hasil layer 1
-                    }
+                        val url = String(Base64.decode(inner, Base64.DEFAULT))
+                        if (url.startsWith("http")) url else decoded
+                    } catch (e: Exception) { decoded }
                 }
-                // Hasil decode langsung berupa URL
                 decoded.startsWith("http") -> decoded
                 else -> null
             }
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     override suspend fun loadLinks(
@@ -200,52 +173,34 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val urlsToExtract = mutableListOf<String>()
+
+        val playerUrls = mutableListOf<String>()
 
         when {
-            // ----------------------------------------------------------------
-            // CASE 1: data adalah base64 (dari episode TV Series)
-            // ----------------------------------------------------------------
             !data.startsWith("http") -> {
-                decodeIframeSrc(data)?.let { urlsToExtract.add(it) }
+                decodeIframeSrc(data)?.let { playerUrls.add(it) }
             }
-
-            // ----------------------------------------------------------------
-            // CASE 2: data adalah URL halaman /play (dari Movie)
-            // Fetch halaman, cari semua div.server dengan data-iframe
-            // ----------------------------------------------------------------
             else -> {
                 val playDoc = app.get(data).document
-
-                // Selector sesuai hasil inspect: div.server dan div.server-active
                 playDoc.select("div.server, div.server-active").forEach { server ->
                     val raw = server.attr("data-iframe")
                     if (raw.isNotBlank()) {
-                        decodeIframeSrc(raw)?.let { urlsToExtract.add(it) }
+                        decodeIframeSrc(raw)?.let { playerUrls.add(it) }
                     }
                 }
-
-                // Fallback: cari iframe langsung (selain YouTube/sosmed)
-                if (urlsToExtract.isEmpty()) {
+                if (playerUrls.isEmpty()) {
                     playDoc.select("iframe").forEach { iframe ->
                         val src = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                        val isSkip = src.contains("youtube.com") ||
-                                src.contains("facebook.com") ||
-                                src.contains("twitter.com") ||
-                                src.contains("googleusercontent.com")
-                        if (!isSkip && src.isNotBlank()) {
-                            // Jika iframe src adalah /iembed/?source=, decode dulu
+                        val skip = listOf("youtube.com","facebook.com","twitter.com","googleusercontent.com")
+                        if (skip.none { src.contains(it) } && src.isNotBlank()) {
                             if (src.contains("iembed") && src.contains("source=")) {
-                                val innerBase64 = src.substringAfter("source=")
-                                    .substringBefore("&").trim()
+                                val inner = src.substringAfter("source=").substringBefore("&")
                                 try {
-                                    val decodedUrl = String(Base64.decode(innerBase64, Base64.DEFAULT))
-                                    if (decodedUrl.startsWith("http")) urlsToExtract.add(decodedUrl)
-                                } catch (e: Exception) {
-                                    urlsToExtract.add(src)
-                                }
+                                    val decoded = String(Base64.decode(inner, Base64.DEFAULT))
+                                    if (decoded.startsWith("http")) playerUrls.add(decoded)
+                                } catch (e: Exception) { playerUrls.add(src) }
                             } else {
-                                urlsToExtract.add(src)
+                                playerUrls.add(src)
                             }
                         }
                     }
@@ -253,66 +208,61 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // --------------------------------------------------------------------
-        // Extract semua URL yang sudah terkumpul
-        // --------------------------------------------------------------------
-        urlsToExtract.distinct().forEach { targetUrl ->
-            if (!targetUrl.startsWith("http")) return@forEach
+        // WebViewResolver — intercept request video dari browser
+        playerUrls.distinct().forEach { playerUrl ->
+            if (!playerUrl.startsWith("http")) return@forEach
 
-            // 1. Coba extractor bawaan CloudStream (AbyssPlayer, Filemoon, dll)
-            val loaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+            val videoRegex = Regex(
+                """https?://[^\s"'<>]+(?:\.m3u8|\.mp4|master\.m3u8)[^\s"'<>]*|""" +
+                """https?://(?:storage\.googleapis\.com|[^/]*\.googlevideo\.com)/[^\s"'<>]+"""
+            )
 
-            // 2. Fallback manual jika extractor gagal
-            if (!loaded) {
-                try {
-                    val playerHtml = app.get(targetUrl, referer = mainUrl).text
-                    val unpackedHtml = getAndUnpack(playerHtml)
-
-                    var found = false
-
-                    // Cari URL m3u8 / mp4 / fd
-                    Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""")
-                        .findAll(unpackedHtml)
-                        .forEach { match ->
-                            found = true
-                            val link = match.groupValues[1]
-                            val isM3u8 = link.contains(".m3u8")
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                    url = link,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = targetUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-
-                    // Fallback paling akhir: cari URL apapun yang mengandung ekstensi video
-                    if (!found) {
-                        Regex("""["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""")
-                            .findAll(unpackedHtml)
-                            .forEach { match ->
-                                val link = match.groupValues[1]
-                                val isM3u8 = link.contains(".m3u8")
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = this.name,
-                                        name = this.name + " (Backup)",
-                                        url = link,
-                                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.referer = targetUrl
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                            }
+            try {
+                val (_, collectedRequests) = WebViewResolver(
+                    interceptUrl  = videoRegex,
+                    additionalUrls = listOf(
+                        Regex("""https?://[^\s"'<>]+(?:\.m3u8|\.mp4)[^\s"'<>]*"""),
+                        Regex("""https?://[^\s"'<>]+/api/[^\s"'<>]*(?:source|stream|video|ping)[^\s"'<>]*"""),
+                    ),
+                    timeout = 30_000L
+                ).resolveUsingWebView(
+                    url     = playerUrl,
+                    referer = mainUrl,
+                    requestCallBack = { req ->
+                        val u = req.url.toString()
+                        u.contains(".m3u8") || u.contains(".mp4") ||
+                        u.contains("googlevideo.com") ||
+                        u.contains("storage.googleapis.com")
                     }
-                } catch (e: Exception) {
-                    // Silent fail, lanjut ke URL berikutnya
+                )
+
+                collectedRequests.forEach { req ->
+                    val url   = req.url.toString()
+                    val isM3u8 = url.contains(".m3u8")
+                    val isMp4  = url.contains(".mp4")
+
+                    if (isM3u8 || isMp4 || url.contains("googlevideo") || url.contains("googleapis")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = this.name,
+                                name   = this.name + when {
+                                    isM3u8 -> " (HLS)"
+                                    isMp4  -> " (MP4)"
+                                    else   -> " (Stream)"
+                                },
+                                url  = url,
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = req.header("Referer") ?: playerUrl
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
                 }
+
+            } catch (e: Exception) {
+                // Fallback jika WebView tidak tersedia
+                loadExtractor(playerUrl, mainUrl, subtitleCallback, callback)
             }
         }
 
