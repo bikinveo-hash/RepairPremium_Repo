@@ -219,7 +219,6 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // Normalisasi AbyssCDN
             if (targetUrl.contains("abyssplayer.com/")) {
                 targetUrl = targetUrl.replace("abyssplayer.com/", "abysscdn.com/?v=")
             }
@@ -232,7 +231,9 @@ class RebahinProvider : MainAPI() {
 
                 var linkFound = false
 
-                // Script Auto-Clicker untuk mencuri link dari memori player
+                // =========================================================================
+                // AUTO-CLICKER & SW BYPASS
+                // =========================================================================
                 val safeHijackScript = """
                     (function() {
                         if (window.cs_hook_active) return;
@@ -244,32 +245,34 @@ class RebahinProvider : MainAPI() {
                         setInterval(function() {
                             try {
                                 if (window.jwplayer && typeof window.jwplayer === 'function') {
-                                    var pl = window.jwplayer().getPlaylist();
+                                    var player = window.jwplayer();
+                                    var config = player.getConfig && player.getConfig();
+                                    var sources = config && config.sources;
+                                    
+                                    // Tangkap dari config JWPlayer
+                                    if (sources && sources.length > 0) {
+                                        var src = sources[0].file;
+                                        if (src && src.indexOf('blob:') === -1 && !window.cs_sent) {
+                                            window.cs_sent = true;
+                                            window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(src);
+                                            return;
+                                        }
+                                    }
+                                    
+                                    // Tangkap dari Playlist JWPlayer
+                                    var pl = player.getPlaylist && player.getPlaylist();
                                     if (pl && pl.length > 0 && pl[0].file) {
                                         var url = pl[0].file;
                                         if (url.indexOf('blob:') === -1 && !window.cs_sent) {
                                             window.cs_sent = true;
                                             window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(url);
+                                            return;
                                         }
                                     }
                                 }
-                            } catch(e){}
+                            } catch(e) {}
                             
-                            try {
-                                var vids = document.querySelectorAll('video');
-                                for (var i = 0; i < vids.length; i++) {
-                                    var vurl = vids[i].src;
-                                    if (!vurl) {
-                                        var srcTag = vids[i].querySelector('source');
-                                        if (srcTag && srcTag.src) vurl = srcTag.src;
-                                    }
-                                    if (vurl && vurl.indexOf('blob:') === -1 && !window.cs_sent) {
-                                        window.cs_sent = true;
-                                        window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(vurl);
-                                    }
-                                }
-                            } catch(e){}
-
+                            // Auto-click tombol untuk memicu dekripsi
                             try {
                                 var overlay = document.getElementById('overlay');
                                 if (overlay) overlay.click();
@@ -278,7 +281,7 @@ class RebahinProvider : MainAPI() {
                                 for (var i=0; i<btns.length; i++) {
                                     btns[i].click();
                                 }
-                            } catch(e){}
+                            } catch(e) {}
                         }, 500);
                     })();
                 """.trimIndent()
@@ -300,26 +303,38 @@ class RebahinProvider : MainAPI() {
                         if (resolvedUrl.contains("cloudstream.video.extracted")) {
                             val encodedUrl = Regex("""\?url=(.*)""").find(resolvedUrl)?.groupValues?.get(1)
                             if (encodedUrl != null) {
-                                finalUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+                                val decoded = URLDecoder.decode(encodedUrl, "UTF-8")
+                                // KUNCI 1: Buang instruksi Service Worker setelah tanda '#'
+                                finalUrl = decoded.substringBefore("#")
                             }
+                        } else {
+                            finalUrl = resolvedUrl.substringBefore("#")
                         }
 
-                        // =========================================================
-                        // PERBAIKAN FATAL: AMBIL SEMUA COOKIES UNTUK EXOPLAYER
-                        // =========================================================
+                        // KUNCI 2: Ambil semua tiket VIP (Cookies) dari WebView
                         val cookieManager = CookieManager.getInstance()
-                        val embedCookies = cookieManager.getCookie(targetUrl) ?: ""
-                        val videoCookies = cookieManager.getCookie(finalUrl) ?: ""
-                        val finalCookies = listOf(embedCookies, videoCookies).filter { it.isNotBlank() }.joinToString("; ")
+                        cookieManager.flush()
+                        
+                        val abyssCookies  = cookieManager.getCookie("https://abysscdn.com") ?: ""
+                        val iamCookies    = cookieManager.getCookie("https://iamcdn.net") ?: ""
+                        val videoCookies  = cookieManager.getCookie(finalUrl) ?: ""
 
+                        val finalCookies = listOf(abyssCookies, iamCookies, videoCookies)
+                            .filter { it.isNotBlank() }
+                            .joinToString("; ")
+
+                        // KUNCI 3: Bangun reqHeaders yang disukai Cloudflare
                         val reqHeaders = mapOf(
-                            "Origin" to fixedReferer.removeSuffix("/"),
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                            "Cookie" to finalCookies, // <--- INI KUNCI UTAMANYA MENCEGAH 403!
-                            "Accept" to "*/*",
-                            "Sec-Fetch-Site" to "cross-site",
-                            "Sec-Fetch-Mode" to "cors",
-                            "Sec-Fetch-Dest" to "empty"
+                            "Origin"          to fixedReferer.removeSuffix("/"),
+                            "Referer"         to fixedReferer,
+                            "Cookie"          to finalCookies,
+                            "User-Agent"      to USER_AGENT, // Sesuaikan dengan standar Cloudstream
+                            "Accept"          to "*/*",
+                            "Accept-Encoding" to "identity;q=1, *;q=0",
+                            "Range"           to "bytes=0-", // Kunci untuk putar MP4/Chunks
+                            "Sec-Fetch-Site"  to "cross-site",
+                            "Sec-Fetch-Mode"  to "cors",
+                            "Sec-Fetch-Dest"  to "empty"
                         )
 
                         val isM3u8 = finalUrl.contains(".m3u8") || finalUrl.contains("m3u8")
@@ -356,7 +371,7 @@ class RebahinProvider : MainAPI() {
                                     referer = fixedReferer,
                                     quality = Qualities.Unknown.value,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                                    headers = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
+                                    headers = mapOf("User-Agent" to USER_AGENT)
                                 )
                             )
                         }
