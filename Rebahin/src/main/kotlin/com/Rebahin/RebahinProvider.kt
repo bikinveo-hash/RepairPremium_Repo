@@ -15,12 +15,15 @@ class RebahinProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // ==========================================
-    // PERBAIKAN 1: ANTI RATE-LIMIT CLOUDSTREAM
+    // ANTI RATE-LIMIT (Pencegah Kategori Kosong)
     // ==========================================
     override var sequentialMainPage = true
-    override var sequentialMainPageDelay: Long = 800L // Naikkan jeda jadi 800ms agar lebih aman
+    override var sequentialMainPageDelay: Long = 800L
     override var sequentialMainPageScrollDelay: Long = 200L
 
+    // ==========================================
+    // KATEGORI UPDATE
+    // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/" to "Movies",
         "$mainUrl/country/indonesia/page/" to "Indonesia",
@@ -38,23 +41,18 @@ class RebahinProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // PERBAIKAN 2: HINDARI JEBAKAN REDIRECT /page/1
-        // Jika halaman 1, buang teks "page/", jika halaman 2 dst, biarkan.
+        // HINDARI JEBAKAN REDIRECT /page/1
         val url = if (page == 1) {
             request.data.removeSuffix("page/")
         } else {
             request.data + page
         }
 
-        // Tambahkan referer agar dipercaya server
         val document = app.get(url, referer = mainUrl).document
         val home = document.select("div.ml-item").mapNotNull {
             it.toSearchResult()
         }
 
-        // PERBAIKAN 3: ERROR HANDLING SESUAI MainAPI.kt
-        // Jika server mengembalikan kosong di halaman 1, paksa Cloudstream 
-        // memunculkan error agar user bisa tap untuk retry, bukan menampilkan row kosong.
         if (home.isEmpty() && page == 1) {
             throw ErrorLoadingException("Server membatasi request, silakan refresh kategori ini.")
         }
@@ -225,6 +223,7 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
+            // 1. Coba lewati Extractor bawaan dulu (jika ada yang support abyssplayer dsb)
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
             if (!isExtractorLoaded) {
@@ -237,9 +236,27 @@ class RebahinProvider : MainAPI() {
 
                 var linkFound = false
 
+                // =========================================================
+                // PERBAIKAN: JAVASCRIPT AUTO-PLAY UNTUK MENEMBUS JUICYCODES
+                // =========================================================
+                val autoPlayScript = """
+                    var attemptPlay = function() {
+                        try { if(typeof jwplayer === 'function') jwplayer().play(); } catch(e) {}
+                        try { document.querySelector('.jw-icon-display').click(); } catch(e) {}
+                        try { document.querySelector('.vjs-big-play-button').click(); } catch(e) {}
+                        try { document.querySelector('video').play(); } catch(e) {}
+                    };
+                    setTimeout(attemptPlay, 1000);
+                    setTimeout(attemptPlay, 2000);
+                    setTimeout(attemptPlay, 3500);
+                    setTimeout(attemptPlay, 5000);
+                """.trimIndent()
+
+                // 2. Gunakan WebViewResolver untuk mengeksekusi Javascript dan menyadap network
                 try {
                     val webViewResolver = WebViewResolver(
-                        interceptUrl = Regex("""\.(m3u8|mp4)""")
+                        interceptUrl = Regex("""\.(m3u8|mp4)(?:[?#]|$)"""), 
+                        script = autoPlayScript 
                     )
                     
                     val (request, _) = webViewResolver.resolveUsingWebView(
@@ -265,6 +282,7 @@ class RebahinProvider : MainAPI() {
                     }
                 } catch (e: Exception) {}
 
+                // 3. Fallback jika WebView gagal
                 if (!linkFound) {
                     try {
                         val playerHtml = app.get(targetUrl, referer = mainUrl).text
