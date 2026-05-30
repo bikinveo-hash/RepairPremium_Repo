@@ -1,10 +1,8 @@
 package com.Rebahin
 
 import android.util.Base64
-import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -43,7 +41,7 @@ class RebahinProvider : MainAPI() {
         val title = a.attr("title")
         val href = fixUrlNull(a.attr("href")) ?: return null
         
-        // Memprioritaskan data-original untuk mengatasi Lazy Loading gambar
+        // Memprioritaskan data-original untuk mengatasi Lazy Loading
         val img = this.selectFirst("img.mli-thumb")
         val posterUrl = fixUrlNull(img?.attr("data-original")?.takeIf { it.isNotBlank() } ?: img?.attr("src"))
         
@@ -75,21 +73,24 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        // Mengambil judul dari meta untuk menghindari crash
+        // Prioritaskan mengambil judul dari tag meta agar tidak crash jika susunan h3 berubah
         val title = document.selectFirst("meta[itemprop=name]")?.attr("content")
             ?: document.selectFirst("h3[itemprop=name]")?.text()
             ?: return null
         
+        // Menarik URL pemutar video sekaligus Latar Belakang (Banner)
         val mviCover = document.selectFirst("a.mvi-cover")
         val background = fixUrlNull(mviCover?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
         val playUrl = fixUrlNull(mviCover?.attr("href")) ?: if (url.contains("/series/")) "$url/watch" else "$url/play"
 
+        // Menarik Poster
         val poster = fixUrlNull(document.selectFirst("meta[itemprop=image]")?.attr("content"))
             ?: fixUrlNull(document.selectFirst("div.mvic-thumb")?.attr("style")?.substringAfter("url(")?.substringBefore(")")?.removeSurrounding("'")?.removeSurrounding("\""))
 
+        // Membersihkan sampah deskripsi Iklan SEO
         val plot = document.selectFirst("div.sinopsis-indo, div.desc, div.rt-Text")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
         
-        // Memakai Score System CloudStream 3 Terbaru
+        // Memakai Score system CloudStream 3
         val ratingText = document.selectFirst("span.irank-voters, span.rating, div.btn-danger.averagerate")?.text()?.replace(",", ".")?.trim()
         val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
 
@@ -138,6 +139,7 @@ class RebahinProvider : MainAPI() {
                 this.duration = duration
             }
         } else {
+            // URL pemutar film layar lebar langsung diteruskan ke fungsi loadLinks
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -158,6 +160,7 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
+        // Mengelompokkan URL dari parameter data (baik berupa Base64 maupun URL /play)
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
@@ -184,6 +187,7 @@ class RebahinProvider : MainAPI() {
             }
         }
 
+        // Mengeksekusi URL Player yang ditemukan
         urlToExtract.forEach { rawUrl ->
             var targetUrl = rawUrl
             if (rawUrl.contains("/iembed/?source=")) {
@@ -193,64 +197,51 @@ class RebahinProvider : MainAPI() {
                 } catch(e: Exception) {}
             }
 
-            // 1. Uji ekstraktor standar bawaan CloudStream
+            // --- [INTI PERBAIKAN: BYPASS DOMAIN ABYSS] ---
+            // Bypass redirect 302 abyssplayer/IP JuicyCodes, langsung tembak ke abysscdn
+            if (targetUrl.contains("abyssplayer.com") || targetUrl.contains("199.87.210.226")) {
+                val videoId = targetUrl.substringAfterLast("/")
+                targetUrl = "https://abysscdn.com/?v=$videoId"
+            }
+
+            // 1. Uji dengan ekstraktor bawaan CloudStream 
+            // (Biasanya CS sudah support abysscdn jika domainnya valid)
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
+            // 2. Fallback: Eksekusi manual jika hoster custom belum disupport CS
             if (!isExtractorLoaded) {
                 try {
-                    val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
+                    // Ambil HTML mentah dari halaman pemutar video
+                    val playerHtml = app.get(targetUrl).text
                     
-                    val webViewResolver = WebViewResolver(
-                        interceptUrl = Regex("""\.(m3u8|mp4)""")
-                    )
-                    
-                    val (request, _) = webViewResolver.resolveUsingWebView(
-                        url = targetUrl,
-                        referer = mainUrl
-                    )
-                    
-                    request?.url?.toString()?.let { resolvedUrl ->
-                        val isM3u8 = resolvedUrl.contains(".m3u8")
-                        
-                        val finalHeaders = mutableMapOf<String, String>()
-                        request.headers.forEach {
-                            finalHeaders[it.first] = it.second
-                        }
-                        
-                        // KUNCI UTAMA (OBAT ANTI 403 FORBIDDEN): 
-                        // Menyedot Cookies dari Android Webview dan Memindahkannya ke ExoPlayer
-                        val cookieManager = CookieManager.getInstance()
-                        val cookie1 = cookieManager.getCookie(targetUrl) ?: ""
-                        val cookie2 = cookieManager.getCookie(resolvedUrl) ?: ""
-                        val combinedCookies = listOf(cookie1, cookie2).filter { it.isNotBlank() }.joinToString("; ")
-                        
-                        if (combinedCookies.isNotBlank()) {
-                            finalHeaders["Cookie"] = combinedCookies
-                        }
-                        
-                        // Mengamankan Origin, Referer, dan User-Agent (Opsional tapi sering diwajibkan Server)
-                        finalHeaders["Origin"] = domain
-                        finalHeaders["Referer"] = "$domain/"
-                        finalHeaders["Accept"] = "*/*"
-                        if (!finalHeaders.containsKey("User-Agent") && !finalHeaders.containsKey("user-agent")) {
-                            finalHeaders["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                        }
+                    // Bongkar enkripsi JS eval(function(p,a,c...)) bawaan CloudStream
+                    val unpackedHtml = getAndUnpack(playerHtml)
 
-                        // Menyisipkan ExtractorLink sesuai aturan ExtractorApi.kt
+                    // Tarik URL berakhiran .m3u8, .mp4, atau .fd dari hasil HTML yang sudah telanjang
+                    // Ditambahkan format .fd sesuai hasil sniffing curl
+                    val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4|\.fd)[^"']*)["']""").findAll(unpackedHtml)
+                    
+                    videoLinks.forEach { match ->
+                        val link = match.groupValues[1]
+                        val isM3u8 = link.contains(".m3u8")
+                        
+                        // Menyerahkan hasil ekstraksi ke pemutar CloudStream
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
-                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                url = resolvedUrl,
+                                name = this.name + if (isM3u8) " (HLS)" else " (MP4/FD)",
+                                url = link,
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
-                                this.referer = "$domain/"
-                                this.headers = finalHeaders // Mengirimkan semua perlindungan ke ExoPlayer
+                                // INI WAJIB: Bypass error 403 Forbidden dari Cloudflare/GCS
+                                this.referer = "https://abysscdn.com/"
                                 this.quality = Qualities.Unknown.value
                             }
                         )
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    // Abaikan jika gagal memproses satu server, maju ke server selanjutnya
+                }
             }
         }
 
