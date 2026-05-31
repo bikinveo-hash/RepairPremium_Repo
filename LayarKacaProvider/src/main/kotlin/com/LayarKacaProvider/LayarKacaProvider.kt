@@ -420,8 +420,17 @@ class LayarKacaProvider : MainAPI() {
                 val id = url.substringAfter("cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
-                    // Eksekusi Extractor buatan kita sendiri
                     CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            // Routing Hydrax (Abyss)
+            else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
+                val id = url.substringAfter("hydrax/").substringBefore("/")
+                val hydraxUrl = "https://abysscdn.com/?v=$id"
+                try {
+                    HydraxExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
