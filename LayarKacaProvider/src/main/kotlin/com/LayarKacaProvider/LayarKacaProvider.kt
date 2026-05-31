@@ -407,6 +407,10 @@ class LayarKacaProvider : MainAPI() {
                 val id = url.substringAfter("turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
+            } else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
+                val id = url.substringAfter("p2p/").substringBefore("/")
+                HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
+                    ?.forEach { callback.invoke(it) }
             }
         }
         return true
@@ -414,19 +418,6 @@ class LayarKacaProvider : MainAPI() {
 
     // =========================================================================
     // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN)
-    //
-    // Temuan investigasi:
-    //   - Segment video episode disajikan dari lh3.googleusercontent.com (Google Drive CDN)
-    //   - Tanpa header khusus → Google Drive bisa diakses normal (HTTP 200)
-    //   - Dengan header Origin/Referer turbovidhls → Google Drive langsung 429
-    //   - Saat seek cepat, player mengirim banyak request segment sekaligus
-    //     → Google Drive rate-limit → HTTP 429 → error seek
-    //
-    // Strategi fix:
-    //   1. turbovidhls.com / etvp.cc → tetap pakai header Origin+Referer (tidak berubah)
-    //   2. googleusercontent.com     → JANGAN tambah header apapun, tapi
-    //                                  tangkap 429 dan retry dengan exponential backoff
-    //   3. Domain lain               → lewat tanpa modifikasi
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -436,18 +427,17 @@ class LayarKacaProvider : MainAPI() {
             val url             = originalRequest.url.toString()
 
             when {
-                // ── Turbovidhls & etvp: tambah header Origin + Referer ──────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") -> {
+                // ── Turbovidhls & etvp & hownetwork: tambah header Origin + Referer ──────
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
-                        .header("Origin",  "https://turbovidhls.com")
-                        .header("Referer", "https://turbovidhls.com/")
+                        .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
+                        .header("Referer", "https://${try { URI(url).host } catch (e: Exception) { "" }}/")
                         .build()
                     chain.proceed(newRequest)
                 }
 
                 // ── Google Drive CDN: retry dengan exponential backoff ───────
-                // PENTING: jangan tambah Origin/Referer ke Google — justru bikin 429
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
