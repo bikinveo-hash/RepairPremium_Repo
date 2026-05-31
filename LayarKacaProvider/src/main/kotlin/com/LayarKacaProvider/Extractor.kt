@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.KeyPairGenerator
@@ -20,21 +21,38 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 // =========================================================================
-// DATA CLASSES UNTUK API
+// DATA CLASSES UNTUK API (DILINDUNGI @JsonProperty ANTI-MINIFY BUG)
 // =========================================================================
 data class HowNetworkResponse(
-    val poster: String?,
-    val file: String?,
-    val type: String?,
-    val title: String?
+    @JsonProperty("poster") val poster: String?,
+    @JsonProperty("file") val file: String?,
+    @JsonProperty("type") val type: String?,
+    @JsonProperty("title") val title: String?
 )
 
-data class CastChalResp(val nonce: String?, val challenge_id: String?)
-data class CastAttestResp(val token: String?)
-data class CastPbResp(val playback: CastPlaybackInfo?)
-data class CastPlaybackInfo(val iv: String?, val payload: String?, val key_parts: List<String>?)
-data class CastDecrypted(val sources: List<CastSource>?)
-data class CastSource(val url: String?, val label: String?, val type: String?)
+data class CastChalResp(
+    @JsonProperty("nonce") val nonce: String?, 
+    @JsonProperty("challenge_id") val challenge_id: String?
+)
+data class CastAttestResp(
+    @JsonProperty("token") val token: String?
+)
+data class CastPbResp(
+    @JsonProperty("playback") val playback: CastPlaybackInfo?
+)
+data class CastPlaybackInfo(
+    @JsonProperty("iv") val iv: String?, 
+    @JsonProperty("payload") val payload: String?, 
+    @JsonProperty("key_parts") val key_parts: List<String>?
+)
+data class CastDecrypted(
+    @JsonProperty("sources") val sources: List<CastSource>?
+)
+data class CastSource(
+    @JsonProperty("url") val url: String?, 
+    @JsonProperty("label") val label: String?, 
+    @JsonProperty("type") val type: String?
+)
 
 // =========================================================================
 // EXTRACTOR 1: TURBO VIP
@@ -146,7 +164,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: CAST HD (Anti-Bot Bypass FileLion/Byse)
+// EXTRACTOR 3: CAST HD (Anti-Bot Bypass FileLion/Byse V19)
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name = "CAST HD"
@@ -154,7 +172,14 @@ open class CastExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     private fun b64url(b: ByteArray): String = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-    private fun b64urlDecode(s: String): ByteArray = Base64.decode(s, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    private fun b64urlDecode(s: String): ByteArray {
+        var standardized = s.replace("-", "+").replace("_", "/")
+        val padding = 4 - (standardized.length % 4)
+        if (padding != 4) {
+            standardized += "=".repeat(padding)
+        }
+        return Base64.decode(standardized, Base64.DEFAULT)
+    }
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
     private fun derToRaw(der: ByteArray): ByteArray {
