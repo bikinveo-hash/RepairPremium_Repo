@@ -134,15 +134,11 @@ class LayarKacaProvider : MainAPI() {
 
         return if (isSeries) {
             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
-                this.quality = quality
-                this.year = year
+                this.posterUrl = posterUrl; this.quality = quality; this.year = year
             }
         } else {
             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                this.posterUrl = posterUrl
-                this.quality = quality
-                this.year = year
+                this.posterUrl = posterUrl; this.quality = quality; this.year = year
             }
         }
     }
@@ -194,15 +190,11 @@ class LayarKacaProvider : MainAPI() {
 
                         if (isSeries) {
                             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = item.year
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = item.year
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         }
                     }
@@ -250,7 +242,9 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster    = document.select("meta[property='og:image']").attr("content")
             .ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
-        
+        val ratingText   = document.select("span.rating-value").text()
+            .ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore  = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year         = document.select("span.year").text().toIntOrNull()
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -325,11 +319,9 @@ class LayarKacaProvider : MainAPI() {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
-                this.plot = plot
-                this.year = year
-                this.tags = tags
-                this.actors = actors
-                this.recommendations = recommendations
+                this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
             }
@@ -337,11 +329,9 @@ class LayarKacaProvider : MainAPI() {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, cleanUrl) {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
-                this.plot = plot
-                this.year = year
-                this.tags = tags
-                this.actors = actors
-                this.recommendations = recommendations
+                this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
+                this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
             }
@@ -423,53 +413,60 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR — Fix Global Rate Limit (Error 2004 / HTTP 429)
+    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN)
+    //
+    // Temuan investigasi:
+    //   - Segment video episode disajikan dari lh3.googleusercontent.com (Google Drive CDN)
+    //   - Tanpa header khusus → Google Drive bisa diakses normal (HTTP 200)
+    //   - Dengan header Origin/Referer turbovidhls → Google Drive langsung 429
+    //   - Saat seek cepat, player mengirim banyak request segment sekaligus
+    //     → Google Drive rate-limit → HTTP 429 → error seek
+    //
+    // Strategi fix:
+    //   1. turbovidhls.com / etvp.cc → tetap pakai header Origin+Referer (tidak berubah)
+    //   2. googleusercontent.com     → JANGAN tambah header apapun, tapi
+    //                                  tangkap 429 dan retry dengan exponential backoff
+    //   3. Domain lain               → lewat tanpa modifikasi
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
         return Interceptor { chain ->
             val originalRequest = chain.request()
-            val url = originalRequest.url.toString()
-
-            // 1. Siapkan builder untuk memodifikasi Header sesuai kebutuhan Host
-            val requestBuilder = originalRequest.newBuilder()
+            val url             = originalRequest.url.toString()
 
             when {
-                // ── Google Drive CDN: Hapus Referer/Origin bawaan ExtractorLink ───────
+                // ── Turbovidhls & etvp: tambah header Origin + Referer ──────
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") -> {
+                    val newRequest = originalRequest.newBuilder()
+                        .header("User-Agent", mobileUA)
+                        .header("Origin",  "https://turbovidhls.com")
+                        .header("Referer", "https://turbovidhls.com/")
+                        .build()
+                    chain.proceed(newRequest)
+                }
+
+                // ── Google Drive CDN: retry dengan exponential backoff ───────
+                // PENTING: jangan tambah Origin/Referer ke Google — justru bikin 429
                 url.contains("googleusercontent.com") -> {
-                    // Paksa HTTPS mencegah error cleartext
-                    requestBuilder.url(url.replace("http://", "https://"))
-                    requestBuilder.removeHeader("Origin")
-                    requestBuilder.removeHeader("Referer")
+                    var response  = chain.proceed(originalRequest)
+                    var retries   = 0
+                    val maxRetries = 4                       // maks 4x retry
+                    val baseDelay  = 600L                   // mulai 600ms
+
+                    while (response.code == 429 && retries < maxRetries) {
+                        response.close()
+                        val delay = baseDelay * (retries + 1) // 600 → 1200 → 1800 → 2400 ms
+                        Thread.sleep(delay)
+                        response = chain.proceed(originalRequest)
+                        retries++
+                    }
+                    response
                 }
-                // ── Keluarga Turbovip: Pasang header penyamaran ───────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") || 
-                url.contains("turboviplay.com") || url.contains("turbosplayer.com") -> {
-                    requestBuilder.header("User-Agent", mobileUA)
-                    requestBuilder.header("Origin", "https://turbovidhls.com")
-                    requestBuilder.header("Referer", "https://turbovidhls.com/")
-                }
+
+                // ── Domain lain: lewat tanpa modifikasi ──────────────────────
+                else -> chain.proceed(originalRequest)
             }
-
-            val finalRequest = requestBuilder.build()
-            var response = chain.proceed(finalRequest)
-
-            // 2. SISTEM RETRY GLOBAL (PENANGKAL HTTP 429 & 403)
-            // Berlaku untuk Google Drive MAUPUN Server Turbovip yang over-sensitif
-            var retries = 0
-            val maxRetries = 4                       
-            val baseDelay = 600L                   
-
-            while ((response.code == 429 || response.code == 403) && retries < maxRetries) {
-                response.close() // Tutup koneksi yang ditolak
-                val delay = baseDelay * (retries + 1) // Penundaan eksponensial: 600ms, 1200ms, 1800ms...
-                Thread.sleep(delay) // Istirahatkan thread sejenak agar server tenang
-                response = chain.proceed(finalRequest) // Tembak ulang request
-                retries++
-            }
-            
-            response
         }
     }
 }
