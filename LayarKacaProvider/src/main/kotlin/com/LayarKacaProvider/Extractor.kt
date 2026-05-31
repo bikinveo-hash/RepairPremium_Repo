@@ -1,7 +1,6 @@
 package com.LayarKacaProvider
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -19,118 +18,148 @@ open class Lk21TurboExtractor : ExtractorApi() {
             val id = url.substringAfter("/t/").substringBefore("?")
             if (id.isEmpty()) return null
 
+            val ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             val baseHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "User-Agent" to ua,
                 "Referer"    to "https://playeriframe.sbs/"
             )
 
-            // Gunakan Fallback WebViewResolver sejak awal jika halaman Iframe dilindungi Cloudflare
-            var html = ""
-            var response = runCatching { app.get("$mainUrl/t/$id", headers = baseHeaders) }.getOrNull()
-            
-            if (response == null || response.code != 200 || response.text.contains("Just a moment") || response.text.contains("cloudflare")) {
-                val webViewResolver = WebViewResolver(
-                    interceptUrl = Regex(".*emturbovid.*|.*turbovidhls.*"),
-                    useOkhttp = false
-                )
-                val wvResult = webViewResolver.resolveUsingWebView(
-                    url = "$mainUrl/t/$id",
-                    headers = baseHeaders
-                )
-                
-                response = runCatching { app.get("$mainUrl/t/$id", headers = baseHeaders) }.getOrNull()
-                html = response?.text ?: ""
-            } else {
-                html = response.text
-            }
+            val response = app.get("$mainUrl/t/$id", headers = baseHeaders)
+            val html     = response.text
 
-            // Cari m3u8 URL mentah menggunakan var
             var m3u8UrlRaw = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
             if (m3u8UrlRaw.isNullOrBlank()) {
                 m3u8UrlRaw = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
             
-            // Kunci tipe data
+            // Fix Kotlin Nullability
             val m3u8Url = m3u8UrlRaw?.takeIf { it.isNotBlank() } ?: return null
 
-            val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
-            val type  = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-
-            var finalPlayableUrl = m3u8Url
-
-            // ====================================================================
-            // SUPER GOD MODE SNIFFER: Bypass Cronet, HTTP Cleartext & Cloudflare
-            // ====================================================================
-            if (type == ExtractorLinkType.M3U8) {
-                try {
-                    var finalM3u8Url = m3u8Url
-                    var finalM3u8Content = ""
-                    
-                    // Coba baca M3U8. Jika gagal karena Cloudflare 403, WebViewResolver turun tangan!
-                    val m3u8Res = runCatching { app.get(finalM3u8Url, headers = baseHeaders) }.getOrNull()
-                    if (m3u8Res == null || m3u8Res.code != 200) {
-                        val webViewResolver = WebViewResolver(
-                            interceptUrl = Regex(".*\\.m3u8.*"),
-                            useOkhttp = false
-                        )
-                        webViewResolver.resolveUsingWebView(
-                            url = finalM3u8Url,
-                            headers = baseHeaders
-                        )
-                        finalM3u8Content = app.get(finalM3u8Url, headers = baseHeaders).text
-                    } else {
-                        finalM3u8Content = m3u8Res.text
+            if (m3u8Url.endsWith(".mp4", ignoreCase = true)) {
+                sources.add(
+                    newExtractorLink("LK21 TurboVIP", "TurboVIP HD", m3u8Url, ExtractorLinkType.VIDEO) {
+                        this.headers = mapOf("Origin" to mainUrl, "User-Agent" to ua)
                     }
-                    
-                    var depth = 0
-                    while (finalM3u8Content.contains(".m3u8") && depth < 3) {
-                        val nextPath = finalM3u8Content.lines().firstOrNull { 
-                            it.trim().isNotEmpty() && !it.trim().startsWith("#") && it.trim().contains(".m3u8") 
-                        }?.trim()
-                        
-                        if (nextPath != null) {
-                            finalM3u8Url = if (nextPath.startsWith("http")) nextPath else "${finalM3u8Url.substringBeforeLast("/")}/$nextPath"
-                            finalM3u8Content = app.get(finalM3u8Url, headers = baseHeaders).text
-                        } else {
-                            break
-                        }
-                        depth++
-                    }
-
-                    // Rewrite semua HTTP menjadi HTTPS
-                    val baseUrl = finalM3u8Url.substringBeforeLast("/")
-                    val rewrittenLines = finalM3u8Content.lines().map { line ->
-                        val trimmed = line.trim()
-                        when {
-                            trimmed.startsWith("#") || trimmed.isEmpty() -> trimmed
-                            trimmed.startsWith("http://") -> trimmed.replace("http://", "https://")
-                            trimmed.startsWith("https://") -> trimmed
-                            else -> "$baseUrl/$trimmed"
-                        }
-                    }
-                    
-                    val secureM3u8 = rewrittenLines.joinToString("\n")
-                    finalPlayableUrl = "data:application/x-mpegURL;base64," + android.util.Base64.encodeToString(secureM3u8.toByteArray(), android.util.Base64.NO_WRAP)
-                } catch (e: Exception) {
-                    finalPlayableUrl = m3u8Url
-                }
+                )
+                return sources
             }
 
-            sources.add(
-                newExtractorLink(
-                    source = "LK21 TurboVIP",
-                    name   = "TurboVIP HD",
-                    url    = finalPlayableUrl,
-                    type   = type
-                ) {
-                    this.referer = "" // Dikosongkan agar bebas 429
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "Origin"  to mainUrl,
-                        "User-Agent" to baseHeaders["User-Agent"]!!
+            // ====================================================================
+            // HYPER GOD MODE: Multi-Quality Extractor + Auto CDN Header Resolver
+            // Mencegah Error 2001 (HTTP Cleartext) & Error 429 (Google Drive Hotlink)
+            // ====================================================================
+            try {
+                val masterContent = app.get(m3u8Url, headers = baseHeaders).text
+                val isMasterPlaylist = masterContent.contains("#EXT-X-STREAM-INF")
+
+                if (isMasterPlaylist) {
+                    val lines = masterContent.lines()
+                    var currentQuality = Qualities.Unknown.value
+
+                    for (i in lines.indices) {
+                        val line = lines[i].trim()
+                        
+                        // Deteksi Resolusi Video (Misal: 854x480 -> 480p)
+                        if (line.startsWith("#EXT-X-STREAM-INF")) {
+                            val resMatch = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
+                            if (resMatch != null) {
+                                currentQuality = resMatch.groupValues[1].toIntOrNull() ?: Qualities.Unknown.value
+                            }
+                        } 
+                        // Ambil tautan Sub-Playlist
+                        else if (line.isNotEmpty() && !line.startsWith("#")) {
+                            var subUrl = line
+                            if (!subUrl.startsWith("http")) {
+                                subUrl = "${m3u8Url.substringBeforeLast("/")}/$subUrl"
+                            }
+
+                            try {
+                                val subContent = app.get(subUrl, headers = baseHeaders).text
+                                
+                                // Deteksi cerdas: CDN apa yang dipakai episode ini?
+                                var exoHeaders = mapOf(
+                                    "Origin" to "https://turbovidhls.com",
+                                    "Referer" to "https://turbovidhls.com/",
+                                    "User-Agent" to ua
+                                )
+
+                                if (subContent.contains("googleusercontent.com")) {
+                                    // Google Drive Benci Origin. Hapus semuanya!
+                                    exoHeaders = mapOf("User-Agent" to ua)
+                                }
+
+                                // Amankan tautan HTTP menjadi HTTPS
+                                val baseUrl = subUrl.substringBeforeLast("/")
+                                val rewritten = subContent.lines().map { t ->
+                                    val tr = t.trim()
+                                    when {
+                                        tr.isEmpty() || tr.startsWith("#") -> tr
+                                        tr.startsWith("http://") -> tr.replace("http://", "https://")
+                                        tr.startsWith("https://") -> tr
+                                        else -> "$baseUrl/$tr"
+                                    }
+                                }.joinToString("\n")
+
+                                // Bungkus jadi Base64 Data URI agar tidak terdeteksi oleh Cronet
+                                val b64 = "data:application/x-mpegURL;base64," + android.util.Base64.encodeToString(rewritten.toByteArray(), android.util.Base64.NO_WRAP)
+
+                                sources.add(
+                                    newExtractorLink(
+                                        source = "LK21 TurboVIP",
+                                        name = "TurboVIP ${if (currentQuality == Qualities.Unknown.value) "HD" else "${currentQuality}p"}",
+                                        url = b64,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = "" 
+                                        this.quality = currentQuality
+                                        this.headers = exoHeaders
+                                    }
+                                )
+                            } catch (e: Exception) {}
+                        }
+                    }
+                } else {
+                    // Jika langsung file anak tunggal (.ts segment)
+                    var exoHeaders = mapOf(
+                        "Origin" to "https://turbovidhls.com",
+                        "Referer" to "https://turbovidhls.com/",
+                        "User-Agent" to ua
+                    )
+
+                    if (masterContent.contains("googleusercontent.com")) {
+                        exoHeaders = mapOf("User-Agent" to ua)
+                    }
+
+                    val baseUrl = m3u8Url.substringBeforeLast("/")
+                    val rewritten = masterContent.lines().map { t ->
+                        val tr = t.trim()
+                        when {
+                            tr.isEmpty() || tr.startsWith("#") -> tr
+                            tr.startsWith("http://") -> tr.replace("http://", "https://")
+                            tr.startsWith("https://") -> tr
+                            else -> "$baseUrl/$tr"
+                        }
+                    }.joinToString("\n")
+
+                    val b64 = "data:application/x-mpegURL;base64," + android.util.Base64.encodeToString(rewritten.toByteArray(), android.util.Base64.NO_WRAP)
+
+                    sources.add(
+                        newExtractorLink("LK21 TurboVIP", "TurboVIP HD", b64, ExtractorLinkType.M3U8) {
+                            this.referer = ""
+                            this.quality = Qualities.Unknown.value
+                            this.headers = exoHeaders
+                        }
                     )
                 }
-            )
+            } catch (e: Exception) {
+                // Fallback darurat
+                sources.add(
+                    newExtractorLink("LK21 TurboVIP", "TurboVIP HD", m3u8Url, ExtractorLinkType.M3U8) {
+                        this.headers = mapOf("Origin" to "https://turbovidhls.com", "User-Agent" to ua)
+                    }
+                )
+            }
+
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
