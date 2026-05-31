@@ -333,7 +333,7 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR
+// EXTRACTOR 4: HYDRAX (ABYSS) - FIXED v2 (Session-Aware + M3U8 Priority)
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -342,52 +342,104 @@ open class HydraxExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
-        
-        // Wajib UA iOS agar Hydrax menyerah dan memberikan fallback m3u8/mp4
+
         val iosUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 
-        // Script super ampuh untuk membunuh P2P dan mencuri URL dari config JWPlayer!
+        // ─────────────────────────────────────────────────────────────────
+        // JS HOOK v2:
+        //  - P2P dimatikan
+        //  - Intercept XMLHttpRequest DAN fetch untuk tangkap URL GCS
+        //    SEBELUM browser mulai streaming (agar URL masih segar)
+        //  - Prioritas: m3u8 > mp4
+        //  - Intercept network request langsung dari JWPlayer setup
+        // ─────────────────────────────────────────────────────────────────
         val jsHook = """
-            try {
-                // 1. Lumpuhkan sistem P2P/ServiceWorker secara paksa
-                Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurable: true });
-                window.MediaSource = undefined;
-                window.RTCPeerConnection = undefined;
-                
-                // 2. Cegat fungsi setup JWPlayer untuk mencuri URL video yang sudah ter-decrypt
-                let hooked = false;
-                let checkInt = setInterval(() => {
-                    if (!hooked && window.jwplayer && jwplayer.prototype && jwplayer.prototype.setup) {
-                        hooked = true;
-                        const originalSetup = jwplayer.prototype.setup;
-                        jwplayer.prototype.setup = function(config) {
-                            try {
-                                const sources = config.playlist[0].sources;
-                                const m3u8 = sources.find(s => s.file.includes('.m3u8') || s.type === 'hls');
-                                
-                                if (m3u8) {
-                                    fetch(m3u8.file); // Tembak URL .m3u8 agar ditangkap WebViewResolver
-                                } else if (sources.length > 0) {
-                                    let fileUrl = sources[0].file;
-                                    if(!fileUrl.includes('.m3u8') && !fileUrl.includes('.mp4')) {
-                                        // Tambahkan dummy extension agar regex WebViewResolver tetap menangkapnya
-                                        fileUrl += (fileUrl.includes('?') ? '&' : '?') + 'hy=resolve.m3u8';
-                                    }
-                                    fetch(fileUrl);
-                                }
-                            } catch(e) {}
-                            return originalSetup.apply(this, arguments);
-                        };
-                        clearInterval(checkInt);
-                    }
-                }, 50);
-            } catch(e) {}
+            (function() {
+                try {
+                    // 1. Matikan P2P total
+                    Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurable: true });
+                    window.MediaSource = undefined;
+                    window.RTCPeerConnection = undefined;
+                    window.WebRTC = undefined;
+
+                    // 2. Intercept XMLHttpRequest untuk tangkap URL GCS lebih awal
+                    const _origOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function(method, xhrUrl, ...rest) {
+                        if (typeof xhrUrl === 'string' && 
+                            (xhrUrl.includes('storage.googleapis.com') || 
+                             xhrUrl.includes('.m3u8') || 
+                             xhrUrl.includes('.mp4'))) {
+                            // Trigger fetch dummy agar WebViewResolver intercept URL ini
+                            try { fetch(xhrUrl + (xhrUrl.includes('?') ? '&' : '?') + '_wvr=1'); } catch(e) {}
+                        }
+                        return _origOpen.apply(this, [method, xhrUrl, ...rest]);
+                    };
+
+                    // 3. Intercept fetch
+                    const _origFetch = window.fetch;
+                    window.fetch = function(fetchUrl, opts) {
+                        if (typeof fetchUrl === 'string' &&
+                            (fetchUrl.includes('storage.googleapis.com') ||
+                             fetchUrl.includes('.m3u8') ||
+                             fetchUrl.includes('.mp4'))) {
+                            // Duplikat request agar resolver bisa tangkap
+                            try { _origFetch(fetchUrl); } catch(e) {}
+                        }
+                        return _origFetch.apply(this, arguments);
+                    };
+
+                    // 4. Hook JWPlayer setup - prioritas m3u8, fallback mp4
+                    let hooked = false;
+                    let checkInt = setInterval(() => {
+                        if (!hooked && window.jwplayer && typeof jwplayer === 'function') {
+                            const proto = jwplayer.prototype || Object.getPrototypeOf(jwplayer());
+                            if (proto && proto.setup) {
+                                hooked = true;
+                                const originalSetup = proto.setup;
+                                proto.setup = function(config) {
+                                    try {
+                                        const pl = config.playlist || config;
+                                        const items = Array.isArray(pl) ? pl : [pl];
+                                        for (const item of items) {
+                                            const srcs = item.sources || [];
+                                            // Prioritas 1: cari m3u8/hls
+                                            const m3u8src = srcs.find(s => 
+                                                (s.file && s.file.includes('.m3u8')) || 
+                                                s.type === 'hls' || 
+                                                s.type === 'application/x-mpegURL');
+                                            // Prioritas 2: mp4
+                                            const mp4src = srcs.find(s => 
+                                                s.file && s.file.includes('.mp4'));
+                                            
+                                            const chosen = m3u8src || mp4src || srcs[0];
+                                            if (chosen && chosen.file) {
+                                                window.fetch(chosen.file);
+                                            }
+                                        }
+                                    } catch(e) {}
+                                    return originalSetup.apply(this, arguments);
+                                };
+                                clearInterval(checkInt);
+                            }
+                        }
+                    }, 50);
+                    setTimeout(() => clearInterval(checkInt), 15000);
+                } catch(e) {}
+            })();
         """.trimIndent()
 
         try {
-            // PERBAIKAN KRUSIAL: Regex menangkap .mp4 ATAU .m3u8
+            // ─────────────────────────────────────────────────────────────
+            // Regex diperluas: tangkap m3u8, mp4, dan URL GCS langsung
+            // ─────────────────────────────────────────────────────────────
+            val interceptRegex = Regex(
+                ".*storage\\.googleapis\\.com.*\\.mp4.*" +
+                "|.*\\.(m3u8|mp4)(\\?|#|$).*" +
+                "|.*\\.m3u8.*"
+            )
+
             val (request, _) = WebViewResolver(
-                interceptUrl = Regex(".*\\.(m3u8|mp4)($|\\?|#).*"),
+                interceptUrl = interceptRegex,
                 userAgent = iosUA,
                 script = jsHook
             ).resolveUsingWebView(
@@ -395,32 +447,66 @@ open class HydraxExtractor : ExtractorApi() {
                 referer = referer ?: "https://playeriframe.sbs/"
             )
 
-            // Tangkap URL dan bersihkan dari hash buatan JS player Hydrax (#mp4/chunk/...)
-            val rawUrl = request?.url?.toString()
-            val cleanUrl = rawUrl?.substringBefore("#")
-                ?.replace("?hy=resolve.m3u8", "")
-                ?.replace("&hy=resolve.m3u8", "")
+            val rawUrl = request?.url?.toString() ?: return sources
 
-            if (!cleanUrl.isNullOrBlank()) {
-                val isMp4 = cleanUrl.contains(".mp4", ignoreCase = true)
-                
-                sources.add(
-                    newExtractorLink(
-                        source = "Hydrax (Abyss)",
-                        name = "Hydrax HD",
-                        url = cleanUrl,
-                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "User-Agent" to iosUA,
-                            "Origin" to mainUrl,
-                            "Referer" to "$mainUrl/"
-                        )
-                    }
-                )
+            // ─────────────────────────────────────────────────────────────
+            // FIX UTAMA:
+            // Jangan buang fragment (#...) karena bisa jadi token Hydrax!
+            // Hanya bersihkan dummy param yang kita tambahkan sendiri.
+            // ─────────────────────────────────────────────────────────────
+            val cleanUrl = rawUrl
+                .replace("?_wvr=1", "")
+                .replace("&_wvr=1", "")
+                .replace("?hy=resolve.m3u8", "")
+                .replace("&hy=resolve.m3u8", "")
+            // TIDAK ada substringBefore("#") karena fragment bisa jadi token auth GCS!
+
+            if (cleanUrl.isBlank()) return sources
+
+            // ─────────────────────────────────────────────────────────────
+            // Ambil cookies dari WebView session - PENTING untuk GCS auth!
+            // ─────────────────────────────────────────────────────────────
+            val wvCookieManager = android.webkit.CookieManager.getInstance()
+            val abyssCookies = wvCookieManager.getCookie("abysscdn.com") ?: ""
+            val abyssPlayerCookies = wvCookieManager.getCookie("abyssplayer.com") ?: ""
+            val gcsCookies = wvCookieManager.getCookie("storage.googleapis.com") ?: ""
+            val allCookies = listOf(abyssCookies, abyssPlayerCookies, gcsCookies)
+                .filter { it.isNotBlank() }
+                .joinToString("; ")
+
+            val isM3u8 = cleanUrl.contains(".m3u8", ignoreCase = true)
+            val isGCS = cleanUrl.contains("storage.googleapis.com", ignoreCase = true)
+            val isMp4 = !isM3u8 && (cleanUrl.contains(".mp4", ignoreCase = true) || isGCS)
+
+            val linkType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+
+            val headers = buildMap {
+                put("User-Agent", iosUA)
+                put("Origin", mainUrl)
+                put("Referer", "$mainUrl/")
+                // Kirim cookies WebView agar GCS session valid
+                if (allCookies.isNotBlank()) put("Cookie", allCookies)
+                // Header extra untuk GCS
+                if (isGCS) {
+                    put("Accept", "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5")
+                    put("Accept-Encoding", "identity;q=1, *;q=0")
+                    put("Range", "bytes=0-")
+                }
             }
+
+            sources.add(
+                newExtractorLink(
+                    source = "Hydrax (Abyss)",
+                    name = if (isM3u8) "Hydrax HD" else "Hydrax HD (MP4)",
+                    url = cleanUrl,
+                    type = linkType
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = headers
+                }
+            )
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -428,3 +514,4 @@ open class HydraxExtractor : ExtractorApi() {
         return sources
     }
 }
+
