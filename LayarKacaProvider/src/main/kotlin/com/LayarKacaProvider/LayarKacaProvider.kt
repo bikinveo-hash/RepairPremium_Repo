@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.extractors.ByseSX
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -420,7 +420,11 @@ class LayarKacaProvider : MainAPI() {
             else if (url.contains("playeriframe.sbs/iframe/cast/")) {
                 val id = url.substringAfter("cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
-                loadExtractor(castUrl, currentUrl, subtitleCallback, callback)
+                try {
+                    ByseSX().getUrl(castUrl, "https://playeriframe.sbs/", subtitleCallback, callback)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
         return true
