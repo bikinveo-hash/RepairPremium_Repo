@@ -2,6 +2,7 @@ package com.LayarKacaProvider
 
 import android.util.Base64
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -315,8 +316,6 @@ open class CastExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
-                        
-                        // FIX SUPER PENTING: Melempar User-Agent aslinya ke ExoPlayer!
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -328,6 +327,60 @@ open class CastExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources
+    }
+}
+
+// =========================================================================
+// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR
+// =========================================================================
+open class HydraxExtractor : ExtractorApi() {
+    override var name = "Hydrax"
+    override var mainUrl = "https://abysscdn.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        
+        // Wajib UA iOS agar Hydrax mematikan P2P dan langsung meload .m3u8
+        val iosUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+
+        try {
+            // Biarkan WebViewResolver yang mengeksekusi JS SoTrym secara ghoib.
+            // Kita pasang jaring untuk menangkap request yang berakhiran .m3u8
+            val (request, _) = WebViewResolver(
+                interceptUrl = Regex(".*\\.m3u8.*"),
+                userAgent = iosUA
+            ).resolveUsingWebView(
+                url = url,
+                referer = referer ?: "https://playeriframe.sbs/"
+            )
+
+            // URL asli yang sudah terdekripsi berhasil ditangkap
+            val m3u8Url = request?.url?.toString()
+
+            if (!m3u8Url.isNullOrBlank()) {
+                sources.add(
+                    newExtractorLink(
+                        source = "Hydrax (Abyss)",
+                        name = "Hydrax HD",
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf(
+                            "User-Agent" to iosUA,
+                            "Origin" to mainUrl,
+                            "Referer" to "$mainUrl/"
+                        )
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return sources
     }
 }
