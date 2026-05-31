@@ -1,16 +1,17 @@
 package com.LayarKacaProvider
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
 class LayarKacaPlugin : Plugin() {
     override fun load(context: Context) {
-        // Hanya provider
+        // Mendaftarkan Main Provider (LayarKaca21)
         registerMainAPI(LayarKacaProvider())
-        
-        // Hanya TurboVIP untuk pengujian
+
+        // Mendaftarkan Extractor tambahan agar terbaca oleh loadExtractor()
         registerExtractorAPI(Lk21TurboExtractor())
+        registerExtractorAPI(HowNetworkExtractor())
     }
 }
