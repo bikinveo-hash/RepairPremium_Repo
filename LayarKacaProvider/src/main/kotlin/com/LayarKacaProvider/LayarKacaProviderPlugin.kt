@@ -10,8 +10,9 @@ class LayarKacaPlugin : Plugin() {
         // Mendaftarkan Main Provider (LayarKaca21)
         registerMainAPI(LayarKacaProvider())
 
-        // Mendaftarkan Extractor tambahan agar terbaca oleh loadExtractor()
+        // Mendaftarkan semua Extractor tambahan agar terbaca oleh sistem CloudStream
         registerExtractorAPI(Lk21TurboExtractor())
         registerExtractorAPI(HowNetworkExtractor())
+        registerExtractorAPI(CastExtractor())
     }
 }
