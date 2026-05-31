@@ -316,6 +316,8 @@ open class CastExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
+                        
+                        // FIX SUPER PENTING: Melempar User-Agent aslinya ke ExoPlayer!
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -342,30 +344,32 @@ open class HydraxExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         
-        // Wajib UA iOS agar Hydrax mematikan P2P dan langsung meload .m3u8
+        // Wajib UA iOS agar Hydrax mematikan P2P dan memunculkan file .mp4 / .m3u8 aslinya
         val iosUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 
         try {
-            // Biarkan WebViewResolver yang mengeksekusi JS SoTrym secara ghoib.
-            // Kita pasang jaring untuk menangkap request yang berakhiran .m3u8
+            // Pasang jaring untuk menangkap request .mp4 atau .m3u8 beserta parameternya
             val (request, _) = WebViewResolver(
-                interceptUrl = Regex(".*\\.m3u8.*"),
+                interceptUrl = Regex(".*\\.(mp4|m3u8)($|\\?|#).*"),
                 userAgent = iosUA
             ).resolveUsingWebView(
                 url = url,
                 referer = referer ?: "https://playeriframe.sbs/"
             )
 
-            // URL asli yang sudah terdekripsi berhasil ditangkap
-            val m3u8Url = request?.url?.toString()
+            // Tangkap URL dan bersihkan dari hash buatan JS player Hydrax (#mp4/chunk/...)
+            val rawUrl = request?.url?.toString()
+            val cleanUrl = rawUrl?.substringBefore("#")
 
-            if (!m3u8Url.isNullOrBlank()) {
+            if (!cleanUrl.isNullOrBlank()) {
+                val isMp4 = cleanUrl.contains(".mp4", ignoreCase = true)
+                
                 sources.add(
                     newExtractorLink(
                         source = "Hydrax (Abyss)",
                         name = "Hydrax HD",
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
+                        url = cleanUrl,
+                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
                     ) {
                         this.referer = mainUrl
                         this.quality = Qualities.Unknown.value
