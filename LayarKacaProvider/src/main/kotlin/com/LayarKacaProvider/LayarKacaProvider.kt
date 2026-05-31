@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -73,6 +74,12 @@ class LayarKacaProvider : MainAPI() {
         val poster_path: String?,
         val release_date: String?,
         val first_air_date: String?
+    )
+
+    data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
+    data class Lk21SearchItem(
+        val title: String, val slug: String, val poster: String?,
+        val type: String?, val year: Int?, val quality: String?
     )
 
     // =========================================================================
@@ -146,12 +153,6 @@ class LayarKacaProvider : MainAPI() {
     // =========================================================================
     // SEARCH
     // =========================================================================
-    data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
-    data class Lk21SearchItem(
-        val title: String, val slug: String, val poster: String?,
-        val type: String?, val year: Int?, val quality: String?
-    )
-
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "https://gudangvape.com/search.php?s=$query&page=1"
         val headers = mapOf(
@@ -403,21 +404,30 @@ class LayarKacaProvider : MainAPI() {
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
         allSources.forEach { url ->
+            // Routing TurboVIP
             if (url.contains("playeriframe.sbs/iframe/turbovip/")) {
                 val id = url.substringAfter("turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
-            } else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
+            } 
+            // Routing HowNetwork (P2P)
+            else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
                 val id = url.substringAfter("p2p/").substringBefore("/")
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
+            } 
+            // Routing CAST (Byse/FileLion)
+            else if (url.contains("playeriframe.sbs/iframe/cast/")) {
+                val id = url.substringAfter("cast/").substringBefore("/")
+                val castUrl = "https://weneverbeenfree.com/e/$id"
+                loadExtractor(castUrl, currentUrl, subtitleCallback, callback)
             }
         }
         return true
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN)
+    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN) dll
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
