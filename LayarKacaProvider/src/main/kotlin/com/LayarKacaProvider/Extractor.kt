@@ -55,7 +55,6 @@ data class CastSource(
     @JsonProperty("type") val type: String?
 )
 
-// Inisialisasi Jackson Mapper mandiri (Tahan Banting)
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
@@ -125,11 +124,6 @@ open class HowNetworkExtractor : ExtractorApi() {
             val id = url.substringAfter("id=").substringBefore("&")
             if (id.isEmpty()) return null
 
-            val jsonString = mapOf(
-                "r" to "https://playeriframe.sbs/",
-                "d" to "cloud.hownetwork.xyz"
-            ).let { mapper.writeValueAsString(it) } // Fallback klo butuh JSON (tapi api2.php mintanya form-data, jadi abaikan ini)
-
             val response = app.post(
                 url = "$mainUrl/api2.php?id=$id",
                 headers = mapOf(
@@ -144,7 +138,6 @@ open class HowNetworkExtractor : ExtractorApi() {
                 )
             ).text
 
-            // Pakai mapper kita sendiri
             val parsedRes = try { mapper.readValue(response, HowNetworkResponse::class.java) } catch(e: Exception) { null }
             val m3u8Url = parsedRes?.file
 
@@ -303,8 +296,6 @@ open class CastExtractor : ExtractorApi() {
                     val decrypted = cipher.doFinal(payload)
                     
                     val jsonString = String(decrypted, Charsets.UTF_8)
-                    
-                    // BACA JSON PAKE JACKSON SENDIRI! (Anti Crash)
                     val parsedData = mapper.readValue(jsonString, CastDecrypted::class.java)
                     
                     realUrl = parsedData?.sources?.firstOrNull()?.url
@@ -324,9 +315,12 @@ open class CastExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
+                        
+                        // FIX SUPER PENTING: Melempar User-Agent aslinya ke ExoPlayer!
                         this.headers = mapOf(
                             "Origin" to mainUrl,
-                            "Referer" to "$mainUrl/"
+                            "Referer" to "$mainUrl/",
+                            "User-Agent" to commonHeaders["User-Agent"]!!
                         )
                     }
                 )
