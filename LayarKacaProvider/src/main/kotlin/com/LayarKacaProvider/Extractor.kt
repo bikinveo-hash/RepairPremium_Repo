@@ -333,7 +333,7 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR (ANTI-403)
+// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -343,7 +343,7 @@ open class HydraxExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         
-        // Wajib UA iOS agar Hydrax menyerah dan memberikan fallback m3u8
+        // Wajib UA iOS agar Hydrax menyerah dan memberikan fallback m3u8/mp4
         val iosUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 
         // Script super ampuh untuk membunuh P2P dan mencuri URL dari config JWPlayer!
@@ -369,7 +369,7 @@ open class HydraxExtractor : ExtractorApi() {
                                     fetch(m3u8.file); // Tembak URL .m3u8 agar ditangkap WebViewResolver
                                 } else if (sources.length > 0) {
                                     let fileUrl = sources[0].file;
-                                    if(!fileUrl.includes('.m3u8')) {
+                                    if(!fileUrl.includes('.m3u8') && !fileUrl.includes('.mp4')) {
                                         // Tambahkan dummy extension agar regex WebViewResolver tetap menangkapnya
                                         fileUrl += (fileUrl.includes('?') ? '&' : '?') + 'hy=resolve.m3u8';
                                     }
@@ -385,9 +385,9 @@ open class HydraxExtractor : ExtractorApi() {
         """.trimIndent()
 
         try {
-            // Pasang jaring ketat, HANYA menangkap request .m3u8 (mengabaikan request fake MP4/Iklan)
+            // PERBAIKAN KRUSIAL: Regex menangkap .mp4 ATAU .m3u8
             val (request, _) = WebViewResolver(
-                interceptUrl = Regex(".*\\.m3u8($|\\?|#).*"),
+                interceptUrl = Regex(".*\\.(m3u8|mp4)($|\\?|#).*"),
                 userAgent = iosUA,
                 script = jsHook
             ).resolveUsingWebView(
@@ -395,7 +395,7 @@ open class HydraxExtractor : ExtractorApi() {
                 referer = referer ?: "https://playeriframe.sbs/"
             )
 
-            // Tangkap URL dan bersihkan dari dummy extension & hash
+            // Tangkap URL dan bersihkan dari hash buatan JS player Hydrax (#mp4/chunk/...)
             val rawUrl = request?.url?.toString()
             val cleanUrl = rawUrl?.substringBefore("#")
                 ?.replace("?hy=resolve.m3u8", "")
