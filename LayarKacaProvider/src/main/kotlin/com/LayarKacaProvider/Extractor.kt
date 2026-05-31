@@ -317,7 +317,6 @@ open class CastExtractor : ExtractorApi() {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
                         
-                        // FIX SUPER PENTING: Melempar User-Agent aslinya ke ExoPlayer!
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -334,7 +333,7 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR
+// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI WEBVIEW INTERCEPTOR (ANTI-403)
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -344,22 +343,63 @@ open class HydraxExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         
-        // Wajib UA iOS agar Hydrax mematikan P2P dan memunculkan file .mp4 / .m3u8 aslinya
+        // Wajib UA iOS agar Hydrax menyerah dan memberikan fallback m3u8
         val iosUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 
+        // Script super ampuh untuk membunuh P2P dan mencuri URL dari config JWPlayer!
+        val jsHook = """
+            try {
+                // 1. Lumpuhkan sistem P2P/ServiceWorker secara paksa
+                Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurable: true });
+                window.MediaSource = undefined;
+                window.RTCPeerConnection = undefined;
+                
+                // 2. Cegat fungsi setup JWPlayer untuk mencuri URL video yang sudah ter-decrypt
+                let hooked = false;
+                let checkInt = setInterval(() => {
+                    if (!hooked && window.jwplayer && jwplayer.prototype && jwplayer.prototype.setup) {
+                        hooked = true;
+                        const originalSetup = jwplayer.prototype.setup;
+                        jwplayer.prototype.setup = function(config) {
+                            try {
+                                const sources = config.playlist[0].sources;
+                                const m3u8 = sources.find(s => s.file.includes('.m3u8') || s.type === 'hls');
+                                
+                                if (m3u8) {
+                                    fetch(m3u8.file); // Tembak URL .m3u8 agar ditangkap WebViewResolver
+                                } else if (sources.length > 0) {
+                                    let fileUrl = sources[0].file;
+                                    if(!fileUrl.includes('.m3u8')) {
+                                        // Tambahkan dummy extension agar regex WebViewResolver tetap menangkapnya
+                                        fileUrl += (fileUrl.includes('?') ? '&' : '?') + 'hy=resolve.m3u8';
+                                    }
+                                    fetch(fileUrl);
+                                }
+                            } catch(e) {}
+                            return originalSetup.apply(this, arguments);
+                        };
+                        clearInterval(checkInt);
+                    }
+                }, 50);
+            } catch(e) {}
+        """.trimIndent()
+
         try {
-            // Pasang jaring untuk menangkap request .mp4 atau .m3u8 beserta parameternya
+            // Pasang jaring ketat, HANYA menangkap request .m3u8 (mengabaikan request fake MP4/Iklan)
             val (request, _) = WebViewResolver(
-                interceptUrl = Regex(".*\\.(mp4|m3u8)($|\\?|#).*"),
-                userAgent = iosUA
+                interceptUrl = Regex(".*\\.m3u8($|\\?|#).*"),
+                userAgent = iosUA,
+                script = jsHook
             ).resolveUsingWebView(
                 url = url,
                 referer = referer ?: "https://playeriframe.sbs/"
             )
 
-            // Tangkap URL dan bersihkan dari hash buatan JS player Hydrax (#mp4/chunk/...)
+            // Tangkap URL dan bersihkan dari dummy extension & hash
             val rawUrl = request?.url?.toString()
             val cleanUrl = rawUrl?.substringBefore("#")
+                ?.replace("?hy=resolve.m3u8", "")
+                ?.replace("&hy=resolve.m3u8", "")
 
             if (!cleanUrl.isNullOrBlank()) {
                 val isMp4 = cleanUrl.contains(".mp4", ignoreCase = true)
