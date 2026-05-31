@@ -14,5 +14,8 @@ class LayarKacaPlugin : Plugin() {
         registerExtractorAPI(Lk21TurboExtractor())
         registerExtractorAPI(HowNetworkExtractor())
         registerExtractorAPI(CastExtractor())
+        
+        // Mendaftarkan Extractor Hydrax (Abyss) yang baru saja kita tambahkan
+        registerExtractorAPI(HydraxExtractor())
     }
 }
