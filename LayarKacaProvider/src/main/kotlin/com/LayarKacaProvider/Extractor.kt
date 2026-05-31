@@ -7,8 +7,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -21,7 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 // =========================================================================
-// DATA CLASSES UNTUK API (DILINDUNGI @JsonProperty ANTI-MINIFY BUG)
+// DATA CLASSES UNTUK API (ANTI-MINIFY BUG)
 // =========================================================================
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
@@ -53,6 +54,9 @@ data class CastSource(
     @JsonProperty("label") val label: String?, 
     @JsonProperty("type") val type: String?
 )
+
+// Inisialisasi Jackson Mapper mandiri (Tahan Banting)
+val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
 // EXTRACTOR 1: TURBO VIP
@@ -101,7 +105,6 @@ open class Lk21TurboExtractor : ExtractorApi() {
                 }
             )
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
         }
         return sources
@@ -122,6 +125,11 @@ open class HowNetworkExtractor : ExtractorApi() {
             val id = url.substringAfter("id=").substringBefore("&")
             if (id.isEmpty()) return null
 
+            val jsonString = mapOf(
+                "r" to "https://playeriframe.sbs/",
+                "d" to "cloud.hownetwork.xyz"
+            ).let { mapper.writeValueAsString(it) } // Fallback klo butuh JSON (tapi api2.php mintanya form-data, jadi abaikan ini)
+
             val response = app.post(
                 url = "$mainUrl/api2.php?id=$id",
                 headers = mapOf(
@@ -134,9 +142,11 @@ open class HowNetworkExtractor : ExtractorApi() {
                     "r" to "https://playeriframe.sbs/",
                     "d" to "cloud.hownetwork.xyz"
                 )
-            ).parsedSafe<HowNetworkResponse>()
+            ).text
 
-            val m3u8Url = response?.file
+            // Pakai mapper kita sendiri
+            val parsedRes = try { mapper.readValue(response, HowNetworkResponse::class.java) } catch(e: Exception) { null }
+            val m3u8Url = parsedRes?.file
 
             if (!m3u8Url.isNullOrBlank()) {
                 sources.add(
@@ -156,7 +166,6 @@ open class HowNetworkExtractor : ExtractorApi() {
                 )
             }
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
         }
         return sources
@@ -216,7 +225,7 @@ open class CastExtractor : ExtractorApi() {
 
         try {
             val chalRes = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
-            val chalJson = tryParseJson<CastChalResp>(chalRes.text) ?: return null
+            val chalJson = try { mapper.readValue(chalRes.text, CastChalResp::class.java) } catch(e:Exception){ null } ?: return null
             val nonce = chalJson.nonce ?: return null
             val cid = chalJson.challenge_id ?: return null
 
@@ -238,7 +247,7 @@ open class CastExtractor : ExtractorApi() {
             if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) { 0 } + xBytes
             if (yBytes.size < 32) yBytes = ByteArray(32 - yBytes.size) { 0 } + yBytes
 
-            val attestPayload = mapOf(
+            val attestPayloadStr = mapper.writeValueAsString(mapOf(
                 "viewer_id" to b64url(getRandomBytes(16)),
                 "device_id" to b64url(getRandomBytes(16)),
                 "challenge_id" to cid,
@@ -250,16 +259,16 @@ open class CastExtractor : ExtractorApi() {
                 ),
                 "client" to mapOf("user_agent" to commonHeaders["User-Agent"]!!),
                 "attributes" to mapOf("entropy" to "high")
-            ).toJson().toRequestBody("application/json".toMediaTypeOrNull())
+            ))
 
-            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestPayload)
-            val attestJson = tryParseJson<CastAttestResp>(attestRes.text) ?: return null
+            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
+            val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch(e:Exception){ null } ?: return null
             val token = attestJson.token ?: return null
 
-            val pbPayload = mapOf("fingerprint" to mapOf("token" to token)).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbPayload)
+            val pbPayloadStr = mapper.writeValueAsString(mapOf("fingerprint" to mapOf("token" to token)))
+            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
             
-            val pbResp = tryParseJson<CastPbResp>(pbRes.text)?.playback ?: return null
+            val pbResp = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch(e:Exception){ null } ?: return null
             val iv = b64urlDecode(pbResp.iv ?: return null)
             val payload = b64urlDecode(pbResp.payload ?: return null)
             val keyParts = pbResp.key_parts ?: return null
@@ -294,7 +303,9 @@ open class CastExtractor : ExtractorApi() {
                     val decrypted = cipher.doFinal(payload)
                     
                     val jsonString = String(decrypted, Charsets.UTF_8)
-                    val parsedData = tryParseJson<CastDecrypted>(jsonString)
+                    
+                    // BACA JSON PAKE JACKSON SENDIRI! (Anti Crash)
+                    val parsedData = mapper.readValue(jsonString, CastDecrypted::class.java)
                     
                     realUrl = parsedData?.sources?.firstOrNull()?.url
                     qualityLabel = parsedData?.sources?.firstOrNull()?.label ?: "HD"
