@@ -161,7 +161,6 @@ open class CastExtractor : ExtractorApi() {
                     cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
                     val decrypted = cipher.doFinal(payload)
                     
-                    // --- INI DIA KUNCINYA BRO! KITA PARSE JSONNYA ---
                     val jsonString = String(decrypted, Charsets.UTF_8)
                     val parsedData = tryParseJson<CastDecrypted>(jsonString)
                     
@@ -173,15 +172,21 @@ open class CastExtractor : ExtractorApi() {
             }
 
             if (realUrl != null) {
+                // BUG FIX: referer dan quality pakai blok kurung kurawal {}
                 sources.add(
                     newExtractorLink(
                         source = "CAST HD",
                         name = "CAST $qualityLabel",
                         url = realUrl,
-                        referer = "$mainUrl/",
-                        quality = Qualities.Unknown.value,
                         type = ExtractorLinkType.M3U8
-                    )
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf(
+                            "Origin" to mainUrl,
+                            "Referer" to "$mainUrl/"
+                        )
+                    }
                 )
             }
         } catch (e: Exception) {
