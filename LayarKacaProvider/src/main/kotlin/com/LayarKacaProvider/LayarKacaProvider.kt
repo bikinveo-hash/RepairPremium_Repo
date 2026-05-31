@@ -15,6 +15,15 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
+// =========================================================================
+// TRIK BYPASS: Class Turunan untuk mengeksploitasi mesin AES ByseSX
+// =========================================================================
+open class CastExtractor : ByseSX() {
+    override var name = "CAST HD"
+    // Override mainUrl agar url.startsWith() bernilai TRUE
+    override var mainUrl = "https://weneverbeenfree.com" 
+}
+
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
     override var name = "LayarKaca21"
@@ -416,12 +425,13 @@ class LayarKacaProvider : MainAPI() {
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
-            // Routing CAST (Byse/FileLion)
+            // Routing CAST (Byse/FileLion) - Memanfaatkan Mesin Ekstraktor ByseSX Bawaan
             else if (url.contains("playeriframe.sbs/iframe/cast/")) {
                 val id = url.substringAfter("cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
-                    ByseSX().getUrl(castUrl, "https://playeriframe.sbs/", subtitleCallback, callback)
+                    // Panggil Class turunan yang sudah dimanipulasi mainUrl-nya
+                    CastExtractor().getUrl(castUrl, "https://playeriframe.sbs/", subtitleCallback, callback)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
