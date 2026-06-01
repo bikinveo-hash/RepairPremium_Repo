@@ -14,15 +14,17 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.KeyPairGenerator
+import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.security.interfaces.ECPublicKey
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 // =========================================================================
-// DATA CLASSES UNTUK API (ANTI-MINIFY BUG)
+// DATA CLASSES
 // =========================================================================
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
@@ -166,7 +168,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: CAST HD (Anti-Bot Bypass FileLion/Byse V19)
+// EXTRACTOR 3: CAST HD
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name = "CAST HD"
@@ -317,7 +319,6 @@ open class CastExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
-                        
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -334,108 +335,116 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - PURE HTTP + RHINO JS ENGINE (BYPASS WEBVIEW)
+// EXTRACTOR 4: HYDRAX (ABYSS) - PURE NATIVE AES-CTR (BYPASS JS ENGINE)
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
     override var mainUrl = "https://abysscdn.com"
     override val requiresReferer = false
 
+    private fun getMd5Hex(input: String): String {
+        val md = MessageDigest.getInstance("MD5")
+        val digest = md.digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            val videoId = url.substringAfter("?v=").substringBefore("&")
+            // Bypass Wrapper Otomatis
+            val videoId = if (url.contains("hydrax/")) {
+                url.substringAfter("hydrax/").substringBefore("/")
+            } else {
+                url.substringAfter("?v=").substringBefore("&")
+            }
             if (videoId.isBlank()) return null
 
-            // 1. Tembak HTML utama untuk mengambil data JSON Base64
-            val htmlRes = app.get(url, referer = referer ?: "https://playeriframe.sbs/")
+            val targetUrl = "https://abysscdn.com/?v=$videoId"
+            val htmlRes = app.get(targetUrl, referer = referer ?: "https://playeriframe.sbs/")
             val html = htmlRes.text
 
-            // Ambil string di dalam variabel `const datas = "..."`
-            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1)
-                ?: return null
+            // Cari base64 'datas' dari HTML
+            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
-            // Decode Base64 menjadi raw JSON string
-            val jsonString = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), Charsets.UTF_8)
+            val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.UTF_8)
+            val jsonData = mapper.readValue(jsonString, Map::class.java)
 
-            // 2. Unduh file JS dekripsi Hydrax (lite.bundle.js)
-            val jsUrl = "https://iamcdn.net/player-v2/lite.bundle.js"
-            val jsContent = app.get(jsUrl, referer = url).text
+            val slug = jsonData["slug"]?.toString() ?: return null
+            val md5Id = jsonData["md5_id"]?.toString() ?: return null
+            val userId = jsonData["user_id"]?.toString() ?: return null
+            val mediaStr = jsonData["media"] as? String ?: return null
 
-            // 3. Inisialisasi Native Rhino JS Engine
-            val rhino = org.mozilla.javascript.Context.enter()
-            rhino.optimizationLevel = -1 // Wajib diatur ke -1 untuk perangkat Android agar tidak memicu error kompilasi JIT
+            // LOGIKA HYDRAX: Membuat Key MD5 dari (user_id:slug:md5_id)
+            val keyString = "$userId:$slug:$md5Id"
+            val md5Hex = getMd5Hex(keyString)
+            
+            // AES-CTR Key adalah 32 Bytes dari Hash MD5. IV Counter adalah 16 Bytes awal.
+            val keyBytes = md5Hex.toByteArray(Charsets.UTF_8) 
+            val ivBytes = keyBytes.copyOfRange(0, 16)
 
-            var finalUrl: String? = null
+            val mediaBytes = ByteArray(mediaStr.length)
+            for (i in mediaStr.indices) {
+                mediaBytes[i] = mediaStr[i].code.toByte()
+            }
 
-            try {
-                val scope = rhino.initSafeStandardObjects()
+            // Dekripsi NATIVE AES-CTR
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            val keySpec = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(ivBytes)
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
 
-                // Polyfill DOM & Fungsi Dasar JS
-                val mockDom = """
-                    var window = {};
-                    var document = {};
-                    var navigator = { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36' };
-                    
-                    var atob = function(str) {
-                        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-                        var output = '';
-                        str = String(str).replace(/=+$/, '');
-                        for (var bc = 0, bs, buffer, idx = 0; buffer = str.charAt(idx++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
-                            buffer = chars.indexOf(buffer);
+            val decryptedBytes = cipher.doFinal(mediaBytes)
+            val decryptedString = String(decryptedBytes, Charsets.UTF_8)
+            val mediaData = mapper.readValue(decryptedString, Map::class.java)
+
+            // Ekstrak URL .m3u8 & .mp4
+            val addSource = { formatMap: Map<*, *>?, isHls: Boolean ->
+                if (formatMap != null) {
+                    val sourcesList = formatMap["sources"] as? List<Map<*, *>>
+                    val domains = formatMap["domains"] as? List<String> ?: emptyList()
+
+                    sourcesList?.forEach { source ->
+                        val file = source["file"]?.toString()
+                        val srcUrl = source["url"]?.toString()
+                        val size = source["size"]?.toString()
+                        val resId = source["res_id"]?.toString()
+                        val label = source["label"]?.toString() ?: "HD"
+
+                        var finalUrl = file ?: srcUrl
+
+                        // Jika URL tidak ada, Hydrax merakitnya manual menggunakan Domain
+                        if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
+                            val domain = domains.first()
+                            finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
                         }
-                        return output;
-                    };
-                """.trimIndent()
 
-                // Masukkan mock dan script JS ke memori Rhino
-                rhino.evaluateString(scope, mockDom, "MockDOM", 1, null)
-                rhino.evaluateString(scope, jsContent, "HydraxJS", 1, null)
-
-                // 4. Jalankan fungsi SoTrym
-                val runner = """
-                    var result = window.SoTrym($jsonString);
-                    var outputUrl = "";
-                    
-                    if (typeof result === 'string') {
-                        outputUrl = result;
-                    } else if (typeof result === 'object' && result !== null) {
-                        outputUrl = result.file || result.url || result.source || "";
+                        if (!finalUrl.isNullOrBlank()) {
+                            sources.add(
+                                newExtractorLink(
+                                    source = "Hydrax",
+                                    name = "Hydrax $label",
+                                    url = finalUrl,
+                                    type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://abysscdn.com/"
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                                        "Origin" to mainUrl
+                                    )
+                                }
+                            )
+                        }
                     }
-                    outputUrl;
-                """.trimIndent()
-
-                finalUrl = rhino.evaluateString(scope, runner, "RunSoTrym", 1, null) as? String
-            } finally {
-                // Selalu bersihkan memori setelah selesai dieksekusi
-                org.mozilla.javascript.Context.exit()
+                }
             }
 
-            // 5. Build Extractor Link
-            if (!finalUrl.isNullOrBlank() && finalUrl.startsWith("http")) {
-                val isM3u8 = finalUrl.contains(".m3u8", ignoreCase = true)
-                
-                sources.add(
-                    newExtractorLink(
-                        source = "Hydrax (Abyss)",
-                        name = if (isM3u8) "Hydrax HD" else "Hydrax HD (MP4)",
-                        url = finalUrl,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://abysscdn.com/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-                            "Origin" to mainUrl
-                        )
-                    }
-                )
-            }
+            addSource(mediaData["hls"] as? Map<*, *>, true)
+            addSource(mediaData["mp4"] as? Map<*, *>, false)
 
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
         return sources
     }
 }
