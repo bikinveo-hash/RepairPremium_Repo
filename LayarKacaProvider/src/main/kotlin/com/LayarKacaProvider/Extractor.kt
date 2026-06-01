@@ -335,7 +335,7 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - PURE NATIVE AES-CTR (BYPASS JS ENGINE)
+// EXTRACTOR 4: HYDRAX (ABYSS) - PURE NATIVE AES-CTR (FINAL)
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -351,7 +351,6 @@ open class HydraxExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            // Bypass Wrapper Otomatis
             val videoId = if (url.contains("hydrax/")) {
                 url.substringAfter("hydrax/").substringBefore("/")
             } else {
@@ -363,10 +362,10 @@ open class HydraxExtractor : ExtractorApi() {
             val htmlRes = app.get(targetUrl, referer = referer ?: "https://playeriframe.sbs/")
             val html = htmlRes.text
 
-            // Cari base64 'datas' dari HTML
             val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
-            val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.UTF_8)
+            // FIX: Gunakan ISO_8859_1 (Latin-1) agar data biner di "media" tidak rusak
+            val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.ISO_8859_1)
             val jsonData = mapper.readValue(jsonString, Map::class.java)
 
             val slug = jsonData["slug"]?.toString() ?: return null
@@ -374,30 +373,25 @@ open class HydraxExtractor : ExtractorApi() {
             val userId = jsonData["user_id"]?.toString() ?: return null
             val mediaStr = jsonData["media"] as? String ?: return null
 
-            // LOGIKA HYDRAX: Membuat Key MD5 dari (user_id:slug:md5_id)
             val keyString = "$userId:$slug:$md5Id"
             val md5Hex = getMd5Hex(keyString)
             
-            // AES-CTR Key adalah 32 Bytes dari Hash MD5. IV Counter adalah 16 Bytes awal.
             val keyBytes = md5Hex.toByteArray(Charsets.UTF_8) 
             val ivBytes = keyBytes.copyOfRange(0, 16)
 
-            val mediaBytes = ByteArray(mediaStr.length)
-            for (i in mediaStr.indices) {
-                mediaBytes[i] = mediaStr[i].code.toByte()
-            }
+            // FIX: Convert mediaString ke Byte Array pakai ISO_8859_1
+            val mediaBytes = mediaStr.toByteArray(Charsets.ISO_8859_1)
 
-            // Dekripsi NATIVE AES-CTR
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             val keySpec = SecretKeySpec(keyBytes, "AES")
             val ivSpec = IvParameterSpec(ivBytes)
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
 
             val decryptedBytes = cipher.doFinal(mediaBytes)
+            // Hasil akhir (JSON Link) sudah aman pakai UTF-8
             val decryptedString = String(decryptedBytes, Charsets.UTF_8)
             val mediaData = mapper.readValue(decryptedString, Map::class.java)
 
-            // Ekstrak URL .m3u8 & .mp4
             val addSource = { formatMap: Map<*, *>?, isHls: Boolean ->
                 if (formatMap != null) {
                     val sourcesList = formatMap["sources"] as? List<Map<*, *>>
@@ -412,7 +406,6 @@ open class HydraxExtractor : ExtractorApi() {
 
                         var finalUrl = file ?: srcUrl
 
-                        // Jika URL tidak ada, Hydrax merakitnya manual menggunakan Domain
                         if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
                             val domain = domains.first()
                             finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
@@ -429,7 +422,7 @@ open class HydraxExtractor : ExtractorApi() {
                                     this.referer = "https://abysscdn.com/"
                                     this.quality = Qualities.Unknown.value
                                     this.headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                                         "Origin" to mainUrl
                                     )
                                 }
