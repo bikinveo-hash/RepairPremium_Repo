@@ -362,37 +362,37 @@ open class HydraxExtractor : ExtractorApi() {
             val jsUrl = "https://iamcdn.net/player-v2/lite.bundle.js"
             val jsContent = app.get(jsUrl, referer = url).text
 
-            // 3. Eksekusi menggunakan Rhino JS Engine (Background Scripting)
-            val rhino = com.lagradost.cloudstream3.utils.getRhinoContext()
-            val scope = rhino.initSafeStandardObjects()
-
-            // Polyfill DOM & Fungsi Dasar JS untuk mencegah script error
-            val mockDom = """
-                var window = {};
-                var document = {};
-                // Kita gunakan user-agent Chrome agar Hydrax mengembalikan URL murni
-                var navigator = { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36' };
-                
-                // Polyfill manual atob untuk JS
-                var atob = function(str) {
-                    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-                    var output = '';
-                    str = String(str).replace(/=+$/, '');
-                    for (var bc = 0, bs, buffer, idx = 0; buffer = str.charAt(idx++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
-                        buffer = chars.indexOf(buffer);
-                    }
-                    return output;
-                };
-            """.trimIndent()
+            // 3. Inisialisasi Native Rhino JS Engine
+            val rhino = org.mozilla.javascript.Context.enter()
+            rhino.optimizationLevel = -1 // Wajib diatur ke -1 untuk perangkat Android agar tidak memicu error kompilasi JIT
 
             var finalUrl: String? = null
 
             try {
-                // Masukkan mock dan script ke memori Rhino
+                val scope = rhino.initSafeStandardObjects()
+
+                // Polyfill DOM & Fungsi Dasar JS
+                val mockDom = """
+                    var window = {};
+                    var document = {};
+                    var navigator = { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36' };
+                    
+                    var atob = function(str) {
+                        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+                        var output = '';
+                        str = String(str).replace(/=+$/, '');
+                        for (var bc = 0, bs, buffer, idx = 0; buffer = str.charAt(idx++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
+                            buffer = chars.indexOf(buffer);
+                        }
+                        return output;
+                    };
+                """.trimIndent()
+
+                // Masukkan mock dan script JS ke memori Rhino
                 rhino.evaluateString(scope, mockDom, "MockDOM", 1, null)
                 rhino.evaluateString(scope, jsContent, "HydraxJS", 1, null)
 
-                // 4. Jalankan fungsi SoTrym yang membongkar enkripsi "media"
+                // 4. Jalankan fungsi SoTrym
                 val runner = """
                     var result = window.SoTrym($jsonString);
                     var outputUrl = "";
@@ -405,14 +405,13 @@ open class HydraxExtractor : ExtractorApi() {
                     outputUrl;
                 """.trimIndent()
 
-                // Tangkap URL bersihnya
                 finalUrl = rhino.evaluateString(scope, runner, "RunSoTrym", 1, null) as? String
             } finally {
-                // WAJIB panggil exit() agar memori HP pengguna tidak bocor
+                // Selalu bersihkan memori setelah selesai dieksekusi
                 org.mozilla.javascript.Context.exit()
             }
 
-            // 5. Build Extractor Link tanpa WebView
+            // 5. Build Extractor Link
             if (!finalUrl.isNullOrBlank() && finalUrl.startsWith("http")) {
                 val isM3u8 = finalUrl.contains(".m3u8", ignoreCase = true)
                 
@@ -425,8 +424,6 @@ open class HydraxExtractor : ExtractorApi() {
                     ) {
                         this.referer = "https://abysscdn.com/"
                         this.quality = Qualities.Unknown.value
-                        
-                        // Header standar CDN
                         this.headers = mapOf(
                             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
                             "Origin" to mainUrl
