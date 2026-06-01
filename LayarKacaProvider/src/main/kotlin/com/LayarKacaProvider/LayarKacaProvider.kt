@@ -1,5 +1,6 @@
 package com.LayarKacaProvider
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -75,10 +76,19 @@ class LayarKacaProvider : MainAPI() {
         val first_air_date: String?
     )
 
-    data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
-    data class Lk21SearchItem(
-        val title: String, val slug: String, val poster: String?,
-        val type: String?, val year: Int?, val quality: String?
+    data class LkSearchResponse(
+        @JsonProperty("totalPages") val totalPages: Int?,
+        @JsonProperty("data") val data: List<LkSearchData>?
+    )
+
+    data class LkSearchData(
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("slug") val slug: String?,
+        @JsonProperty("type") val type: String?,
+        @JsonProperty("poster") val poster: String?,
+        @JsonProperty("quality") val quality: String?,
+        @JsonProperty("rating") val rating: Double?, 
+        @JsonProperty("year") val year: Int?
     )
 
     // =========================================================================
@@ -152,23 +162,27 @@ class LayarKacaProvider : MainAPI() {
     // =========================================================================
     // SEARCH
     // =========================================================================
-    override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "https://gudangvape.com/search.php?s=$query&page=1"
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val searchUrl = "https://gudangvape.com/search.php?s=$query&page=$page"
         val headers = mapOf(
             "Origin"     to mainUrl,
             "Referer"    to "$mainUrl/",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
+        
         try {
-            val response = app.get(searchUrl, headers = headers).text
-            val json = tryParseJson<Lk21SearchResponse>(response)
+            val response = app.get(searchUrl, headers = headers).parsedSafe<LkSearchResponse>() ?: return null
 
-            return coroutineScope {
-                json?.data?.map { item ->
+            val results = coroutineScope {
+                response.data?.mapNotNull { item ->
                     async {
-                        val cleanTitle = getCleanTitle(item.title)
-                        val href = fixUrl(item.slug)
-                        val rawPoster = item.poster?.let { "https://poster.lk21.party/wp-content/uploads/$it" }
+                        val rawTitle = item.title ?: return@async null
+                        val slug = item.slug ?: return@async null
+
+                        val cleanTitle = getCleanTitle(rawTitle)
+                        val href = fixUrl(slug)
+                        
+                        val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
                         val fallbackPoster = fixPosterUrl(rawPoster)
 
                         var hdPoster: String? = null
@@ -177,30 +191,44 @@ class LayarKacaProvider : MainAPI() {
                             val tmdbRes = app.get(
                                 "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
                             ).parsedSafe<TmdbSearchResponse>()
+                            
                             val match = tmdbRes?.results?.firstOrNull {
                                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
                                 item.year == null || resYear == null || resYear == item.year
                             } ?: tmdbRes?.results?.firstOrNull()
+                            
                             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
                         } catch (e: Exception) {}
 
                         val posterUrl = hdPoster ?: fallbackPoster
-                        val quality  = getQualityFromString(item.quality)
-                        val isSeries = item.type?.contains("series", ignoreCase = true) == true
+                        val quality = getQualityFromString(item.quality)
+                        val type = if (item.type?.contains("series", ignoreCase = true) == true) TvType.TvSeries else TvType.Movie
 
-                        if (isSeries) {
+                        if (type == TvType.TvSeries) {
                             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
+                                this.posterUrl = posterUrl
+                                this.quality = quality
+                                this.year = item.year
                             }
                         }
                     }
                 }?.awaitAll()?.filterNotNull() ?: emptyList()
             }
-        } catch (e: Exception) { return emptyList() }
+
+            val totalPages = response.totalPages ?: 1
+            val hasNext = page < totalPages
+
+            return newSearchResponseList(results, hasNext)
+            
+        } catch (e: Exception) {
+            return null
+        }
     }
 
     // =========================================================================
