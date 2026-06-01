@@ -2,7 +2,6 @@ package com.LayarKacaProvider
 
 import android.util.Base64
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -23,7 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 // =========================================================================
-// DATA CLASSES UNTUK API
+// DATA CLASSES UNTUK API (ANTI-MINIFY BUG)
 // =========================================================================
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
@@ -167,7 +166,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: CAST HD (Anti-Bot Bypass)
+// EXTRACTOR 3: CAST HD (Anti-Bot Bypass FileLion/Byse V19)
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name = "CAST HD"
@@ -316,6 +315,8 @@ open class CastExtractor : ExtractorApi() {
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
+                        
+                        // FIX SUPER PENTING: Melempar User-Agent aslinya ke ExoPlayer!
                         this.headers = mapOf(
                             "Origin" to mainUrl,
                             "Referer" to "$mainUrl/",
@@ -327,78 +328,6 @@ open class CastExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return sources
-    }
-}
-
-// =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) - VERSI AUTO CATCHER & SMART-TV
-// =========================================================================
-open class HydraxExtractor : ExtractorApi() {
-    override var name = "Hydrax"
-    override var mainUrl = "https://abysscdn.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
-        
-        // PENGHANCUR IKLAN & P2P: Menggunakan User-Agent Smart TV Tizen
-        val tizenUA = "Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/5.0 NativeTVAds Safari/538.1"
-
-        // Skrip untuk membunuh WebSocket, P2P, Debugger, dan otomatis Play
-        val autoPlayScript = """
-            try {
-                window.devtoolIsOpening = function() {}; 
-                console.clear = function() {};
-                Object.defineProperty(window, 'WebSocket', { value: undefined, writable: false });
-                Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, writable: false });
-                Object.defineProperty(window, 'MediaSource', { value: undefined, writable: false });
-                setTimeout(() => {
-                    if (typeof jwplayer !== 'undefined' && typeof jwplayer().play === 'function') {
-                        jwplayer().play();
-                    }
-                }, 2000);
-            } catch(e) {}
-        """.trimIndent()
-
-        try {
-            // Memasang jaring untuk menangkap ekstensi video saat player mencoba stream data murni
-            val (request, _) = WebViewResolver(
-                interceptUrl = Regex(".*\\.(m3u8|mp4)($|\\?|#).*"),
-                userAgent = tizenUA,
-                script = autoPlayScript
-            ).resolveUsingWebView(
-                url = url,
-                referer = referer ?: "https://playeriframe.sbs/"
-            )
-
-            val rawUrl = request?.url?.toString()
-            
-            if (!rawUrl.isNullOrBlank()) {
-                val cleanUrl = rawUrl.substringBefore("#")
-                val isMp4 = cleanUrl.contains(".mp4", ignoreCase = true)
-                
-                sources.add(
-                    newExtractorLink(
-                        source = "Hydrax (Abyss)",
-                        name = "Hydrax HD",
-                        url = cleanUrl,
-                        type = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "User-Agent" to tizenUA,
-                            "Origin" to mainUrl,
-                            "Referer" to "$mainUrl/"
-                        )
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
         return sources
     }
 }
