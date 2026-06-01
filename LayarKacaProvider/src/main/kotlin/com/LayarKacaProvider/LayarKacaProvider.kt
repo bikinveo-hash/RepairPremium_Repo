@@ -1,4 +1,4 @@
-package com.Movie21
+package com.LayarKacaProvider
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -76,15 +76,9 @@ class LayarKacaProvider : MainAPI() {
     )
 
     data class Lk21SearchResponse(val data: List<Lk21SearchItem>?)
-    
-    // Tipe 'year' diubah ke String? agar mencegah error parsing JSON 
     data class Lk21SearchItem(
-        val title: String?, 
-        val slug: String?, 
-        val poster: String?,
-        val type: String?, 
-        val year: String?, 
-        val quality: String?
+        val title: String, val slug: String, val poster: String?,
+        val type: String?, val year: Int?, val quality: String?
     )
 
     // =========================================================================
@@ -159,39 +153,25 @@ class LayarKacaProvider : MainAPI() {
     // SEARCH
     // =========================================================================
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "https://gudangvape.com/search.php?s=$query"
+        val searchUrl = "https://gudangvape.com/search.php?s=$query&page=1"
         val headers = mapOf(
-            "Origin"           to mainUrl,
-            "Referer"          to "$mainUrl/",
-            "X-Requested-With" to "XMLHttpRequest", // Header krusial untuk API LK21
-            "Accept"           to "application/json, text/javascript, */*; q=0.01",
-            "User-Agent"       to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "Origin"     to mainUrl,
+            "Referer"    to "$mainUrl/",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
-        
         try {
-            val responseText = app.get(searchUrl, headers = headers).text
-            
-            // Mencoba me-load Array JSON murni terlebih dahulu, lalu fallback ke bentuk Object 
-            val searchItems = tryParseJson<List<Lk21SearchItem>>(responseText)
-                ?: tryParseJson<Lk21SearchResponse>(responseText)?.data
-                ?: return emptyList()
+            val response = app.get(searchUrl, headers = headers).text
+            val json = tryParseJson<Lk21SearchResponse>(response)
 
             return coroutineScope {
-                searchItems.mapNotNull { item ->
-                    val rawTitle = item.title ?: return@mapNotNull null
-                    val rawSlug = item.slug ?: return@mapNotNull null
-                    
+                json?.data?.map { item ->
                     async {
-                        val cleanTitle = getCleanTitle(rawTitle)
-                        val href = fixUrl(rawSlug)
-                        
-                        // Domain ditarik dari hasil analisa view-source HTML 
-                        val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
+                        val cleanTitle = getCleanTitle(item.title)
+                        val href = fixUrl(item.slug)
+                        val rawPoster = item.poster?.let { "https://poster.lk21.party/wp-content/uploads/$it" }
                         val fallbackPoster = fixPosterUrl(rawPoster)
 
-                        val itemYear = item.year?.toIntOrNull()
                         var hdPoster: String? = null
-                        
                         try {
                             val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
                             val tmdbRes = app.get(
@@ -199,7 +179,7 @@ class LayarKacaProvider : MainAPI() {
                             ).parsedSafe<TmdbSearchResponse>()
                             val match = tmdbRes?.results?.firstOrNull {
                                 val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
-                                itemYear == null || resYear == null || resYear == itemYear
+                                item.year == null || resYear == null || resYear == item.year
                             } ?: tmdbRes?.results?.firstOrNull()
                             hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
                         } catch (e: Exception) {}
@@ -210,19 +190,15 @@ class LayarKacaProvider : MainAPI() {
 
                         if (isSeries) {
                             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = itemYear
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = itemYear
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         }
                     }
-                }.awaitAll()
+                }?.awaitAll()?.filterNotNull() ?: emptyList()
             }
         } catch (e: Exception) { return emptyList() }
     }
@@ -266,6 +242,9 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster    = document.select("meta[property='og:image']").attr("content")
             .ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
+        val ratingText   = document.select("span.rating-value").text()
+            .ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore  = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year         = document.select("span.year").text().toIntOrNull()
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -341,6 +320,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -350,6 +330,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -439,8 +420,17 @@ class LayarKacaProvider : MainAPI() {
                 val id = url.substringAfter("cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
-                    // Eksekusi Extractor buatan kita sendiri
                     CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            // Routing Hydrax (Abyss)
+            else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
+                val id = url.substringAfter("hydrax/").substringBefore("/")
+                val hydraxUrl = "https://abysscdn.com/?v=$id"
+                try {
+                    HydraxExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -450,7 +440,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR
+    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN) dll
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -474,12 +464,12 @@ class LayarKacaProvider : MainAPI() {
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
-                    val maxRetries = 4                       
-                    val baseDelay  = 600L                   
+                    val maxRetries = 4                       // maks 4x retry
+                    val baseDelay  = 600L                   // mulai 600ms
 
                     while (response.code == 429 && retries < maxRetries) {
                         response.close()
-                        val delay = baseDelay * (retries + 1)
+                        val delay = baseDelay * (retries + 1) // 600 → 1200 → 1800 → 2400 ms
                         Thread.sleep(delay)
                         response = chain.proceed(originalRequest)
                         retries++
