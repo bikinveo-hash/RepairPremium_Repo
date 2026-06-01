@@ -392,7 +392,7 @@ open class HydraxExtractor : ExtractorApi() {
             val decryptedString = String(decryptedBytes, Charsets.UTF_8)
             val mediaData = mapper.readValue(decryptedString, Map::class.java)
 
-            val addSource = { formatMap: Map<*, *>?, isHls: Boolean ->
+            suspend fun addSource(formatMap: Map<*, *>?, isHls: Boolean) {
                 if (formatMap != null) {
                     val sourcesList = formatMap["sources"] as? List<Map<*, *>>
                     val domains = formatMap["domains"] as? List<String> ?: emptyList()
