@@ -1,7 +1,6 @@
 package com.LayarKacaProvider
 
 import android.util.Base64
-import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -35,7 +34,7 @@ data class HowNetworkResponse(
 )
 
 data class CastChalResp(
-    @JsonProperty("nonce") val nonce: String?,
+    @JsonProperty("nonce") val nonce: String?, 
     @JsonProperty("challenge_id") val challenge_id: String?
 )
 data class CastAttestResp(
@@ -45,16 +44,16 @@ data class CastPbResp(
     @JsonProperty("playback") val playback: CastPlaybackInfo?
 )
 data class CastPlaybackInfo(
-    @JsonProperty("iv") val iv: String?,
-    @JsonProperty("payload") val payload: String?,
+    @JsonProperty("iv") val iv: String?, 
+    @JsonProperty("payload") val payload: String?, 
     @JsonProperty("key_parts") val key_parts: List<String>?
 )
 data class CastDecrypted(
     @JsonProperty("sources") val sources: List<CastSource>?
 )
 data class CastSource(
-    @JsonProperty("url") val url: String?,
-    @JsonProperty("label") val label: String?,
+    @JsonProperty("url") val url: String?, 
+    @JsonProperty("label") val label: String?, 
     @JsonProperty("type") val type: String?
 )
 
@@ -68,15 +67,11 @@ open class Lk21TurboExtractor : ExtractorApi() {
     override var mainUrl   = "https://turbovidhls.com"
     override val requiresReferer = false
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
         try {
             val id = url.substringAfter("/t/").substringBefore("?")
-            if (id.isEmpty()) return
+            if (id.isEmpty()) return null
 
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
@@ -90,12 +85,12 @@ open class Lk21TurboExtractor : ExtractorApi() {
             if (m3u8Url.isNullOrBlank()) {
                 m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
-            if (m3u8Url.isNullOrBlank()) return
+            if (m3u8Url.isNullOrBlank()) return null
 
             val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
             val type  = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
 
-            callback(
+            sources.add(
                 newExtractorLink(
                     source = "LK21 TurboVIP",
                     name   = "TurboVIP HD",
@@ -113,6 +108,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources
     }
 }
 
@@ -124,15 +120,11 @@ open class HowNetworkExtractor : ExtractorApi() {
     override var mainUrl = "https://cloud.hownetwork.xyz"
     override val requiresReferer = false
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
         try {
             val id = url.substringAfter("id=").substringBefore("&")
-            if (id.isEmpty()) return
+            if (id.isEmpty()) return null
 
             val response = app.post(
                 url = "$mainUrl/api2.php?id=$id",
@@ -148,11 +140,11 @@ open class HowNetworkExtractor : ExtractorApi() {
                 )
             ).text
 
-            val parsedRes = try { mapper.readValue(response, HowNetworkResponse::class.java) } catch (e: Exception) { null }
+            val parsedRes = try { mapper.readValue(response, HowNetworkResponse::class.java) } catch(e: Exception) { null }
             val m3u8Url = parsedRes?.file
 
             if (!m3u8Url.isNullOrBlank()) {
-                callback(
+                sources.add(
                     newExtractorLink(
                         source = "LK21 HowNetwork",
                         name = "HowNetwork HD",
@@ -171,6 +163,7 @@ open class HowNetworkExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources
     }
 }
 
@@ -191,7 +184,6 @@ open class CastExtractor : ExtractorApi() {
         }
         return Base64.decode(standardized, Base64.DEFAULT)
     }
-
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
     private fun derToRaw(der: ByteArray): ByteArray {
@@ -201,28 +193,23 @@ open class CastExtractor : ExtractorApi() {
         offset += 2 + rLength
         val sLength = der[offset + 1].toInt()
         val sOffset = offset + 2
-
+        
         val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
         val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
-
+        
         val rPadded = ByteArray(32) { 0 }
         val sPadded = ByteArray(32) { 0 }
-
+    
         System.arraycopy(rStr, 0, rPadded, 32 - rStr.size, rStr.size)
         System.arraycopy(sStr, 0, sPadded, 32 - sStr.size, sStr.size)
-
+        
         return rPadded + sPadded
     }
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         val videoId = url.substringAfterLast("/")
-
+        
         val commonHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
             "Origin" to mainUrl,
@@ -234,15 +221,15 @@ open class CastExtractor : ExtractorApi() {
 
         try {
             val chalRes = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
-            val chalJson = try { mapper.readValue(chalRes.text, CastChalResp::class.java) } catch (e: Exception) { null } ?: return
-
-            val nonce = chalJson.nonce ?: return
-            val cid = chalJson.challenge_id ?: return
+            val chalJson = try { mapper.readValue(chalRes.text, CastChalResp::class.java) } catch(e:Exception){ null } ?: return null
+    
+            val nonce = chalJson.nonce ?: return null
+            val cid = chalJson.challenge_id ?: return null
 
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
-
+            
             val sig = Signature.getInstance("SHA256withECDSA")
             sig.initSign(kp.private)
             sig.update(nonce.toByteArray(Charsets.UTF_8))
@@ -251,7 +238,7 @@ open class CastExtractor : ExtractorApi() {
             val pub = kp.public as ECPublicKey
             var xBytes = pub.w.affineX.toByteArray()
             var yBytes = pub.w.affineY.toByteArray()
-
+            
             if (xBytes.size > 32) xBytes = xBytes.copyOfRange(xBytes.size - 32, xBytes.size)
             if (yBytes.size > 32) yBytes = yBytes.copyOfRange(yBytes.size - 32, yBytes.size)
             if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) { 0 } + xBytes
@@ -272,16 +259,16 @@ open class CastExtractor : ExtractorApi() {
             ))
 
             val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
-            val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch (e: Exception) { null } ?: return
-            val token = attestJson.token ?: return
+            val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch(e:Exception){ null } ?: return null
+            val token = attestJson.token ?: return null
 
             val pbPayloadStr = mapper.writeValueAsString(mapOf("fingerprint" to mapOf("token" to token)))
             val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
-
-            val pbResp = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch (e: Exception) { null } ?: return
-            val iv = b64urlDecode(pbResp.iv ?: return)
-            val payload = b64urlDecode(pbResp.payload ?: return)
-            val keyParts = pbResp.key_parts ?: return
+            
+            val pbResp = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch(e:Exception){ null } ?: return null
+            val iv = b64urlDecode(pbResp.iv ?: return null)
+            val payload = b64urlDecode(pbResp.payload ?: return null)
+            val keyParts = pbResp.key_parts ?: return null
 
             val keysToTest = mutableListOf<ByteArray>()
             val chunks16 = mutableListOf<ByteArray>()
@@ -311,19 +298,19 @@ open class CastExtractor : ExtractorApi() {
                     val secretKey = SecretKeySpec(keyBytes, "AES")
                     cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
                     val decrypted = cipher.doFinal(payload)
-
+                    
                     val jsonString = String(decrypted, Charsets.UTF_8)
                     val parsedData = mapper.readValue(jsonString, CastDecrypted::class.java)
-
+                    
                     realUrl = parsedData?.sources?.firstOrNull()?.url
                     qualityLabel = parsedData?.sources?.firstOrNull()?.label ?: "HD"
-
-                    if (realUrl != null) break
+                    
+                    if (realUrl != null) break 
                 } catch (e: Exception) {}
             }
 
             if (realUrl != null) {
-                callback(
+                sources.add(
                     newExtractorLink(
                         source = "CAST HD",
                         name = "CAST $qualityLabel",
@@ -343,6 +330,7 @@ open class CastExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources
     }
 }
 
@@ -360,39 +348,35 @@ open class HydraxExtractor : ExtractorApi() {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
         try {
             val videoId = if (url.contains("hydrax/")) {
                 url.substringAfter("hydrax/").substringBefore("/")
             } else {
                 url.substringAfter("?v=").substringBefore("&")
             }
-            if (videoId.isBlank()) return
+            if (videoId.isBlank()) return null
 
             val targetUrl = "https://abysscdn.com/?v=$videoId"
             val htmlRes = app.get(targetUrl, referer = referer ?: "https://playeriframe.sbs/")
             val html = htmlRes.text
 
-            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
+            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
             // FIX: Gunakan ISO_8859_1 (Latin-1) agar data biner di "media" tidak rusak
             val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.ISO_8859_1)
             val jsonData = mapper.readValue(jsonString, Map::class.java)
 
-            val slug = jsonData["slug"]?.toString() ?: return
-            val md5Id = jsonData["md5_id"]?.toString() ?: return
-            val userId = jsonData["user_id"]?.toString() ?: return
-            val mediaStr = jsonData["media"] as? String ?: return
+            val slug = jsonData["slug"]?.toString() ?: return null
+            val md5Id = jsonData["md5_id"]?.toString() ?: return null
+            val userId = jsonData["user_id"]?.toString() ?: return null
+            val mediaStr = jsonData["media"] as? String ?: return null
 
             val keyString = "$userId:$slug:$md5Id"
             val md5Hex = getMd5Hex(keyString)
-
-            val keyBytes = md5Hex.toByteArray(Charsets.UTF_8)
+            
+            val keyBytes = md5Hex.toByteArray(Charsets.UTF_8) 
             val ivBytes = keyBytes.copyOfRange(0, 16)
 
             // FIX: Convert mediaString ke Byte Array pakai ISO_8859_1
@@ -408,43 +392,42 @@ open class HydraxExtractor : ExtractorApi() {
             val decryptedString = String(decryptedBytes, Charsets.UTF_8)
             val mediaData = mapper.readValue(decryptedString, Map::class.java)
 
-            // FIX: Refactored dari lambda biasa ke suspend local fun
-            // agar newExtractorLink (suspend) bisa dipanggil dengan benar
-            suspend fun addSource(formatMap: Map<*, *>?, isHls: Boolean) {
-                if (formatMap == null) return
-                val sourcesList = formatMap["sources"] as? List<Map<*, *>>
-                val domains = formatMap["domains"] as? List<String> ?: emptyList()
+            val addSource = { formatMap: Map<*, *>?, isHls: Boolean ->
+                if (formatMap != null) {
+                    val sourcesList = formatMap["sources"] as? List<Map<*, *>>
+                    val domains = formatMap["domains"] as? List<String> ?: emptyList()
 
-                sourcesList?.forEach { source ->
-                    val file = source["file"]?.toString()
-                    val srcUrl = source["url"]?.toString()
-                    val size = source["size"]?.toString()
-                    val resId = source["res_id"]?.toString()
-                    val label = source["label"]?.toString() ?: "HD"
+                    sourcesList?.forEach { source ->
+                        val file = source["file"]?.toString()
+                        val srcUrl = source["url"]?.toString()
+                        val size = source["size"]?.toString()
+                        val resId = source["res_id"]?.toString()
+                        val label = source["label"]?.toString() ?: "HD"
 
-                    var finalUrl = file ?: srcUrl
+                        var finalUrl = file ?: srcUrl
 
-                    if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
-                        val domain = domains.first()
-                        finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
-                    }
+                        if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
+                            val domain = domains.first()
+                            finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
+                        }
 
-                    if (!finalUrl.isNullOrBlank()) {
-                        callback(
-                            newExtractorLink(
-                                source = "Hydrax",
-                                name = "Hydrax $label",
-                                url = finalUrl,
-                                type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://abysscdn.com/"
-                                this.quality = Qualities.Unknown.value
-                                this.headers = mapOf(
-                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                                    "Origin" to mainUrl
-                                )
-                            }
-                        )
+                        if (!finalUrl.isNullOrBlank()) {
+                            sources.add(
+                                newExtractorLink(
+                                    source = "Hydrax",
+                                    name = "Hydrax $label",
+                                    url = finalUrl,
+                                    type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://abysscdn.com/"
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                        "Origin" to mainUrl
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -455,5 +438,6 @@ open class HydraxExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources
     }
 }
