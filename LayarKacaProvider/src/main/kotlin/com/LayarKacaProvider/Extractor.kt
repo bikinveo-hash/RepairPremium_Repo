@@ -392,42 +392,46 @@ open class HydraxExtractor : ExtractorApi() {
             val decryptedString = String(decryptedBytes, Charsets.UTF_8)
             val mediaData = mapper.readValue(decryptedString, Map::class.java)
 
+            // fristDatas: map res_id -> url (terbukti return HTTP 200)
+            // URL pola sub.sssrr.org/slug/res_id/size semuanya 404
             suspend fun addSource(formatMap: Map<*, *>?, isHls: Boolean) {
-                if (formatMap != null) {
-                    val sourcesList = formatMap["sources"] as? List<Map<*, *>>
-                    val domains = formatMap["domains"] as? List<String> ?: emptyList()
+                if (formatMap == null) return
 
-                    sourcesList?.forEach { source ->
-                        val file = source["file"]?.toString()
-                        val srcUrl = source["url"]?.toString()
-                        val size = source["size"]?.toString()
-                        val resId = source["res_id"]?.toString()
-                        val label = source["label"]?.toString() ?: "HD"
+                val sourcesList = formatMap["sources"] as? List<Map<*, *>> ?: return
 
-                        var finalUrl = file ?: srcUrl
+                val fristDatas = formatMap["fristDatas"] as? List<Map<*, *>> ?: emptyList()
+                val fristMap = fristDatas.associate {
+                    it["res_id"]?.toString() to it["url"]?.toString()
+                }
 
-                        if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
-                            val domain = domains.first()
-                            finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
-                        }
+                sourcesList.forEach { source ->
+                    val resId = source["res_id"]?.toString()
+                    val label = source["label"]?.toString() ?: "HD"
 
-                        if (!finalUrl.isNullOrBlank()) {
-                            sources.add(
-                                newExtractorLink(
-                                    source = "Hydrax",
-                                    name = "Hydrax $label",
-                                    url = finalUrl,
-                                    type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = "https://abysscdn.com/"
-                                    this.quality = Qualities.Unknown.value
-                                    this.headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                                        "Origin" to mainUrl
-                                    )
-                                }
-                            )
-                        }
+                    // Prioritas 1: fristDatas (HTTP 200 terbukti)
+                    // Prioritas 2: field file/url langsung dari source
+                    // Prioritas 3: domains.first() DIHAPUS — selalu 404
+                    val finalUrl = fristMap[resId]
+                        ?: source["file"]?.toString()
+                        ?: source["url"]?.toString()
+
+                    if (!finalUrl.isNullOrBlank()) {
+                        sources.add(
+                            newExtractorLink(
+                                source = "Hydrax",
+                                name = "Hydrax $label",
+                                url = finalUrl,
+                                type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://abysscdn.com/"
+                                this.quality = Qualities.Unknown.value
+                                this.headers = mapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                                    "Origin"     to "https://abysscdn.com",
+                                    "Referer"    to "https://abysscdn.com/"
+                                )
+                            }
+                        )
                     }
                 }
             }
