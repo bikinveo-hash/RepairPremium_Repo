@@ -1,7 +1,6 @@
 package com.LayarKacaProvider
 
 import android.util.Base64
-import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -27,6 +26,7 @@ import javax.crypto.spec.SecretKeySpec
 // =========================================================================
 // DATA CLASSES
 // =========================================================================
+
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
     @JsonProperty("file") val file: String?,
@@ -61,7 +61,7 @@ data class CastSource(
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE - R2 DIRECT URL)
+// EXTRACTOR 1: ABYSS EXTRACTOR (HYDRAX) - NATIVE R2
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -75,30 +75,27 @@ open class AbyssExtractor : ExtractorApi() {
         "Accept"     to "*/*"
     )
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    // Override 2 Parameter yang sesuai dengan standar CloudStream
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
         val pageRef = referer ?: "$mainUrl/"
-        val slug = extractSlugFromUrl(url) ?: return
+        val slug = extractSlugFromUrl(url) ?: return null
         val hdrs = baseHeaders(pageRef)
 
         try {
-            // 1. Ambil data terenkripsi langsung dari HTML (API iamcdn sudah diblokir)
+            // 1. Ambil data terenkripsi langsung dari HTML
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
-            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
+            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
-            val md5Id = dataJson["md5_id"]?.toString() ?: return
-            val userId = dataJson["user_id"]?.toString() ?: return
-            val mediaStr = dataJson["media"]?.toString() ?: return
+            val md5Id = dataJson["md5_id"]?.toString() ?: return null
+            val userId = dataJson["user_id"]?.toString() ?: return null
+            val mediaStr = dataJson["media"]?.toString() ?: return null
 
-            // 2. Dekripsi Media JSON (Kunci Dekripsi menggunakan Hex String dari MD5)
+            // 2. Dekripsi Media JSON menggunakan Hash MD5
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
@@ -118,7 +115,7 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
             val domains = mp4?.get("domains") as? List<String> ?: listOf("abysscdn.com")
 
-            // 3. Generate Link R2 Direct yang bisa langsung di-play oleh ExoPlayer (Tanpa ServiceWorker)
+            // 3. Generate Link R2 Direct yang bisa diputar ExoPlayer
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "avc1"
@@ -130,7 +127,7 @@ open class AbyssExtractor : ExtractorApi() {
                         val domain = domains.firstOrNull() ?: "abysscdn.com"
                         val r2DirectUrl = "https://$domain/sora/$md5Id/$signedHash"
 
-                        callback(
+                        sources.add(
                             newExtractorLink(
                                 source = name,
                                 name   = "$name R2 $label [$codec]",
@@ -150,9 +147,13 @@ open class AbyssExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return sources.ifEmpty { null }
     }
 
     private fun extractSlugFromUrl(url: String): String? {
+        val vParam = url.substringAfter("?v=", "").substringBefore("&")
+        if (vParam.isNotEmpty() && url.contains("?v=")) return vParam
+
         Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""")
             .find(url)?.groupValues?.get(1)
             ?.let { return it }
@@ -175,7 +176,6 @@ open class AbyssExtractor : ExtractorApi() {
         else                                                                -> Qualities.Unknown.value
     }
 
-    // Pembuatan Signature R2 URL menggunakan Raw Bytes dari MD5
     private fun buildSignedHash(
         path   : String,
         userId : String,
