@@ -2,12 +2,13 @@ package com.LayarKacaProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.extractors.Ahvsh
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.extractorApis
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -458,17 +459,25 @@ class LayarKacaProvider : MainAPI() {
             else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
                 val id = url.substringAfter("hydrax/").substringBefore("/")
                 
-                // KUNCI UTAMA: Gunakan domain vww.abyss.to agar dikenali oleh sistem internal Ahvsh
-                val hydraxUrl = "https://vww.abyss.to/?v=$id"
-                
                 try {
-                    // Panggil ekstraktor Ahvsh secara langsung (bypass filter loadExtractor)
-                    Ahvsh().getUrl(
-                        url = hydraxUrl, 
-                        referer = currentUrl, 
-                        subtitleCallback = subtitleCallback, 
-                        callback = callback
-                    )
+                    // Cari kelas Ahvsh yang "hidup" dari dalam memory aplikasi CloudStream
+                    val ahvshLive = extractorApis.find { it.javaClass.simpleName.equals("Ahvsh", ignoreCase = true) || it.name.equals("Ahvsh", ignoreCase = true) }
+                    
+                    if (ahvshLive != null) {
+                        // Gunakan mainUrl internalnya agar lolos filter validasi CloudStream
+                        val hydraxUrl = "${ahvshLive.mainUrl}/?v=$id"
+                        
+                        // Eksekusi fungsi load bawaan ExtractorApi secara aman
+                        ahvshLive.getSafeUrl(
+                            url = hydraxUrl, 
+                            referer = currentUrl, 
+                            subtitleCallback = subtitleCallback, 
+                            callback = callback
+                        )
+                    } else {
+                        // Jika karena satu dan lain hal Ahvsh tidak ketemu di memori, ini fallback-nya
+                        loadExtractor("https://vww.abyss.to/?v=$id", currentUrl, subtitleCallback, callback)
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
