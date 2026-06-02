@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -88,6 +87,7 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("type") val type: String?,
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("quality") val quality: String?,
+        @JsonProperty("rating") val rating: Double?, 
         @JsonProperty("year") val year: Int?
     )
 
@@ -270,6 +270,9 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster    = document.select("meta[property='og:image']").attr("content")
             .ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
+        val ratingText   = document.select("span.rating-value").text()
+            .ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore  = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year         = document.select("span.year").text().toIntOrNull()
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -345,6 +348,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -354,6 +358,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -425,23 +430,22 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
-        
         allSources.forEach { url ->
             // Routing TurboVIP
-            if (url.contains("/iframe/turbovip/")) {
-                val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
+            if (url.contains("playeriframe.sbs/iframe/turbovip/")) {
+                val id = url.substringAfter("turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing HowNetwork (P2P)
-            else if (url.contains("/iframe/p2p/")) {
-                val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
+            else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
+                val id = url.substringAfter("p2p/").substringBefore("/")
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing CAST (Mesin Independen Anti-Bot)
-            else if (url.contains("/iframe/cast/")) {
-                val id = url.substringAfter("/iframe/cast/").substringBefore("/")
+            else if (url.contains("playeriframe.sbs/iframe/cast/")) {
+                val id = url.substringAfter("cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
                     CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
@@ -449,36 +453,12 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) menggunakan WEBVIEW RESOLVER CloudStream
-            else if (url.contains("/iframe/hydrax/")) {
-                val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
+            // Routing Hydrax (Abyss)
+            else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
+                val id = url.substringAfter("hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abysscdn.com/?v=$id"
-
                 try {
-                    val resolver = WebViewResolver(
-                        interceptUrl = Regex("""(?i)\.(m3u8|mp4)""")
-                    )
-                    
-                    val result = resolver.resolveUsingWebView(
-                        url = hydraxUrl,
-                        headers = mapOf("Referer" to "https://playeriframe.sbs/")
-                    )
-                    
-                    val reqUrl = result.first?.url?.toString()
-                    
-                    if (reqUrl != null && (reqUrl.contains(".m3u8", ignoreCase = true) || reqUrl.contains(".mp4", ignoreCase = true))) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "Hydrax",
-                                name = "Hydrax HD",
-                                url = reqUrl,
-                                type = if (reqUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://abysscdn.com/"
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
+                    HydraxExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -488,7 +468,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR
+    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN) dll
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -498,8 +478,8 @@ class LayarKacaProvider : MainAPI() {
             val url             = originalRequest.url.toString()
 
             when {
-                // ── Turbovidhls & etvp & hownetwork & sssrr ──────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") || url.contains("sssrr.org") -> {
+                // ── Turbovidhls & etvp & hownetwork: tambah header Origin + Referer ──────
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
                         .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
@@ -507,22 +487,25 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
+
                 // ── Google Drive CDN: retry dengan exponential backoff ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
-                    val maxRetries = 4
-                    val baseDelay  = 600L
+                    val maxRetries = 4                       // maks 4x retry
+                    val baseDelay  = 600L                   // mulai 600ms
 
                     while (response.code == 429 && retries < maxRetries) {
                         response.close()
-                        val delay = baseDelay * (retries + 1)
+                        val delay = baseDelay * (retries + 1) // 600 → 1200 → 1800 → 2400 ms
                         Thread.sleep(delay)
                         response = chain.proceed(originalRequest)
                         retries++
                     }
                     response
                 }
+
+                // ── Domain lain: lewat tanpa modifikasi ──────────────────────
                 else -> chain.proceed(originalRequest)
             }
         }
