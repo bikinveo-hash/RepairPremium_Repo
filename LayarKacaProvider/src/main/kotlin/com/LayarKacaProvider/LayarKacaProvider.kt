@@ -444,7 +444,7 @@ class LayarKacaProvider : MainAPI() {
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
-            // Routing CAST (Mesin Independen Anti-Bot)
+            // Routing CAST
             else if (url.contains("/iframe/cast/")) {
                 val id = url.substringAfter("/iframe/cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
@@ -454,12 +454,12 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) -> Dihandle oleh AbyssExtractor
+            // Routing Hydrax (Abyss) menggunakan Native Extractor
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abyssplayer.com/?v=$id"
                 try {
-                    AbyssExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
+                    AbyssExtractor().getUrl(hydraxUrl, currentUrl, subtitleCallback, callback)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -479,8 +479,9 @@ class LayarKacaProvider : MainAPI() {
             val url             = originalRequest.url.toString()
 
             when {
-                // ── Turbovidhls & etvp & hownetwork & sssrr ──────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") || url.contains("sssrr.org") || url.contains("iamcdn.net") -> {
+                // ── Turbovidhls & etvp & hownetwork ──────
+                // (Perhatikan sssrr.org sudah DIBUANG dari blok ini agar tidak tersabotase!)
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
                         .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
@@ -488,6 +489,18 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
+                
+                // ── Hydrax / AbyssCDN (R2 Direct URL) ──────
+                // Ini akan memberikan kunci masuk yang benar (abyssplayer.com) untuk server Hydrax
+                url.contains("sssrr.org") || url.contains("iamcdn.net") -> {
+                    val newRequest = originalRequest.newBuilder()
+                        .header("User-Agent", mobileUA)
+                        .header("Origin",  "https://abyssplayer.com")
+                        .header("Referer", "https://abyssplayer.com/")
+                        .build()
+                    chain.proceed(newRequest)
+                }
+                
                 // ── Google Drive CDN: retry dengan exponential backoff ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
