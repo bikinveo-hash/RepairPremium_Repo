@@ -4,9 +4,12 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.extractorApis
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -14,6 +17,14 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import android.annotation.SuppressLint
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
@@ -369,6 +380,7 @@ class LayarKacaProvider : MainAPI() {
     // =========================================================================
     // LOAD LINKS
     // =========================================================================
+    @SuppressLint("SetJavaScriptEnabled")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -430,6 +442,7 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
+        
         allSources.forEach { url ->
             // Routing TurboVIP
             if (url.contains("/iframe/turbovip/")) {
@@ -453,14 +466,53 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) -> Dihandle oleh HydraxNativeExtractor buatan kita sendiri
+            // Routing Hydrax (Abyss) menggunakan WEBVIEW RESOLVER
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abysscdn.com/?v=$id"
-                try {
-                    HydraxNativeExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+
+                suspendCancellableCoroutine<Boolean> { continuation ->
+                    try {
+                        val webView = WebView(app.context)
+                        webView.settings.javaScriptEnabled = true
+                        webView.settings.domStorageEnabled = true
+                        webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+
+                        webView.webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                val reqUrl = request?.url?.toString() ?: ""
+                                
+                                // Menyadap URL M3U8 hasil jahitan Javascript JWPlayer Hydrax
+                                if (reqUrl.contains("m3u8") || reqUrl.contains("playlist.m3u8")) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "Hydrax",
+                                            name = "Hydrax HD",
+                                            url = reqUrl,
+                                            type = ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = "https://abysscdn.com/"
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    // Matikan WebView setelah dapat link pertama
+                                    if (continuation.isActive) continuation.resume(true)
+                                }
+                                return super.shouldInterceptRequest(view, request)
+                            }
+                        }
+
+                        // Load URL Hydrax beserta Header Referer yang valid
+                        val extraHeaders = mutableMapOf("Referer" to "https://playeriframe.sbs/")
+                        webView.loadUrl(hydraxUrl, extraHeaders)
+
+                    } catch (e: Exception) {
+                        if (continuation.isActive) continuation.resume(false)
+                        e.printStackTrace()
+                    }
                 }
             }
         }
