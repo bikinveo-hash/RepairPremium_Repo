@@ -27,7 +27,6 @@ import javax.crypto.spec.SecretKeySpec
 // =========================================================================
 // DATA CLASSES
 // =========================================================================
-
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
     @JsonProperty("file") val file: String?,
@@ -59,87 +58,18 @@ data class CastSource(
     @JsonProperty("type") val type: String?
 )
 
-/** Root response dari API endpoint /file/{slug} atau /info/{slug} */
-data class InfoResponse(
-    val id      : Int?,      // Integer ID – dipakai di route SW (/chunk/:id, /part/:id, dll)
-    val md5_id  : String?,   // Hash ID – dipakai di URL konstruksi & key derivation
-    val user_id : String?,   // User ID – dipakai untuk AES key: userId:slug:md5Id
-    val slug    : String?,   // Slug identifer
-    val title   : String?,
-    val media   : MediaData?
-)
-
-/** Kontainer utama data media */
-data class MediaData(
-    val hls     : HlsData?,
-    val sources : List<SourceItem>?  // MP4 sources (dari SW: media.sources[])
-)
-
-/** Data HLS – dari SW: media.hls.{sources, streams, domains, fristDatas} */
-data class HlsData(
-    /** List of stream URL groups – dari SW: media.hls.sources = List<List<String>> */
-    val sources    : List<List<String>>?,
-    /** Stream items dengan metadata – dari SW: media.hls.streams = List<HlsStreamItem> */
-    val streams    : List<HlsStreamItem>?,
-    /** CDN domains – dari SW: media.hls.domains = List<String> */
-    val domains    : List<String>?,
-    /** Pre-fetch data untuk quick-start stream – dari SW: media.hls.fristDatas */
-    val fristDatas : List<FristDataItem>?
-)
-
-/** Item dalam hls.streams – mapping dari #EXT-X-STREAM-INF attributes */
-data class HlsStreamItem(
-    val URI        : String?,   // Path ke sub-playlist
-    val BANDWIDTH  : Long?,     // Bitrate dalam bps
-    val RESOLUTION : String?,   // Contoh: "1920x1080"
-    val CODECS     : String?,   // Contoh: "avc1.640028,mp4a.40.2"
-    val AUDIO      : String?,
-    val SUBTITLES  : String?
-)
-
-/** Pre-fetch "first data" untuk quick-start – dari SW: fristDatas[] */
-data class FristDataItem(
-    val url     : String?,  // URL langsung ke file pre-fetch
-    val size    : Long?,    // Ukuran total file
-    val res_id  : String?,  // Resource ID
-    val codec   : String?,  // Codec string
-    val label   : String?,  // Quality label
-    val sub     : String?,  // Sub-domain hint
-    val partSize: Long?     // Ukuran per part
-)
-
-/** Source item MP4 */
-data class SourceItem(
-    val size    : Long?,
-    val label   : String?,
-    val codec   : String?,
-    val res_id  : String?,
-    val domain  : String?,
-    val url     : String?,
-    val path    : String?,
-    val sub     : String?,
-    val partSize: Long?,
-    val priority: Int?
-)
-
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS EXTRACTOR (HYDRAX) - NATIVE
+// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE - R2 DIRECT URL)
 // =========================================================================
-class AbyssExtractor : ExtractorApi() {
-
-    override val name            = "Abyss"
-    override val mainUrl         = "https://abyssplayer.com"
+open class AbyssExtractor : ExtractorApi() {
+    override val name = "Abyss"
+    override val mainUrl = "https://abyssplayer.com"
     override val requiresReferer = true
 
-    private val cdnBase = "https://iamcdn.net"
-
-    // ── Header standar sesuai request asli di SW bundle ──────────────
     private fun baseHeaders(referer: String): Map<String, String> = mapOf(
-        "User-Agent" to
-            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
         "Referer"    to referer,
         "Origin"     to mainUrl,
         "Accept"     to "*/*"
@@ -152,115 +82,54 @@ class AbyssExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val pageRef = referer ?: "$mainUrl/"
-
-        // ── 1. Ekstrak slug / id dari embed URL ───────────────────────
         val slug = extractSlugFromUrl(url) ?: return
+        val hdrs = baseHeaders(pageRef)
 
-        // ── 2. Fetch info JSON dari API CDN ───────────────────────────
-        val info = fetchInfo(slug, pageRef) ?: return
+        try {
+            // 1. Ambil data terenkripsi langsung dari HTML (API iamcdn sudah diblokir)
+            val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
+            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-        val id     = info.id     ?: return
-        val md5Id  = info.md5_id ?: ""
-        val userId = info.user_id ?: ""
-        val infoSlug = info.slug ?: slug
-        val hdrs   = baseHeaders(pageRef)
+            val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
+            val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
-        // ── 3. HLS Master Playlist ─────────────────────────────────────
-        info.media?.hls?.let { hls ->
-            if (!hls.sources.isNullOrEmpty() || !hls.streams.isNullOrEmpty()) {
-                val masterUrl = "$mainUrl/#/hls/$id/master.m3u8"
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name   = "$name HLS",
-                        url    = masterUrl,
-                        type   = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = pageRef
-                        this.quality = Qualities.Unknown.value
-                        this.headers = hdrs
-                    }
-                )
+            val infoSlug = dataJson["slug"]?.toString() ?: slug
+            val md5Id = dataJson["md5_id"]?.toString() ?: return
+            val userId = dataJson["user_id"]?.toString() ?: return
+            val mediaStr = dataJson["media"]?.toString() ?: return
 
-                // ── 3b. Per-stream HLS ─────────────────────────────────
-                hls.streams?.forEach { stream ->
-                    val uri = stream.URI ?: return@forEach
-                    val parts  = uri.trimEnd('/').split('/')
-                    if (parts.size >= 3) {
-                        val sub      = parts[parts.size - 3]
-                        val mediaId  = parts[parts.size - 2]
-                        val m3u8Url  = "$mainUrl/#/$id/$md5Id/$mediaId/$sub.m3u8"
-                        val quality  = parseQualityFromStream(stream)
-                        val resLabel = stream.RESOLUTION ?: stream.BANDWIDTH?.let { "${it / 1000}k" } ?: ""
-                        callback(
-                            newExtractorLink(
-                                source = name,
-                                name   = "$name HLS $resLabel".trim(),
-                                url    = m3u8Url,
-                                type   = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = pageRef
-                                this.quality = quality
-                                this.headers = hdrs
-                            }
-                        )
-                    }
-                }
-            }
-        }
+            // 2. Dekripsi Media JSON (Kunci Dekripsi menggunakan Hex String dari MD5)
+            val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
+            val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
+            val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
 
-        // ── 4. MP4 Chunk / Part / R2 Stream ──────────────────────────
-        info.media?.sources
-            ?.filter { it.codec != "av1" }          // AV1 sering gagal di mobile
-            ?.sortedByDescending { it.size ?: 0L }  // kualitas tertinggi duluan
-            ?.forEach { src ->
-                val size    = src.size   ?: return@forEach
-                val label   = src.label  ?: "Unknown"
-                val codec   = src.codec  ?: "avc1"
-                val quality = labelToQuality(label)
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8) // 32 bytes
+            val ivBytes = keyBytes.copyOfRange(0, 16)
 
-                // ── 4a. Chunk route (utama) ────────────────────────────
-                val chunkUrl = "$mainUrl/#/chunk/$id/$size/$DEFAULT_CHUNK_SIZE/$label/$codec"
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name   = "$name MP4 $label [$codec]",
-                        url    = chunkUrl,
-                        type   = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = pageRef
-                        this.quality = quality
-                        this.headers = hdrs
-                    }
-                )
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(ivBytes)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
-                // ── 4b. Part route (fallback) ──────────────────────────
-                val partSize = src.partSize ?: DEFAULT_PART_SIZE
-                val partUrl  = "$mainUrl/#/part/$id/$size/$partSize/$label/$codec"
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name   = "$name Part $label [$codec]",
-                        url    = partUrl,
-                        type   = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = pageRef
-                        this.quality = quality
-                        this.headers = hdrs
-                    }
-                )
+            val decryptedBytes = cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1))
+            val mediaJson = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), Map::class.java) as Map<String, Any>
 
-                // ── 4c. R2 Direct route (butuh sub & path) ────────────
-                val sub  = src.sub  ?: ""
-                val path = src.path ?: ""
-                val ext  = path.substringAfterLast('.', "mp4").ifEmpty { "mp4" }
-                if (sub.isNotEmpty() && path.isNotEmpty() && userId.isNotEmpty()) {
+            val mp4 = mediaJson["mp4"] as? Map<String, Any>
+            val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
+            val domains = mp4?.get("domains") as? List<String> ?: listOf("abysscdn.com")
+
+            // 3. Generate Link R2 Direct yang bisa langsung di-play oleh ExoPlayer (Tanpa ServiceWorker)
+            mp4Sources?.forEach { src ->
+                val label = src["label"]?.toString() ?: "Unknown"
+                val codec = src["codec"]?.toString() ?: "avc1"
+                val path = src["path"]?.toString() ?: ""
+                
+                if (path.isNotEmpty() && userId.isNotEmpty()) {
                     try {
                         val signedHash = buildSignedHash(path, userId, infoSlug, md5Id)
-                        val domain = info.media.hls?.domains?.firstOrNull()
-                            ?: info.media.sources?.firstOrNull()?.domain
-                            ?: return@forEach
+                        val domain = domains.firstOrNull() ?: "abysscdn.com"
                         val r2DirectUrl = "https://$domain/sora/$md5Id/$signedHash"
+
                         callback(
                             newExtractorLink(
                                 source = name,
@@ -269,65 +138,19 @@ class AbyssExtractor : ExtractorApi() {
                                 type   = ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = pageRef
-                                this.quality = quality
+                                this.quality = labelToQuality(label)
                                 this.headers = hdrs
                             }
                         )
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
-
-        // ── 5. FristData (pre-fetch first bytes untuk quick-start) ────
-        info.media?.hls?.fristDatas?.forEach { fd ->
-            val fdUrl   = fd.url   ?: return@forEach
-            val fdLabel = fd.label ?: fd.res_id ?: "HD"
-            if (fdUrl.startsWith("http")) {
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name   = "$name FD $fdLabel",
-                        url    = fdUrl,
-                        type   = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = pageRef
-                        this.quality = labelToQuality(fdLabel)
-                        this.headers = hdrs
-                    }
-                )
-            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
-
-    // ══════════════════════════════════════════════════════════════════
-    //  Fetch info JSON – coba beberapa endpoint
-    // ══════════════════════════════════════════════════════════════════
-    private suspend fun fetchInfo(slug: String, referer: String): InfoResponse? {
-        val hdrs = baseHeaders(referer) + mapOf("Accept" to "application/json")
-
-        // Endpoint 1: /file/{slug}  (paling umum)
-        app.get("$cdnBase/file/$slug", headers = hdrs)
-            .parsedSafe<InfoResponse>()
-            ?.takeIf { it.id != null }
-            ?.let { return it }
-
-        // Endpoint 2: /info/{slug}
-        app.get("$cdnBase/info/$slug", headers = hdrs)
-            .parsedSafe<InfoResponse>()
-            ?.takeIf { it.id != null }
-            ?.let { return it }
-
-        // Endpoint 3: /api/file/{slug}
-        app.get("$cdnBase/api/file/$slug", headers = hdrs)
-            .parsedSafe<InfoResponse>()
-            ?.takeIf { it.id != null }
-            ?.let { return it }
-
-        return null
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    //  Helper functions
-    // ══════════════════════════════════════════════════════════════════
 
     private fun extractSlugFromUrl(url: String): String? {
         Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""")
@@ -352,55 +175,22 @@ class AbyssExtractor : ExtractorApi() {
         else                                                                -> Qualities.Unknown.value
     }
 
-    private fun parseQualityFromStream(stream: HlsStreamItem): Int {
-        stream.RESOLUTION?.let { res ->
-            val height = res.split('x').lastOrNull()?.toIntOrNull()
-            if (height != null) return height
-        }
-        return stream.BANDWIDTH?.let { bps ->
-            when {
-                bps >= 4_000_000 -> Qualities.P1080.value
-                bps >= 2_000_000 -> Qualities.P720.value
-                bps >= 1_000_000 -> Qualities.P480.value
-                else             -> Qualities.P360.value
-            }
-        } ?: Qualities.Unknown.value
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    //  AES-CTR Crypto
-    // ══════════════════════════════════════════════════════════════════
-
+    // Pembuatan Signature R2 URL menggunakan Raw Bytes dari MD5
     private fun buildSignedHash(
         path   : String,
         userId : String,
         slug   : String,
         md5Id  : String
     ): String {
-        val keyMaterial = md5("$userId:$slug:$md5Id")
-        val encrypted   = aesCtr(path.toByteArray(Charsets.UTF_8), keyMaterial, Cipher.ENCRYPT_MODE)
-        val b64inner    = android.util.Base64
-            .encodeToString(encrypted, android.util.Base64.NO_WRAP)
-            .replace("=", "")
-        return android.util.Base64
-            .encodeToString(b64inner.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-            .replace("=", "")
-    }
-
-    private fun aesCtr(data: ByteArray, keyMaterial: ByteArray, mode: Int): ByteArray {
+        val keyMaterial = MessageDigest.getInstance("MD5").digest("$userId:$slug:$md5Id".toByteArray(Charsets.UTF_8))
         val keySpec  = SecretKeySpec(keyMaterial, "AES")
         val ivSpec   = IvParameterSpec(keyMaterial)
         val cipher   = Cipher.getInstance("AES/CTR/NoPadding")
-        cipher.init(mode, keySpec, ivSpec)
-        return cipher.doFinal(data)
-    }
-
-    private fun md5(input: String): ByteArray =
-        MessageDigest.getInstance("MD5").digest(input.toByteArray(Charsets.UTF_8))
-
-    companion object {
-        private const val DEFAULT_CHUNK_SIZE = 4_194_304L   // 0x400000 - 4 MB
-        private const val DEFAULT_PART_SIZE  = 5_242_880L   // 0x500000 - 5 MB
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
+        val encrypted = cipher.doFinal(path.toByteArray(Charsets.UTF_8))
+        
+        val b64inner = android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP).replace("=", "")
+        return android.util.Base64.encodeToString(b64inner.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP).replace("=", "")
     }
 }
 
