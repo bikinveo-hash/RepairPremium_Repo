@@ -4,12 +4,10 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.extractorApis
+import com.lagradost.cloudstream3.network.WebViewResolver
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -17,14 +15,6 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import android.annotation.SuppressLint
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
@@ -98,7 +88,6 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("type") val type: String?,
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("quality") val quality: String?,
-        @JsonProperty("rating") val rating: Double?, 
         @JsonProperty("year") val year: Int?
     )
 
@@ -281,9 +270,6 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster    = document.select("meta[property='og:image']").attr("content")
             .ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
-        val ratingText   = document.select("span.rating-value").text()
-            .ifEmpty { document.select("div.info-tag").text() }
-        val ratingScore  = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year         = document.select("span.year").text().toIntOrNull()
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -359,7 +345,6 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
-                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -369,7 +354,6 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
-                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -380,7 +364,6 @@ class LayarKacaProvider : MainAPI() {
     // =========================================================================
     // LOAD LINKS
     // =========================================================================
-    @SuppressLint("SetJavaScriptEnabled")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -466,53 +449,38 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) menggunakan WEBVIEW RESOLVER
+            // Routing Hydrax (Abyss) menggunakan WEBVIEW RESOLVER CloudStream
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abysscdn.com/?v=$id"
 
-                suspendCancellableCoroutine<Boolean> { continuation ->
-                    try {
-                        val webView = WebView(app.context)
-                        webView.settings.javaScriptEnabled = true
-                        webView.settings.domStorageEnabled = true
-                        webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-
-                        webView.webViewClient = object : WebViewClient() {
-                            override fun shouldInterceptRequest(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): WebResourceResponse? {
-                                val reqUrl = request?.url?.toString() ?: ""
-                                
-                                // Menyadap URL M3U8 hasil jahitan Javascript JWPlayer Hydrax
-                                if (reqUrl.contains("m3u8") || reqUrl.contains("playlist.m3u8")) {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = "Hydrax",
-                                            name = "Hydrax HD",
-                                            url = reqUrl,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.referer = "https://abysscdn.com/"
-                                            this.quality = Qualities.Unknown.value
-                                        }
-                                    )
-                                    // Matikan WebView setelah dapat link pertama
-                                    if (continuation.isActive) continuation.resume(true)
-                                }
-                                return super.shouldInterceptRequest(view, request)
+                try {
+                    val resolver = WebViewResolver(
+                        interceptUrl = Regex("""(?i)\.(m3u8|mp4)""")
+                    )
+                    
+                    val result = resolver.resolveUsingWebView(
+                        url = hydraxUrl,
+                        headers = mapOf("Referer" to "https://playeriframe.sbs/")
+                    )
+                    
+                    val reqUrl = result.first?.url?.toString()
+                    
+                    if (reqUrl != null && (reqUrl.contains(".m3u8", ignoreCase = true) || reqUrl.contains(".mp4", ignoreCase = true))) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "Hydrax",
+                                name = "Hydrax HD",
+                                url = reqUrl,
+                                type = if (reqUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://abysscdn.com/"
+                                this.quality = Qualities.Unknown.value
                             }
-                        }
-
-                        // Load URL Hydrax beserta Header Referer yang valid
-                        val extraHeaders = mutableMapOf("Referer" to "https://playeriframe.sbs/")
-                        webView.loadUrl(hydraxUrl, extraHeaders)
-
-                    } catch (e: Exception) {
-                        if (continuation.isActive) continuation.resume(false)
-                        e.printStackTrace()
+                        )
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
