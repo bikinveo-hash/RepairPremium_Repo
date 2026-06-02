@@ -2,11 +2,12 @@ package com.LayarKacaProvider
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.extractors.Ahvsh
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -87,6 +88,7 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("type") val type: String?,
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("quality") val quality: String?,
+        @JsonProperty("rating") val rating: Double?, 
         @JsonProperty("year") val year: Int?
     )
 
@@ -269,7 +271,9 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster    = document.select("meta[property='og:image']").attr("content")
             .ifEmpty { document.select("div.poster img").attr("src") }
         val fallbackPoster = fixPosterUrl(rawPoster)
-        
+        val ratingText   = document.select("span.rating-value").text()
+            .ifEmpty { document.select("div.info-tag").text() }
+        val ratingScore  = Regex("(\\d\\.\\d)").find(ratingText)?.value
         val year         = document.select("span.year").text().toIntOrNull()
             ?: Regex("(\\d{4})").find(document.select("div.info-tag").text())?.value?.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.value?.toIntOrNull()
@@ -345,6 +349,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -354,6 +359,7 @@ class LayarKacaProvider : MainAPI() {
                 this.posterUrl           = tmdbPoster ?: fallbackPoster
                 this.backgroundPosterUrl = tmdbBackdrop ?: tmdbPoster ?: fallbackPoster
                 this.plot = plot; this.year = year
+                this.score = Score.from(ratingScore, 10)
                 this.tags = tags; this.actors = actors; this.recommendations = recommendations
                 if (!finalTrailerUrl.isNullOrEmpty())
                     this.trailers.add(TrailerData(extractorUrl = finalTrailerUrl, referer = null, raw = false))
@@ -451,10 +457,13 @@ class LayarKacaProvider : MainAPI() {
             // Routing Hydrax (Abyss)
             else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
                 val id = url.substringAfter("hydrax/").substringBefore("/")
-                val hydraxUrl = "https://abysscdn.com/?v=$id"
+                
+                // KUNCI UTAMA: Gunakan domain vww.abyss.to agar dikenali oleh sistem internal Ahvsh
+                val hydraxUrl = "https://vww.abyss.to/?v=$id"
+                
                 try {
-                    // Serahkan tugas bypass JS ke ekstraktor Ahvsh bawaan CloudStream
-                    loadExtractor(
+                    // Panggil ekstraktor Ahvsh secara langsung (bypass filter loadExtractor)
+                    Ahvsh().getUrl(
                         url = hydraxUrl, 
                         referer = currentUrl, 
                         subtitleCallback = subtitleCallback, 
