@@ -454,12 +454,12 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) menggunakan Native Extractor
+            // Routing Hydrax (Abyss) -> Dihandle oleh AbyssExtractor
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
-                val hydraxUrl = "https://abysscdn.com/?v=$id"
+                val hydraxUrl = "https://abyssplayer.com/?v=$id"
                 try {
-                    AbyssExtractor().getUrl(hydraxUrl, currentUrl, subtitleCallback, callback)
+                    AbyssExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
