@@ -335,9 +335,7 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) — FIXED v5
-// Fix build error: newExtractorLink (suspend) tidak boleh di dalam forEach lambda
-// Solusi: pakai for loop biasa
+// EXTRACTOR 4: HYDRAX (ABYSS) - PURE NATIVE AES-CTR
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -345,165 +343,108 @@ open class HydraxExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     private fun getMd5Hex(input: String): String {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        return md.digest(input.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-    }
-
-    private fun qualityFromLabel(label: String): Int = when (label) {
-        "360p"  -> Qualities.P360.value
-        "480p"  -> Qualities.P480.value
-        "720p"  -> Qualities.P720.value
-        "1080p" -> Qualities.P1080.value
-        else    -> Qualities.Unknown.value
-    }
-
-    private fun resIdToLabel(resId: String): String = when (resId) {
-        "2" -> "360p"; "3" -> "480p"; "4" -> "720p"; "5" -> "1080p"
-        else -> "HD"
+        val md = MessageDigest.getInstance("MD5")
+        val digest = md.digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         try {
-            val videoId = when {
-                url.contains("hydrax/") -> url.substringAfter("hydrax/").substringBefore("/")
-                url.contains("?v=")     -> url.substringAfter("?v=").substringBefore("&")
-                else                    -> url.substringAfterLast("/")
+            // Bypass Wrapper Otomatis
+            val videoId = if (url.contains("hydrax/")) {
+                url.substringAfter("hydrax/").substringBefore("/")
+            } else {
+                url.substringAfter("?v=").substringBefore("&")
             }
             if (videoId.isBlank()) return null
 
-            val html = app.get(
-                "https://abysscdn.com/?v=$videoId",
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                ),
-                referer = referer ?: "https://playeriframe.sbs/"
-            ).text
+            val targetUrl = "https://abysscdn.com/?v=$videoId"
+            val htmlRes = app.get(targetUrl, referer = referer ?: "https://playeriframe.sbs/")
+            val html = htmlRes.text
 
-            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""")
-                .find(html)?.groupValues?.get(1) ?: return null
+            // Cari base64 'datas' dari HTML
+            val base64Data = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
-            val jsonString = String(
-                android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT),
-                Charsets.ISO_8859_1
-            )
+            // FIX: Gunakan ISO_8859_1 (Latin-1) agar data biner di "media" tidak rusak
+            val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.ISO_8859_1)
             val jsonData = mapper.readValue(jsonString, Map::class.java)
 
-            val slug     = jsonData["slug"]?.toString()    ?: return null
-            val md5Id    = jsonData["md5_id"]?.toString()  ?: return null
-            val userId   = jsonData["user_id"]?.toString() ?: return null
-            val mediaStr = jsonData["media"] as? String    ?: return null
+            val slug = jsonData["slug"]?.toString() ?: return null
+            val md5Id = jsonData["md5_id"]?.toString() ?: return null
+            val userId = jsonData["user_id"]?.toString() ?: return null
+            val mediaStr = jsonData["media"] as? String ?: return null
 
-            // Key terbukti: MD5(userId:slug:md5Id).hexdigest().toByteArray() = 32 bytes
-            val keyBytes = getMd5Hex("$userId:$slug:$md5Id").toByteArray(Charsets.UTF_8)
-            val ivBytes  = keyBytes.copyOfRange(0, 16)
+            // Logika Hydrax: Membuat Key MD5 dari (user_id:slug:md5_id)
+            val keyString = "$userId:$slug:$md5Id"
+            val md5Hex = getMd5Hex(keyString)
+            
+            // AES-CTR Key adalah 32 Bytes dari Hash MD5. IV Counter adalah 16 Bytes awal.
+            val keyBytes = md5Hex.toByteArray(Charsets.UTF_8) 
+            val ivBytes = keyBytes.copyOfRange(0, 16)
 
+            // FIX: Convert mediaString ke Byte Array pakai ISO_8859_1 (Latin-1)
+            val mediaBytes = mediaStr.toByteArray(Charsets.ISO_8859_1)
+
+            // Dekripsi NATIVE AES-CTR
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(keyBytes, "AES"),
-                IvParameterSpec(ivBytes)
-            )
-            val mediaData = mapper.readValue(
-                String(cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1)), Charsets.UTF_8),
-                Map::class.java
-            )
+            val keySpec = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(ivBytes)
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
 
-            val hydraxHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                "Origin"     to "https://abysscdn.com",
-                "Referer"    to "https://abysscdn.com/"
-            )
+            val decryptedBytes = cipher.doFinal(mediaBytes)
+            // Hasil akhir (JSON Link) baru dibaca pakai UTF-8
+            val decryptedString = String(decryptedBytes, Charsets.UTF_8)
+            val mediaData = mapper.readValue(decryptedString, Map::class.java)
 
-            // ── Parse satu section (hls atau mp4) ──────────────────────
-            suspend fun parseSection(section: Map<*, *>?, isHls: Boolean) {
-                if (section == null) return
+            // Ekstrak URL .m3u8 & .mp4
+            val addSource = { formatMap: Map<*, *>?, isHls: Boolean ->
+                if (formatMap != null) {
+                    val sourcesList = formatMap["sources"] as? List<Map<*, *>>
+                    val domains = formatMap["domains"] as? List<String> ?: emptyList()
 
-                val domains = (section["domains"] as? List<*>)
-                    ?.mapNotNull { it?.toString() } ?: emptyList()
+                    sourcesList?.forEach { source ->
+                        val file = source["file"]?.toString()
+                        val srcUrl = source["url"]?.toString()
+                        val size = source["size"]?.toString()
+                        val resId = source["res_id"]?.toString()
+                        val label = source["label"]?.toString() ?: "HD"
 
-                @Suppress("UNCHECKED_CAST")
-                val sourcesList = section["sources"] as? List<Map<String, *>> ?: emptyList()
+                        var finalUrl = file ?: srcUrl
 
-                // -- sources utama --
-                for (src in sourcesList) {
-                    val status = src["status"] as? Boolean ?: true
-                    if (!status) continue
-
-                    val label  = src["label"]?.toString()  ?: "HD"
-                    val resId  = src["res_id"]?.toString() ?: ""
-                    val size   = src["size"]?.toString()   ?: ""
-                    val srcUrl = src["url"]?.toString()    ?: ""
-                    val path   = src["path"]?.toString()   ?: ""
-
-                    // Prioritas URL sesuai struktur JSON nyata:
-                    // 1. url + path  → "https://domain/path"
-                    // 2. url saja    → "https://domain/slug/res_id/size?v=videoId"
-                    // 3. domains[0]  → "https://domains[0]/slug/res_id/size?v=videoId"
-                    val finalUrl = when {
-                        srcUrl.isNotBlank() && path.isNotBlank() ->
-                            "${srcUrl.trimEnd('/')}/$path"
-                        srcUrl.isNotBlank() && resId.isNotBlank() && size.isNotBlank() ->
-                            "${srcUrl.trimEnd('/')}/$slug/$resId/$size?v=$videoId"
-                        domains.isNotEmpty() && resId.isNotBlank() && size.isNotBlank() ->
-                            "https://${domains[0]}/$slug/$resId/$size?v=$videoId"
-                        else -> continue
-                    }
-
-                    val linkType = when {
-                        isHls || finalUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
-                        else -> ExtractorLinkType.VIDEO
-                    }
-
-                    sources.add(
-                        newExtractorLink(
-                            source = "Hydrax",
-                            name   = "Hydrax $label",
-                            url    = finalUrl,
-                            type   = linkType
-                        ) {
-                            this.referer = "https://abysscdn.com/"
-                            this.quality = qualityFromLabel(label)
-                            this.headers = hydraxHeaders
+                        // Jika URL tidak ada, rakit manual secara otomatis menggunakan Domain
+                        if (finalUrl.isNullOrBlank() && size != null && resId != null && domains.isNotEmpty()) {
+                            val domain = domains.first()
+                            finalUrl = "https://$domain/$slug/$resId/$size?v=$slug"
                         }
-                    )
-                }
 
-                // -- fristDatas: URL alternatif siap pakai, tambah jika label belum ada --
-                @Suppress("UNCHECKED_CAST")
-                val fristDatas = section["fristDatas"] as? List<Map<String, *>> ?: emptyList()
-
-                for (src in fristDatas) {
-                    val fUrl  = src["url"]?.toString()    ?: continue
-                    val resId = src["res_id"]?.toString() ?: ""
-                    val label = resIdToLabel(resId)
-
-                    // Skip kalau resolusi ini sudah ada dari sources utama
-                    if (sources.any { it.name == "Hydrax $label" }) continue
-
-                    sources.add(
-                        newExtractorLink(
-                            source = "Hydrax",
-                            name   = "Hydrax $label",
-                            url    = fUrl,
-                            type   = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = "https://abysscdn.com/"
-                            this.quality = qualityFromLabel(label)
-                            this.headers = hydraxHeaders
+                        if (!finalUrl.isNullOrBlank()) {
+                            sources.add(
+                                newExtractorLink(
+                                    source = "Hydrax",
+                                    name = "Hydrax $label",
+                                    url = finalUrl,
+                                    type = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://abysscdn.com/"
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                                        "Origin" to mainUrl
+                                    )
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
 
-            parseSection(mediaData["hls"] as? Map<*, *>, true)
-            parseSection(mediaData["mp4"] as? Map<*, *>, false)
+            addSource(mediaData["hls"] as? Map<*, *>, true)
+            addSource(mediaData["mp4"] as? Map<*, *>, false)
 
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
-        return sources.ifEmpty { null }
+        return sources
     }
 }
