@@ -7,8 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.extractorApis
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -455,25 +453,12 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss)
+            // Routing Hydrax (Abyss) -> Dihandle oleh HydraxNativeExtractor buatan kita sendiri
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
+                val hydraxUrl = "https://abysscdn.com/?v=$id"
                 try {
-                    val ahvshLive = extractorApis.find { it.name.equals("Ahvsh", ignoreCase = true) || it.javaClass.simpleName.equals("Ahvsh", ignoreCase = true) }
-                    
-                    if (ahvshLive != null) {
-                        val hydraxUrl = "${ahvshLive.mainUrl}/?v=$id"
-                        ahvshLive.getSafeUrl(
-                            url = hydraxUrl, 
-                            referer = currentUrl, 
-                            subtitleCallback = subtitleCallback, 
-                            callback = callback
-                        )
-                    } else {
-                        // Fallback aman jika gagal dicari di memory
-                        loadExtractor("https://ahvsh.com/?v=$id", currentUrl, subtitleCallback, callback)
-                        loadExtractor("https://vww.abyss.to/?v=$id", currentUrl, subtitleCallback, callback)
-                    }
+                    HydraxNativeExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -483,7 +468,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN) dll
+    // VIDEO INTERCEPTOR
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -493,8 +478,8 @@ class LayarKacaProvider : MainAPI() {
             val url             = originalRequest.url.toString()
 
             when {
-                // ── Turbovidhls & etvp & hownetwork: tambah header Origin + Referer ──────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
+                // ── Turbovidhls & etvp & hownetwork & sssrr ──────
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") || url.contains("sssrr.org") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
                         .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
@@ -502,25 +487,22 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
-
                 // ── Google Drive CDN: retry dengan exponential backoff ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
-                    val maxRetries = 4                       // maks 4x retry
-                    val baseDelay  = 600L                   // mulai 600ms
+                    val maxRetries = 4
+                    val baseDelay  = 600L
 
                     while (response.code == 429 && retries < maxRetries) {
                         response.close()
-                        val delay = baseDelay * (retries + 1) // 600 → 1200 → 1800 → 2400 ms
+                        val delay = baseDelay * (retries + 1)
                         Thread.sleep(delay)
                         response = chain.proceed(originalRequest)
                         retries++
                     }
                     response
                 }
-
-                // ── Domain lain: lewat tanpa modifikasi ──────────────────────
                 else -> chain.proceed(originalRequest)
             }
         }
