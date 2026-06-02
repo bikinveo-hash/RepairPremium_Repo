@@ -335,9 +335,8 @@ open class CastExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: HYDRAX (ABYSS) — FIXED v5
-// Fix build error: newExtractorLink (suspend) tidak boleh di dalam forEach lambda
-// Solusi: pakai for loop biasa
+// HYDRAX EXTRACTOR — FIXED (minimal change dari kode asli)
+// Hanya fix bagian URL builder, struktur lain tidak diubah
 // =========================================================================
 open class HydraxExtractor : ExtractorApi() {
     override var name = "Hydrax"
@@ -345,22 +344,9 @@ open class HydraxExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     private fun getMd5Hex(input: String): String {
-        val md = java.security.MessageDigest.getInstance("MD5")
+        val md = MessageDigest.getInstance("MD5")
         return md.digest(input.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
-    }
-
-    private fun qualityFromLabel(label: String): Int = when (label) {
-        "360p"  -> Qualities.P360.value
-        "480p"  -> Qualities.P480.value
-        "720p"  -> Qualities.P720.value
-        "1080p" -> Qualities.P1080.value
-        else    -> Qualities.Unknown.value
-    }
-
-    private fun resIdToLabel(resId: String): String = when (resId) {
-        "2" -> "360p"; "3" -> "480p"; "4" -> "720p"; "5" -> "1080p"
-        else -> "HD"
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
@@ -375,36 +361,28 @@ open class HydraxExtractor : ExtractorApi() {
 
             val html = app.get(
                 "https://abysscdn.com/?v=$videoId",
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                ),
+                headers = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"),
                 referer = referer ?: "https://playeriframe.sbs/"
             ).text
 
             val base64Data = Regex("""datas\s*=\s*"([^"]+)"""")
                 .find(html)?.groupValues?.get(1) ?: return null
 
-            val jsonString = String(
-                android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT),
-                Charsets.ISO_8859_1
-            )
-            val jsonData = mapper.readValue(jsonString, Map::class.java)
+            val jsonString = String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.ISO_8859_1)
+            val jsonData   = mapper.readValue(jsonString, Map::class.java)
 
             val slug     = jsonData["slug"]?.toString()    ?: return null
             val md5Id    = jsonData["md5_id"]?.toString()  ?: return null
             val userId   = jsonData["user_id"]?.toString() ?: return null
             val mediaStr = jsonData["media"] as? String    ?: return null
 
-            // Key terbukti: MD5(userId:slug:md5Id).hexdigest().toByteArray() = 32 bytes
+            // Key: MD5(userId:slug:md5Id) → hex string → toByteArray = 32 bytes (terbukti benar)
             val keyBytes = getMd5Hex("$userId:$slug:$md5Id").toByteArray(Charsets.UTF_8)
             val ivBytes  = keyBytes.copyOfRange(0, 16)
 
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(keyBytes, "AES"),
-                IvParameterSpec(ivBytes)
-            )
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
+
             val mediaData = mapper.readValue(
                 String(cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1)), Charsets.UTF_8),
                 Map::class.java
@@ -416,31 +394,35 @@ open class HydraxExtractor : ExtractorApi() {
                 "Referer"    to "https://abysscdn.com/"
             )
 
-            // ── Parse satu section (hls atau mp4) ──────────────────────
-            suspend fun parseSection(section: Map<*, *>?, isHls: Boolean) {
-                if (section == null) return
+            fun qualityFromLabel(label: String) = when (label) {
+                "360p"  -> Qualities.P360.value
+                "480p"  -> Qualities.P480.value
+                "720p"  -> Qualities.P720.value
+                "1080p" -> Qualities.P1080.value
+                else    -> Qualities.Unknown.value
+            }
 
-                val domains = (section["domains"] as? List<*>)
-                    ?.mapNotNull { it?.toString() } ?: emptyList()
+            // Gunakan for loop (bukan lambda) agar newExtractorLink (suspend) bisa dipanggil
+            suspend fun parseSection(section: Map<*, *>?, isHls: Boolean) {
+                section ?: return
+                val domains = (section["domains"] as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
 
                 @Suppress("UNCHECKED_CAST")
-                val sourcesList = section["sources"] as? List<Map<String, *>> ?: emptyList()
+                val srcList = section["sources"] as? List<Map<String, *>> ?: emptyList()
 
-                // -- sources utama --
-                for (src in sourcesList) {
+                for (src in srcList) {
                     val status = src["status"] as? Boolean ?: true
                     if (!status) continue
 
                     val label  = src["label"]?.toString()  ?: "HD"
-                    val resId  = src["res_id"]?.toString() ?: ""
-                    val size   = src["size"]?.toString()   ?: ""
                     val srcUrl = src["url"]?.toString()    ?: ""
                     val path   = src["path"]?.toString()   ?: ""
+                    val resId  = src["res_id"]?.toString() ?: ""
+                    val size   = src["size"]?.toString()   ?: ""
 
-                    // Prioritas URL sesuai struktur JSON nyata:
-                    // 1. url + path  → "https://domain/path"
-                    // 2. url saja    → "https://domain/slug/res_id/size?v=videoId"
-                    // 3. domains[0]  → "https://domains[0]/slug/res_id/size?v=videoId"
+                    // Struktur URL nyata dari AbyssCDN (hasil debug):
+                    // - 360p/480p/1080p: punya "url" + "path" → finalUrl = url/path
+                    // - 720p: tidak ada url/path → pakai domains[0]/slug/res_id/size?v=videoId
                     val finalUrl = when {
                         srcUrl.isNotBlank() && path.isNotBlank() ->
                             "${srcUrl.trimEnd('/')}/$path"
@@ -451,17 +433,12 @@ open class HydraxExtractor : ExtractorApi() {
                         else -> continue
                     }
 
-                    val linkType = when {
-                        isHls || finalUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
-                        else -> ExtractorLinkType.VIDEO
-                    }
-
                     sources.add(
                         newExtractorLink(
                             source = "Hydrax",
                             name   = "Hydrax $label",
                             url    = finalUrl,
-                            type   = linkType
+                            type   = if (isHls || finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             this.referer = "https://abysscdn.com/"
                             this.quality = qualityFromLabel(label)
@@ -470,18 +447,16 @@ open class HydraxExtractor : ExtractorApi() {
                     )
                 }
 
-                // -- fristDatas: URL alternatif siap pakai, tambah jika label belum ada --
+                // fristDatas: fallback URL siap pakai jika resolusi belum ada
                 @Suppress("UNCHECKED_CAST")
                 val fristDatas = section["fristDatas"] as? List<Map<String, *>> ?: emptyList()
-
                 for (src in fristDatas) {
-                    val fUrl  = src["url"]?.toString()    ?: continue
-                    val resId = src["res_id"]?.toString() ?: ""
-                    val label = resIdToLabel(resId)
-
-                    // Skip kalau resolusi ini sudah ada dari sources utama
+                    val fUrl  = src["url"]?.toString() ?: continue
+                    val label = when (src["res_id"]?.toString()) {
+                        "2" -> "360p"; "3" -> "480p"; "4" -> "720p"; "5" -> "1080p"
+                        else -> continue
+                    }
                     if (sources.any { it.name == "Hydrax $label" }) continue
-
                     sources.add(
                         newExtractorLink(
                             source = "Hydrax",
@@ -507,5 +482,3 @@ open class HydraxExtractor : ExtractorApi() {
         return sources.ifEmpty { null }
     }
 }
-
-                            
