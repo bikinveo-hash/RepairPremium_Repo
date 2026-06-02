@@ -430,22 +430,23 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
+        
         allSources.forEach { url ->
             // Routing TurboVIP
-            if (url.contains("playeriframe.sbs/iframe/turbovip/")) {
-                val id = url.substringAfter("turbovip/").substringBefore("/")
+            if (url.contains("/iframe/turbovip/")) {
+                val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing HowNetwork (P2P)
-            else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
-                val id = url.substringAfter("p2p/").substringBefore("/")
+            else if (url.contains("/iframe/p2p/")) {
+                val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing CAST (Mesin Independen Anti-Bot)
-            else if (url.contains("playeriframe.sbs/iframe/cast/")) {
-                val id = url.substringAfter("cast/").substringBefore("/")
+            else if (url.contains("/iframe/cast/")) {
+                val id = url.substringAfter("/iframe/cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
                     CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
@@ -453,12 +454,12 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss)
-            else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
-                val id = url.substringAfter("hydrax/").substringBefore("/")
+            // Routing Hydrax (Abyss) menggunakan Native Extractor
+            else if (url.contains("/iframe/hydrax/")) {
+                val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abysscdn.com/?v=$id"
                 try {
-                    HydraxExtractor().getUrl(hydraxUrl, currentUrl)?.forEach { callback.invoke(it) }
+                    AbyssExtractor().getUrl(hydraxUrl, currentUrl, subtitleCallback, callback)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -468,7 +469,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR — Fix seek error HTTP 429 (Google Drive CDN) dll
+    // VIDEO INTERCEPTOR
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -478,8 +479,8 @@ class LayarKacaProvider : MainAPI() {
             val url             = originalRequest.url.toString()
 
             when {
-                // ── Turbovidhls & etvp & hownetwork: tambah header Origin + Referer ──────
-                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
+                // ── Turbovidhls & etvp & hownetwork & sssrr ──────
+                url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") || url.contains("sssrr.org") || url.contains("iamcdn.net") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
                         .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
@@ -487,25 +488,22 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
-
                 // ── Google Drive CDN: retry dengan exponential backoff ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
-                    val maxRetries = 4                       // maks 4x retry
-                    val baseDelay  = 600L                   // mulai 600ms
+                    val maxRetries = 4
+                    val baseDelay  = 600L
 
                     while (response.code == 429 && retries < maxRetries) {
                         response.close()
-                        val delay = baseDelay * (retries + 1) // 600 → 1200 → 1800 → 2400 ms
+                        val delay = baseDelay * (retries + 1)
                         Thread.sleep(delay)
                         response = chain.proceed(originalRequest)
                         retries++
                     }
                     response
                 }
-
-                // ── Domain lain: lewat tanpa modifikasi ──────────────────────
                 else -> chain.proceed(originalRequest)
             }
         }
