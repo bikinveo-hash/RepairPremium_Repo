@@ -60,7 +60,84 @@ data class CastSource(
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// EXTRACTOR 1: TURBO VIP
+// EXTRACTOR 1: HYDRAX NATIVE (DECRYPTOR ABYSS)
+// =========================================================================
+open class HydraxNativeExtractor : ExtractorApi() {
+    override var name = "Hydrax HD"
+    override var mainUrl = "https://abysscdn.com"
+    override val requiresReferer = false
+
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val sources = mutableListOf<ExtractorLink>()
+        try {
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Referer" to "https://playeriframe.sbs/"
+            )
+            val html = app.get(url, headers = headers).text
+            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
+
+            val decodedDatas = String(Base64.decode(datas, Base64.DEFAULT), Charsets.ISO_8859_1)
+            val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
+
+            val slug = dataJson["slug"]?.toString() ?: ""
+            val md5Id = dataJson["md5_id"]?.toString() ?: ""
+            val userId = dataJson["user_id"]?.toString() ?: ""
+            val mediaStr = dataJson["media"]?.toString() ?: return null
+
+            val hashInput = "$userId:$slug:$md5Id".toByteArray(Charsets.UTF_8)
+            val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
+            val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
+
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8) // 32 bytes
+            val ivBytes = keyBytes.copyOfRange(0, 16)
+
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(ivBytes)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+            val decryptedBytes = cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1))
+            val mediaJson = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), Map::class.java) as Map<String, Any>
+
+            val mp4 = mediaJson["mp4"] as? Map<String, Any>
+            val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
+
+            mp4Sources?.forEach { source ->
+                val label = source["label"]?.toString() ?: "HD"
+                val srcUrl = source["url"]?.toString() ?: ""
+                val path = source["path"]?.toString() ?: ""
+
+                if (srcUrl.isNotEmpty() && path.isNotEmpty()) {
+                    val finalUrl = "$srcUrl/$path"
+                    sources.add(
+                        newExtractorLink(
+                            source = "Hydrax",
+                            name = "Hydrax $label",
+                            url = finalUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mapOf(
+                                "Origin" to mainUrl,
+                                "Referer" to "$mainUrl/",
+                                "User-Agent" to headers["User-Agent"]!!
+                            )
+                        }
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return sources.ifEmpty { null }
+    }
+}
+
+// =========================================================================
+// EXTRACTOR 2: TURBO VIP
 // =========================================================================
 open class Lk21TurboExtractor : ExtractorApi() {
     override var name      = "LK21 TurboVIP"
@@ -113,7 +190,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 2: HOW NETWORK (P2P)
+// EXTRACTOR 3: HOW NETWORK (P2P)
 // =========================================================================
 open class HowNetworkExtractor : ExtractorApi() {
     override var name = "LK21 HowNetwork"
@@ -168,7 +245,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: CAST HD
+// EXTRACTOR 4: CAST HD
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name = "CAST HD"
