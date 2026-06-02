@@ -1,6 +1,7 @@
 package com.LayarKacaProvider
 
 import android.util.Base64
+import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -26,7 +27,6 @@ import javax.crypto.spec.SecretKeySpec
 // =========================================================================
 // DATA CLASSES
 // =========================================================================
-
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
     @JsonProperty("file") val file: String?,
@@ -61,7 +61,7 @@ data class CastSource(
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS EXTRACTOR (HYDRAX) - NATIVE R2
+// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE - DIRECT PATH)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -75,7 +75,6 @@ open class AbyssExtractor : ExtractorApi() {
         "Accept"     to "*/*"
     )
 
-    // Override 2 Parameter yang sesuai dengan standar CloudStream
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         val pageRef = referer ?: "$mainUrl/"
@@ -83,7 +82,7 @@ open class AbyssExtractor : ExtractorApi() {
         val hdrs = baseHeaders(pageRef)
 
         try {
-            // 1. Ambil data terenkripsi langsung dari HTML
+            // 1. Ambil data terenkripsi dari HTML
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
 
@@ -95,12 +94,12 @@ open class AbyssExtractor : ExtractorApi() {
             val userId = dataJson["user_id"]?.toString() ?: return null
             val mediaStr = dataJson["media"]?.toString() ?: return null
 
-            // 2. Dekripsi Media JSON menggunakan Hash MD5
+            // 2. Dekripsi Media JSON
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
 
-            val keyBytes = keyHex.toByteArray(Charsets.UTF_8) // 32 bytes
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val ivBytes = keyBytes.copyOfRange(0, 16)
 
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
@@ -113,35 +112,29 @@ open class AbyssExtractor : ExtractorApi() {
 
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
-            val domains = mp4?.get("domains") as? List<String> ?: listOf("abysscdn.com")
 
-            // 3. Generate Link R2 Direct yang bisa diputar ExoPlayer
+            // 3. Bangun Direct URL yang bersih
             mp4Sources?.forEach { src ->
-                val label = src["label"]?.toString() ?: "Unknown"
-                val codec = src["codec"]?.toString() ?: "avc1"
-                val path = src["path"]?.toString() ?: ""
-                
-                if (path.isNotEmpty() && userId.isNotEmpty()) {
-                    try {
-                        val signedHash = buildSignedHash(path, userId, infoSlug, md5Id)
-                        val domain = domains.firstOrNull() ?: "abysscdn.com"
-                        val r2DirectUrl = "https://$domain/sora/$md5Id/$signedHash"
+                val label   = src["label"]?.toString()  ?: "Unknown"
+                val codec   = src["codec"]?.toString()  ?: "h264"
+                val path    = src["path"]?.toString()   ?: ""
+                val baseUrl = src["url"]?.toString()    ?: ""
 
-                        sources.add(
-                            newExtractorLink(
-                                source = name,
-                                name   = "$name R2 $label [$codec]",
-                                url    = r2DirectUrl,
-                                type   = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = pageRef
-                                this.quality = labelToQuality(label)
-                                this.headers = hdrs
-                            }
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
+                    val directUrl = "$baseUrl/$path"
+
+                    sources.add(
+                        newExtractorLink(
+                            source = name,
+                            name   = "$name $label [$codec]",
+                            url    = directUrl,
+                            type   = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = pageRef
+                            this.quality = labelToQuality(label)
+                            this.headers = hdrs
+                        }
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -174,23 +167,6 @@ open class AbyssExtractor : ExtractorApi() {
         label.contains("360")                                               -> Qualities.P360.value
         label.contains("240")                                               -> Qualities.P240.value
         else                                                                -> Qualities.Unknown.value
-    }
-
-    private fun buildSignedHash(
-        path   : String,
-        userId : String,
-        slug   : String,
-        md5Id  : String
-    ): String {
-        val keyMaterial = MessageDigest.getInstance("MD5").digest("$userId:$slug:$md5Id".toByteArray(Charsets.UTF_8))
-        val keySpec  = SecretKeySpec(keyMaterial, "AES")
-        val ivSpec   = IvParameterSpec(keyMaterial)
-        val cipher   = Cipher.getInstance("AES/CTR/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
-        val encrypted = cipher.doFinal(path.toByteArray(Charsets.UTF_8))
-        
-        val b64inner = android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP).replace("=", "")
-        return android.util.Base64.encodeToString(b64inner.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP).replace("=", "")
     }
 }
 
