@@ -16,6 +16,6 @@ class LayarKacaPlugin : Plugin() {
         registerExtractorAPI(CastExtractor())
         
         // Mendaftarkan Extractor Hydrax (Abyss) yang baru saja kita tambahkan
-        // registerExtractorAPI(HydraxExtractor())
+        registerExtractorAPI(HydraxExtractor())
     }
 }
