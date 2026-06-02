@@ -434,20 +434,20 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
         allSources.forEach { url ->
             // Routing TurboVIP
-            if (url.contains("playeriframe.sbs/iframe/turbovip/")) {
-                val id = url.substringAfter("turbovip/").substringBefore("/")
+            if (url.contains("/iframe/turbovip/")) {
+                val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing HowNetwork (P2P)
-            else if (url.contains("playeriframe.sbs/iframe/p2p/")) {
-                val id = url.substringAfter("p2p/").substringBefore("/")
+            else if (url.contains("/iframe/p2p/")) {
+                val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
             // Routing CAST (Mesin Independen Anti-Bot)
-            else if (url.contains("playeriframe.sbs/iframe/cast/")) {
-                val id = url.substringAfter("cast/").substringBefore("/")
+            else if (url.contains("/iframe/cast/")) {
+                val id = url.substringAfter("/iframe/cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
                 try {
                     CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
@@ -456,18 +456,13 @@ class LayarKacaProvider : MainAPI() {
                 }
             }
             // Routing Hydrax (Abyss)
-            else if (url.contains("playeriframe.sbs/iframe/hydrax/")) {
-                val id = url.substringAfter("hydrax/").substringBefore("/")
-                
+            else if (url.contains("/iframe/hydrax/")) {
+                val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 try {
-                    // Cari kelas Ahvsh yang "hidup" dari dalam memory aplikasi CloudStream
-                    val ahvshLive = extractorApis.find { it.javaClass.simpleName.equals("Ahvsh", ignoreCase = true) || it.name.equals("Ahvsh", ignoreCase = true) }
+                    val ahvshLive = extractorApis.find { it.name.equals("Ahvsh", ignoreCase = true) || it.javaClass.simpleName.equals("Ahvsh", ignoreCase = true) }
                     
                     if (ahvshLive != null) {
-                        // Gunakan mainUrl internalnya agar lolos filter validasi CloudStream
                         val hydraxUrl = "${ahvshLive.mainUrl}/?v=$id"
-                        
-                        // Eksekusi fungsi load bawaan ExtractorApi secara aman
                         ahvshLive.getSafeUrl(
                             url = hydraxUrl, 
                             referer = currentUrl, 
@@ -475,7 +470,8 @@ class LayarKacaProvider : MainAPI() {
                             callback = callback
                         )
                     } else {
-                        // Jika karena satu dan lain hal Ahvsh tidak ketemu di memori, ini fallback-nya
+                        // Fallback aman jika gagal dicari di memory
+                        loadExtractor("https://ahvsh.com/?v=$id", currentUrl, subtitleCallback, callback)
                         loadExtractor("https://vww.abyss.to/?v=$id", currentUrl, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
