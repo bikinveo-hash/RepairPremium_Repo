@@ -11,9 +11,6 @@ import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
@@ -23,38 +20,53 @@ class LayarKacaProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // =========================================================================
-    // KATEGORI LENGKAP & INFINITE SCROLL (SESUAI WEB LK21)
+    // KATEGORI LENGKAP & ANTI-DDOS (SESUAI WEB LK21)
     // =========================================================================
     override val mainPage = mainPageOf(
-        "latest/page/" to "Film Terbaru",
-        "top-series-today/page/" to "Series Unggulan",
-        "latest-series/page/" to "Series Update",
-        "populer/page/" to "Top Bulan Ini",
-        "rekomendasi-film-pintar/page/" to "Rekomendasi Untukmu",
-        "nonton-bareng-keluarga/page/" to "Nonton Bareng Keluarga",
-        "genre/action/page/" to "Action Terbaru",
-        "genre/romance/page/" to "Romance Terbaru",
-        "genre/comedy/page/" to "Comedy Terbaru",
-        "genre/horror/page/" to "Horror Terbaru",
-        "country/south-korea/page/" to "Korea Terbaru",
-        "country/thailand/page/" to "Thailand Terbaru",
-        "country/india/page/" to "India Terbaru"
+        "latest/" to "Film Terbaru",
+        "top-series-today/" to "Series Unggulan",
+        "latest-series/" to "Series Update",
+        "populer/" to "Top Bulan Ini",
+        "rekomendasi-film-pintar/" to "Rekomendasi Untukmu",
+        "nonton-bareng-keluarga/" to "Nonton Bareng Keluarga",
+        "genre/action/" to "Action Terbaru",
+        "genre/romance/" to "Romance Terbaru",
+        "genre/comedy/" to "Comedy Terbaru",
+        "genre/horror/" to "Horror Terbaru",
+        "country/south-korea/" to "Korea Terbaru",
+        "country/thailand/" to "Thailand Terbaru",
+        "country/india/" to "India Terbaru"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "$mainUrl/${request.data}$page/"
-        val document = app.get(url).document
+    // Fitur wajib agar server LK21 tidak memblokir koneksi kita
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 250L
 
-        // Mengambil container film di halaman manapun
-        val elements = document.select("div#post-container article, div.grid-archive article, article.item")
-        
-        val list = coroutineScope {
-            elements.mapNotNull { element ->
-                async { toSearchResult(element) }
-            }.awaitAll().filterNotNull()
+    // =========================================================================
+    // INFINITE SCROLL HOME PAGE
+    // =========================================================================
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Aturan Path LK21: Halaman 1 tanpa "page/1", Halaman 2 dst menggunakan "page/x/"
+        val url = if (page == 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            "$mainUrl/${request.data}page/$page/"
         }
 
-        // PERBAIKAN: Menggunakan format parameter posisi (request, list, hasNext) yang sesuai dengan MainAPI.kt
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept" to "*/*",
+            "Referer" to "$mainUrl/"
+        )
+
+        val document = app.get(url, headers = headers).document
+        val elements = document.select("div#post-container article, div.grid-archive article, div.widget article, article.item")
+        
+        // Mem-parsing secara instan (tanpa delay TMDB)
+        val list = elements.mapNotNull { element ->
+            toSearchResult(element)
+        }
+
         return newHomePageResponse(request, list, list.isNotEmpty())
     }
 
@@ -95,6 +107,7 @@ class LayarKacaProvider : MainAPI() {
         var cleanUrl = url
         if (cleanUrl.startsWith("//")) cleanUrl = "https:$cleanUrl"
         cleanUrl = cleanUrl.substringBefore("?")
+        // Menghapus ukuran thumbnail agar mendapatkan poster HD murni dari LK21
         return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}"), "")
     }
 
@@ -120,7 +133,10 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("year") val year: Int?
     )
 
-    private suspend fun toSearchResult(element: Element): SearchResponse? {
+    // =========================================================================
+    // PARSING ITEM FILM INSTAN (BEBAS TMDB LIMIT)
+    // =========================================================================
+    private fun toSearchResult(element: Element): SearchResponse? {
         val rawTitle = element.select("h3.poster-title, h2.entry-title, h1.page-title, div.title").text().trim()
         if (rawTitle.isEmpty()) return null
         val href = fixUrl(element.select("a").first()?.attr("href") ?: return null)
@@ -129,27 +145,14 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
-        val fallbackPoster = fixPosterUrl(rawPoster)
-
+        
+        // Kita gunakan poster HD dari LK21 saja agar beranda dimuat dalam 0 detik!
+        val posterUrl = fixPosterUrl(rawPoster)
         val cleanTitle = getCleanTitle(rawTitle)
         val yearText = element.select("div.year, span.year").text()
         val year = yearText.toIntOrNull()
             ?: Regex("\\b(\\d{4})\\b").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull()
 
-        var hdPoster: String? = null
-        try {
-            val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
-            val tmdbRes = app.get(
-                "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
-            ).parsedSafe<TmdbSearchResponse>()
-            val match = tmdbRes?.results?.firstOrNull {
-                val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
-                year == null || resYear == null || resYear == year
-            } ?: tmdbRes?.results?.firstOrNull()
-            hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
-        } catch (e: Exception) {}
-
-        val posterUrl = hdPoster ?: fallbackPoster
         val quality  = getQualityFromString(element.select("span.label").text())
         val isSeries = element.select("span.episode").isNotEmpty()
             || element.select("span.duration").text().contains("S.")
@@ -176,49 +179,29 @@ class LayarKacaProvider : MainAPI() {
         try {
             val response = app.get(searchUrl, headers = headers).parsedSafe<LkSearchResponse>() ?: return null
 
-            val results = coroutineScope {
-                response.data?.mapNotNull { item ->
-                    async {
-                        val rawTitle = item.title ?: return@async null
-                        val slug = item.slug ?: return@async null
+            val results = response.data?.mapNotNull { item ->
+                val rawTitle = item.title ?: return@mapNotNull null
+                val slug = item.slug ?: return@mapNotNull null
 
-                        val cleanTitle = getCleanTitle(rawTitle)
-                        val href = fixUrl(slug)
-                        
-                        val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
-                        val fallbackPoster = fixPosterUrl(rawPoster)
+                val cleanTitle = getCleanTitle(rawTitle)
+                val href = fixUrl(slug)
+                
+                val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
+                val posterUrl = fixPosterUrl(rawPoster)
 
-                        var hdPoster: String? = null
-                        try {
-                            val encodedTitle = URLEncoder.encode(cleanTitle, "UTF-8")
-                            val tmdbRes = app.get(
-                                "https://api.themoviedb.org/3/search/multi?api_key=1865f43a0549ca50d341dd9ab8b29f49&query=$encodedTitle"
-                            ).parsedSafe<TmdbSearchResponse>()
-                            
-                            val match = tmdbRes?.results?.firstOrNull {
-                                val resYear = (it.release_date ?: it.first_air_date)?.take(4)?.toIntOrNull()
-                                item.year == null || resYear == null || resYear == item.year
-                            } ?: tmdbRes?.results?.firstOrNull()
-                            
-                            hdPoster = match?.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
-                        } catch (e: Exception) {}
+                val quality = getQualityFromString(item.quality)
+                val type = if (item.type?.contains("series", ignoreCase = true) == true) TvType.TvSeries else TvType.Movie
 
-                        val posterUrl = hdPoster ?: fallbackPoster
-                        val quality = getQualityFromString(item.quality)
-                        val type = if (item.type?.contains("series", ignoreCase = true) == true) TvType.TvSeries else TvType.Movie
-
-                        if (type == TvType.TvSeries) {
-                            newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
-                            }
-                        } else {
-                            newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
-                            }
-                        }
+                if (type == TvType.TvSeries) {
+                    newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                        this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                     }
-                }?.awaitAll()?.filterNotNull() ?: emptyList()
-            }
+                } else {
+                    newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
+                        this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
+                    }
+                }
+            } ?: emptyList()
 
             val totalPages = response.totalPages ?: 1
             return newSearchResponseList(results, page < totalPages)
@@ -313,6 +296,7 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
+        // TMDB dipanggil di Load untuk Banner Background (Aman, hanya 1 request)
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         try {
@@ -461,7 +445,7 @@ class LayarKacaProvider : MainAPI() {
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
             
-            // Bypass Localhost agar tidak diubah-ubah headernya
+            // Bypass Localhost
             if (url.contains("127.0.0.1")) {
                 return@Interceptor chain.proceed(originalRequest)
             }
