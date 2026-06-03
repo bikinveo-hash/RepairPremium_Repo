@@ -451,7 +451,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR (THE 64KB DECRYPTER)
+    // VIDEO INTERCEPTOR (THE 64KB AES-256 DECRYPTER)
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
@@ -460,7 +460,7 @@ class LayarKacaProvider : MainAPI() {
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
 
-            // ── BYPASS HYDRAX (Presisi 64KB) ──
+            // ── BYPASS HYDRAX (Presisi 64KB - AES-256) ──
             if (url.contains("hydrax_proxy")) {
                 val uri = android.net.Uri.parse(url)
                 val srcUrl = uri.getQueryParameter("src")!!
@@ -472,7 +472,7 @@ class LayarKacaProvider : MainAPI() {
                     reqStart = rangeHeader.substring(6).split("-")[0].toLongOrNull() ?: 0L
                 }
 
-                // Meneruskan permintaan ExoPlayer persis apa adanya ke URL Source
+                // Meneruskan permintaan ExoPlayer persis apa adanya ke URL Source yang asli
                 val newRequest = originalRequest.newBuilder()
                     .url(srcUrl)
                     .header("Origin", "https://abyssplayer.com")
@@ -485,12 +485,12 @@ class LayarKacaProvider : MainAPI() {
 
                 val body = response.body ?: return@Interceptor response
 
-                // Jika ExoPlayer meminta data yang letaknya melebihi 64KB, berikan langsung tanpa sentuh AES!
+                // Jika ExoPlayer melompat (seek) melewati 64KB pertama, berikan data langsung tanpa sentuh AES!
                 if (reqStart >= 65536) {
                     return@Interceptor response
                 }
 
-                // Jika meminta dari awal, kita intersepsi dan dekripsi 64KB pertamanya
+                // Jika ExoPlayer meminta data dari awal, kita intersepsi dan dekripsi 64KB pertamanya
                 val decBody = object : ResponseBody() {
                     override fun contentType() = body.contentType()
                     override fun contentLength() = body.contentLength()
@@ -498,7 +498,9 @@ class LayarKacaProvider : MainAPI() {
                     override fun source(): BufferedSource {
                         return object : ForwardingSource(body.source()) {
                             var currentOffset = reqStart
-                            val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                            
+                            // PERBAIKAN FATAL: Gunakan 32 byte biner dari String, BUKAN hex decoder! (AES-256)
+                            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
                             val secretKey = SecretKeySpec(keyBytes, "AES")
                             val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
                             
@@ -522,7 +524,7 @@ class LayarKacaProvider : MainAPI() {
                                 
                                 if (bytesRead != -1L) {
                                     if (currentOffset < 65536) {
-                                        // Berapa byte yang harus didekripsi di dalam bongkahan ini?
+                                        // Berapa byte yang masih terenkripsi di dalam bongkahan ini?
                                         val bytesToDecrypt = minOf(bytesRead, 65536 - currentOffset).toInt()
                                         val dataToDecrypt = buffer.readByteArray(bytesToDecrypt.toLong())
                                         
@@ -536,7 +538,7 @@ class LayarKacaProvider : MainAPI() {
                                             sink.write(buffer, buffer.size)
                                         }
                                     } else {
-                                        // 100% murni (sudah lewat blok enkripsi 64KB)
+                                        // 100% murni (sudah lewat blok enkripsi 64KB Hydrax)
                                         sink.write(buffer, buffer.size)
                                     }
                                     currentOffset += bytesRead
