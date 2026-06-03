@@ -13,12 +13,10 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Request
-import okhttp3.Response
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -33,7 +31,7 @@ import kotlin.concurrent.thread
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-BUFFERING)
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-LEAK)
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
@@ -60,7 +58,7 @@ object HydraxProxy {
     }
 
     private fun handleClient(client: Socket) {
-        var response: Response? = null // Mencegah kebocoran koneksi OkHttp
+        var call: okhttp3.Call? = null // Variabel krusial untuk membunuh koneksi!
         try {
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
@@ -98,13 +96,14 @@ object HydraxProxy {
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity") // Mencegah modifikasi data oleh OkHttp
                 .apply {
                     if (rangeHeader != null) header("Range", rangeHeader)
                 }
                 .build()
 
-            response = app.baseClient.newCall(request).execute()
+            // Eksekusi pemanggilan HTTP
+            call = app.baseClient.newCall(request)
+            val response = call.execute()
 
             if (!response.isSuccessful) {
                 return
@@ -139,12 +138,8 @@ object HydraxProxy {
                 if (offset < 65536) {
                     val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
                     val decrypted = cipher.update(buffer, 0, n)
-                    if (decrypted != null) {
-                        output.write(decrypted)
-                    }
-                    if (n < bytesRead) {
-                        output.write(buffer, n, bytesRead - n)
-                    }
+                    if (decrypted != null) output.write(decrypted)
+                    if (n < bytesRead) output.write(buffer, n, bytesRead - n)
                 } else {
                     output.write(buffer, 0, bytesRead)
                 }
@@ -152,10 +147,10 @@ object HydraxProxy {
             }
             output.flush()
         } catch (e: Exception) {
-            // Wajar terjadi saat ExoPlayer memutus koneksi karena user melakukan SEEEK (Lompat Menit)
+            // Wajar, ExoPlayer memutus socket karena kamu melakukan SEEEK / Lompat Menit
         } finally {
-            // PERBAIKAN FATAL: Membunuh koneksi OkHttp yang lama agar tidak nyangkut (buffering forever)
-            try { response?.close() } catch(e: Exception) {}
+            // OBAT ANTI-BUFFERING: Bantai request OkHttp lama agar kolam koneksi kosong!
+            try { call?.cancel() } catch(e: Exception) {}
             try { client.close() } catch(e: Exception) {}
         }
     }
@@ -196,7 +191,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (PROXY LOKAL BYPASS)
+// EXTRACTOR 1: ABYSS / HYDRAX
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -219,7 +214,7 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
+            val decodedDatas = String(Base64.decode(datas, Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
@@ -247,7 +242,6 @@ open class AbyssExtractor : ExtractorApi() {
 
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
-                val codec = src["codec"]?.toString() ?: "h264"
                 val path = src["path"]?.toString() ?: ""
                 val baseUrl = src["url"]?.toString() ?: ""
 
@@ -260,18 +254,18 @@ open class AbyssExtractor : ExtractorApi() {
 
                     HydraxProxy.start()
 
-                    val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+                    val encodedUrl = Base64.encodeToString(srcUrl.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
                     val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
                     callback(
                         newExtractorLink(
-                            source = name,
-                            name = "$name HD $label [$codec]",
+                            source = name, // "Abyss"
+                            name = name,   // Menggunakan NAMA YANG SAMA ("Abyss") agar UI CloudStream menumpuknya (Rapi 1 Sumber!)
                             url = localProxyUrl,
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = pageRef
-                            this.quality = labelToQuality(label)
+                            this.quality = labelToQuality(label) // Kualitas inilah yang akan membedakan daftarnya
                         }
                     )
                 }
@@ -414,14 +408,14 @@ open class CastExtractor : ExtractorApi() {
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    private fun b64url(b: ByteArray): String = android.util.Base64.encodeToString(b, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+    private fun b64url(b: ByteArray): String = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     private fun b64urlDecode(s: String): ByteArray {
         var standardized = s.replace("-", "+").replace("_", "/")
         val padding = 4 - (standardized.length % 4)
         if (padding != 4) {
             standardized += "=".repeat(padding)
         }
-        return android.util.Base64.decode(standardized, android.util.Base64.DEFAULT)
+        return Base64.decode(standardized, Base64.DEFAULT)
     }
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
