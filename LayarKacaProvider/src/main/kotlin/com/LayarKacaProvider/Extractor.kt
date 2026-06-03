@@ -13,10 +13,13 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Request
+import okhttp3.Response
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
+import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -31,7 +34,7 @@ import kotlin.concurrent.thread
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-LEAK)
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF)
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
@@ -58,8 +61,11 @@ object HydraxProxy {
     }
 
     private fun handleClient(client: Socket) {
-        var call: okhttp3.Call? = null // Variabel krusial untuk membunuh koneksi!
+        var response: Response? = null
         try {
+            // Atur timeout agar socket tidak nyangkut saat ExoPlayer lambat merespons
+            client.soTimeout = 15000 
+            
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -91,32 +97,35 @@ object HydraxProxy {
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
+            // 1. Tembak request ke Hydrax
             val request = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
+                .header("Accept-Encoding", "identity") // Mencegah gzip yang merusak ukuran byte
                 .apply {
                     if (rangeHeader != null) header("Range", rangeHeader)
                 }
                 .build()
 
-            // Eksekusi pemanggilan HTTP
-            call = app.baseClient.newCall(request)
-            val response = call.execute()
+            response = app.baseClient.newCall(request).execute()
 
-            if (!response.isSuccessful) {
-                return
-            }
+            if (!response.isSuccessful) return
 
+            // 2. Tulis Header Balasan ke ExoPlayer
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) || key.equals("content-encoding", true) || key.equals("connection", true)) continue
+                if (key.equals("transfer-encoding", true) || 
+                    key.equals("content-encoding", true) || 
+                    key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
-            output.write("\r\n".toByteArray())
+            // Menambahkan header koneksi agar ExoPlayer tahu stream tetap dijaga
+            output.write("Connection: close\r\n\r\n".toByteArray())
 
+            // 3. Persiapkan Mesin Dekripsi AES-256
             val body = response.body ?: return
             val inputStream = body.byteStream()
 
@@ -126,32 +135,39 @@ object HydraxProxy {
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
+            // Sinkronisasi mesin AES jika ExoPlayer minta potong kompas
             if (reqStart > 0 && reqStart < 65536) {
                 cipher.update(ByteArray(reqStart.toInt()))
             }
 
+            // 4. Stream Data dengan Presisi Tinggi
             var offset = reqStart
-            val buffer = ByteArray(32768)
+            val buffer = ByteArray(32768) // 32KB buffer optimal untuk ExoPlayer
             var bytesRead: Int
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (offset < 65536) {
                     val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
                     val decrypted = cipher.update(buffer, 0, n)
-                    if (decrypted != null) output.write(decrypted)
-                    if (n < bytesRead) output.write(buffer, n, bytesRead - n)
+                    if (decrypted != null) {
+                        output.write(decrypted)
+                    }
+                    if (n < bytesRead) {
+                        output.write(buffer, n, bytesRead - n)
+                    }
                 } else {
                     output.write(buffer, 0, bytesRead)
                 }
                 offset += bytesRead
+                output.flush() // Mencegah penumpukan data di RAM (Obat EOF)
             }
-            output.flush()
+        } catch (e: SocketException) {
+            // Wajar terjadi saat user memutar/seek video secara brutal
         } catch (e: Exception) {
-            // Wajar, ExoPlayer memutus socket karena kamu melakukan SEEEK / Lompat Menit
+            // Abaikan error putus streaming
         } finally {
-            // OBAT ANTI-BUFFERING: Bantai request OkHttp lama agar kolam koneksi kosong!
-            try { call?.cancel() } catch(e: Exception) {}
-            try { client.close() } catch(e: Exception) {}
+            try { response?.close() } catch (e: Exception) {}
+            try { client.close() } catch (e: Exception) {}
         }
     }
 }
@@ -191,7 +207,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX
+// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -214,7 +230,7 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            val decodedDatas = String(Base64.decode(datas, Base64.DEFAULT), Charsets.ISO_8859_1)
+            val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
@@ -242,6 +258,7 @@ open class AbyssExtractor : ExtractorApi() {
 
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
+                val codec = src["codec"]?.toString() ?: "h264"
                 val path = src["path"]?.toString() ?: ""
                 val baseUrl = src["url"]?.toString() ?: ""
 
@@ -252,20 +269,21 @@ open class AbyssExtractor : ExtractorApi() {
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
+                    // Menghidupkan Server Proxy Lokal
                     HydraxProxy.start()
 
-                    val encodedUrl = Base64.encodeToString(srcUrl.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
+                    val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
                     val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
                     callback(
                         newExtractorLink(
-                            source = name, // "Abyss"
-                            name = name,   // Menggunakan NAMA YANG SAMA ("Abyss") agar UI CloudStream menumpuknya (Rapi 1 Sumber!)
+                            source = name, // "Abyss" -> Rapi 1 Sumber
+                            name = name,
                             url = localProxyUrl,
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = pageRef
-                            this.quality = labelToQuality(label) // Kualitas inilah yang akan membedakan daftarnya
+                            this.quality = labelToQuality(label)
                         }
                     )
                 }
@@ -408,14 +426,14 @@ open class CastExtractor : ExtractorApi() {
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    private fun b64url(b: ByteArray): String = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    private fun b64url(b: ByteArray): String = android.util.Base64.encodeToString(b, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
     private fun b64urlDecode(s: String): ByteArray {
         var standardized = s.replace("-", "+").replace("_", "/")
         val padding = 4 - (standardized.length % 4)
         if (padding != 4) {
             standardized += "=".repeat(padding)
         }
-        return Base64.decode(standardized, Base64.DEFAULT)
+        return android.util.Base64.decode(standardized, android.util.Base64.DEFAULT)
     }
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
