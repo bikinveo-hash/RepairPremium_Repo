@@ -110,6 +110,18 @@ class LayarKacaProvider : MainAPI() {
         return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}"), "")
     }
 
+    private val searchBaseUrl = "https://gudangvape.com"
+
+    // Data class untuk parse episode JSON secara proper (fix index mismatch)
+    private data class EpisodeJsonItem(
+        @JsonProperty("slug")         val slug: String?,
+        @JsonProperty("title")        val title: String?,
+        @JsonProperty("episode_no")   val episode_no: Int?,
+        @JsonProperty("s")            val s: Int?,
+        @JsonProperty("poster")       val poster: String?,
+        @JsonProperty("description")  val description: String?,
+        @JsonProperty("release_date") val release_date: String?
+    )
     data class TmdbSearchResponse(val results: List<TmdbResult>?)
     data class TmdbResult(
         val backdrop_path: String?,
@@ -168,7 +180,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val searchUrl = "https://gudangvape.com/search.php?s=$query&page=$page"
+        val searchUrl = "$searchBaseUrl/search.php?s=$query&page=$page"
         val headers = mapOf(
             "Origin"     to mainUrl,
             "Referer"    to "$mainUrl/",
@@ -209,7 +221,7 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse? {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
         var document = response.document
@@ -262,23 +274,40 @@ class LayarKacaProvider : MainAPI() {
         val jsonScript = document.select("script#season-data").html()
 
         if (jsonScript.isNotBlank()) {
-            val slugs  = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val epNos  = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-            val sNos   = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-            val posters = Regex("\"poster\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val plots   = Regex("\"description\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val dates   = Regex("\"release_date\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            // Parse sebagai array of object agar tiap field terikat ke episode yang sama (anti index mismatch)
+            try {
+                val episodeItems = mapper.readValue(
+                    jsonScript,
+                    mapper.typeFactory.constructCollectionType(List::class.java, EpisodeJsonItem::class.java)
+                ) as? List<EpisodeJsonItem>
 
-            for (i in slugs.indices) {
-                episodes.add(newEpisode(fixUrl(slugs[i])) {
-                    this.name        = titles.getOrNull(i) ?: "Episode ${i + 1}"
-                    this.season      = sNos.getOrNull(i)
-                    this.episode     = epNos.getOrNull(i)
-                    this.posterUrl   = posters.getOrNull(i)?.takeIf { it.isNotBlank() } ?: fallbackPoster
-                    this.description = plots.getOrNull(i)
-                    addDate(dates.getOrNull(i), format = "yyyy-MM-dd")
-                })
+                episodeItems?.forEachIndexed { i, item ->
+                    val slug = item.slug?.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+                    episodes.add(newEpisode(fixUrl(slug)) {
+                        this.name        = item.title?.takeIf { it.isNotBlank() } ?: "Episode ${i + 1}"
+                        this.season      = item.s
+                        this.episode     = item.episode_no
+                        this.posterUrl   = item.poster?.takeIf { it.isNotBlank() } ?: fallbackPoster
+                        this.description = item.description
+                        if (!item.release_date.isNullOrBlank()) addDate(item.release_date, format = "yyyy-MM-dd")
+                    })
+                }
+            } catch (e: Exception) {
+                // Fallback: kalau JSON tidak valid sebagai array, coba object tunggal
+                try {
+                    val single = mapper.readValue(jsonScript, EpisodeJsonItem::class.java)
+                    val slug = single.slug?.takeIf { it.isNotBlank() }
+                    if (slug != null) {
+                        episodes.add(newEpisode(fixUrl(slug)) {
+                            this.name        = single.title?.takeIf { it.isNotBlank() } ?: "Episode 1"
+                            this.season      = single.s
+                            this.episode     = single.episode_no
+                            this.posterUrl   = single.poster?.takeIf { it.isNotBlank() } ?: fallbackPoster
+                            this.description = single.description
+                            if (!single.release_date.isNullOrBlank()) addDate(single.release_date, format = "yyyy-MM-dd")
+                        })
+                    }
+                } catch (e2: Exception) { /* JSON invalid, skip */ }
             }
         }
 
@@ -312,12 +341,24 @@ class LayarKacaProvider : MainAPI() {
             }
         } catch (e: Exception) {}
 
-        var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
-        if (trailerUrl.isNullOrEmpty()) trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
-        if (trailerUrl.isNullOrEmpty()) trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        val ytIdRegex      = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
-        val ytId           = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
-        val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
+        // Trailer extraction — cari dari berbagai sumber, normalize ke full YouTube URL
+        val ytIdRegex = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val finalTrailerUrl: String? = run {
+            // Sumber 1: iframe embed langsung
+            val iframeSrc = document.select("iframe[src*='youtube.com'], iframe[src*='youtu.be']").attr("src")
+            if (iframeSrc.isNotBlank()) {
+                ytIdRegex.find(iframeSrc)?.groupValues?.get(1)?.let { return@run "https://www.youtube.com/watch?v=$it" }
+            }
+            // Sumber 2: link tombol trailer
+            val btnHref = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
+            if (btnHref.isNotBlank()) {
+                ytIdRegex.find(btnHref)?.groupValues?.get(1)?.let { return@run "https://www.youtube.com/watch?v=$it" }
+            }
+            // Sumber 3: scan seluruh HTML — bisa dapat embed URL lengkap atau hanya ID mentah
+            val htmlContent = document.html()
+            ytIdRegex.find(htmlContent)?.groupValues?.get(1)?.let { return@run "https://www.youtube.com/watch?v=$it" }
+            null
+        }
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
@@ -389,12 +430,15 @@ class LayarKacaProvider : MainAPI() {
         val rawSources = mutableListOf<String>()
         playerLinks.forEach { encryptedString ->
             var decoded = ""
-            if (encryptedString.startsWith("http") || encryptedString.startsWith("//")) {
+            if (encryptedString.startsWith("http://") || encryptedString.startsWith("https://") || encryptedString.startsWith("//")) {
                 decoded = encryptedString
             } else {
                 for (key in possibleKeys) {
                     val attempt = decryptRC4(key, encryptedString)
-                    if (attempt.startsWith("http") || attempt.startsWith("//")) {
+                    // Validasi lebih ketat: harus URL valid dengan domain, bukan sekadar dimulai "http"
+                    if ((attempt.startsWith("http://") || attempt.startsWith("https://")) &&
+                        attempt.length > 12 &&
+                        attempt.contains(".")) {
                         decoded = attempt; break
                     }
                 }
@@ -467,7 +511,8 @@ class LayarKacaProvider : MainAPI() {
                     while (response.code == 429 && retries < maxRetries) {
                         response.close()
                         val delay = baseDelay * (retries + 1)
-                        Thread.sleep(delay)
+                        // Gunakan kotlinx.coroutines.runBlocking agar tidak block OkHttp thread pool permanen
+                        kotlinx.coroutines.runBlocking { kotlinx.coroutines.delay(delay) }
                         response = chain.proceed(originalRequest)
                         retries++
                     }
