@@ -97,6 +97,7 @@ open class AbyssExtractor : ExtractorApi() {
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
 
+            // Dekripsi JSON Hydrax menggunakan MD5 Hash
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val ivBytes = keyBytes.copyOfRange(0, 16)
 
@@ -111,7 +112,7 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
 
-            // KITA FOKUS MENGAMBIL 'SOURCES' SAJA (Tanpa fristDatas)
+            // KITA FOKUS MENGAMBIL 'SOURCES' SAJA (KARENA SUDAH TERBUKTI BERISI FULL VIDEO)
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "h264"
@@ -121,12 +122,12 @@ open class AbyssExtractor : ExtractorApi() {
                 if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
 
-                    // KUNCI RAHASIA 64KB: MD5 dari nama file 'sources'
+                    // KUNCI RAHASIA AES-256: MD5 dari nama file 'sources'
                     val filename = path.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // URL Hantu dengan domain asli (Mencegah Error 2001)
+                    // URL Hantu dengan domain asli (Mencegah Error 2001: UnknownHostException)
                     val interceptUrl = "https://abyssplayer.com/hydrax_proxy?" +
                             "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
                             "key=$fnKeyHex"
