@@ -406,19 +406,16 @@ class LayarKacaProvider : MainAPI() {
         val allSources = rawSources.distinct().map { fixUrl(it) }
         
         allSources.forEach { url ->
-            // Routing TurboVIP
             if (url.contains("/iframe/turbovip/")) {
                 val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
                 Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
-            // Routing HowNetwork (P2P)
             else if (url.contains("/iframe/p2p/")) {
                 val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
                 HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
                     ?.forEach { callback.invoke(it) }
             } 
-            // Routing CAST
             else if (url.contains("/iframe/cast/")) {
                 val id = url.substringAfter("/iframe/cast/").substringBefore("/")
                 val castUrl = "https://weneverbeenfree.com/e/$id"
@@ -428,7 +425,6 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing HYDRAX
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abyssplayer.com/?v=$id"
@@ -443,7 +439,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // MENCEGAH INTERCEPTOR MEMBLOCK PROXY LOKAL KITA
+    // MENCEGAH INTERCEPTOR MEM-BLOCK PROXY LOKAL
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
@@ -451,6 +447,11 @@ class LayarKacaProvider : MainAPI() {
         return Interceptor { chain ->
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
+            
+            // Bypass Localhost agar tidak diubah-ubah headernya
+            if (url.contains("127.0.0.1")) {
+                return@Interceptor chain.proceed(originalRequest)
+            }
             
             when {
                 url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
