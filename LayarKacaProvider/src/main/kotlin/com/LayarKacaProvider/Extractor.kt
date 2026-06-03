@@ -62,7 +62,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (THE 64KB BYPASS)
+// EXTRACTOR 1: ABYSS / HYDRAX (THE 64KB AES-256 BYPASS)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -70,7 +70,7 @@ open class AbyssExtractor : ExtractorApi() {
     override val requiresReferer = true
 
     private fun baseHeaders(referer: String): Map<String, String> = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
         "Referer"    to referer,
         "Origin"     to mainUrl,
         "Accept"     to "*/*"
@@ -110,27 +110,23 @@ open class AbyssExtractor : ExtractorApi() {
 
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
-            val fristDatas = mp4?.get("fristDatas") as? List<Map<String, Any>>
 
+            // KITA FOKUS MENGAMBIL 'SOURCES' SAJA (Tanpa fristDatas)
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "h264"
                 val path = src["path"]?.toString() ?: ""
                 val baseUrl = src["url"]?.toString() ?: ""
-                val resId = src["res_id"]?.toString()
 
-                val fd = fristDatas?.find { it["res_id"]?.toString() == resId }
-                val fdUrl = fd?.get("url")?.toString()
-
-                if (path.isNotEmpty() && baseUrl.isNotEmpty() && fdUrl != null) {
+                if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
 
-                    // KUNCI RAHASIA 64KB: MD5 dari nama file .fd
-                    val filename = fdUrl.substringAfterLast("/")
+                    // KUNCI RAHASIA 64KB: MD5 dari nama file 'sources'
+                    val filename = path.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // URL Proxy (Domain asli agar DNS ExoPlayer tidak Error 2001)
+                    // URL Hantu dengan domain asli (Mencegah Error 2001)
                     val interceptUrl = "https://abyssplayer.com/hydrax_proxy?" +
                             "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
                             "key=$fnKeyHex"
