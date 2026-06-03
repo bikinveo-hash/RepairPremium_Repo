@@ -8,9 +8,17 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.Interceptor
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.BufferedSource
+import okio.ForwardingSource
+import okio.buffer
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -47,9 +55,6 @@ class LayarKacaProvider : MainAPI() {
         } catch (e: Exception) { "" }
     }
 
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
     private fun getCleanTitle(title: String): String {
         var clean = title.replace(Regex("(?i)(nonton serial|nonton film|nonton|sub indo|di lk21|lk21|layarkaca21)"), "")
         clean = clean.replace(Regex("(?i)\\bseason\\s*\\d+.*"), "")
@@ -65,9 +70,6 @@ class LayarKacaProvider : MainAPI() {
         return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}"), "")
     }
 
-    // =========================================================================
-    // DATA CLASSES
-    // =========================================================================
     data class TmdbSearchResponse(val results: List<TmdbResult>?)
     data class TmdbResult(
         val backdrop_path: String?,
@@ -87,13 +89,9 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("type") val type: String?,
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("quality") val quality: String?,
-        @JsonProperty("rating") val rating: Double?, 
         @JsonProperty("year") val year: Int?
     )
 
-    // =========================================================================
-    // MAIN PAGE
-    // =========================================================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(mainUrl).document
         val items = ArrayList<HomePageList>()
@@ -159,9 +157,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // =========================================================================
-    // SEARCH
-    // =========================================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val searchUrl = "https://gudangvape.com/search.php?s=$query&page=$page"
         val headers = mapOf(
@@ -206,15 +201,11 @@ class LayarKacaProvider : MainAPI() {
 
                         if (type == TvType.TvSeries) {
                             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = item.year
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         } else {
                             newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
-                                this.posterUrl = posterUrl
-                                this.quality = quality
-                                this.year = item.year
+                                this.posterUrl = posterUrl; this.quality = quality; this.year = item.year
                             }
                         }
                     }
@@ -222,18 +213,12 @@ class LayarKacaProvider : MainAPI() {
             }
 
             val totalPages = response.totalPages ?: 1
-            val hasNext = page < totalPages
-
-            return newSearchResponseList(results, hasNext)
-            
+            return newSearchResponseList(results, page < totalPages)
         } catch (e: Exception) {
             return null
         }
     }
 
-    // =========================================================================
-    // LOAD
-    // =========================================================================
     override suspend fun load(url: String): LoadResponse {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
@@ -366,9 +351,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // =========================================================================
-    // LOAD LINKS
-    // =========================================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -454,7 +436,7 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing Hydrax (Abyss) menggunakan Native Extractor
+            // Routing HYDRAX (Menangkap URL Interceptor)
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abyssplayer.com/?v=$id"
@@ -469,18 +451,112 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR
+    // VIDEO INTERCEPTOR (JANTUNG PENYATU & DEKRIPTOR HYDRAX)
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
         return Interceptor { chain ->
             val originalRequest = chain.request()
-            val url             = originalRequest.url.toString()
+            val url = originalRequest.url.toString()
 
+            // ── BYPASS HYDRAX (.fd + Sources Merger & Decrypter) ──
+            if (url.contains("hydrax.intercept")) {
+                val uri = android.net.Uri.parse(url)
+                val fdUrl = uri.getQueryParameter("fd")!!
+                val srcUrl = uri.getQueryParameter("src")!!
+                val fsize = uri.getQueryParameter("fsize")!!.toLong()
+                val ssize = uri.getQueryParameter("ssize")!!.toLong()
+                val keyHex = uri.getQueryParameter("key")!!
+                val totalSize = fsize + ssize
+
+                val rangeHeader = originalRequest.header("Range")
+                var reqStart = 0L
+                if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                    reqStart = rangeHeader.substring(6).split("-")[0].toLongOrNull() ?: 0L
+                }
+
+                // Menentukan apakah ExoPlayer sedang meminta Kepala (.fd) atau Badan (src)
+                val isFd = reqStart < fsize
+                val targetUrl = if (isFd) fdUrl else srcUrl
+                val actualStart = if (isFd) reqStart else reqStart - fsize
+                
+                // Meneruskan permintaan ExoPlayer ke server Hydrax yang asli
+                val newRequest = originalRequest.newBuilder()
+                    .url(targetUrl)
+                    .header("Range", "bytes=$actualStart-")
+                    .header("Origin", "https://abyssplayer.com")
+                    .header("Referer", "https://abyssplayer.com/")
+                    .header("User-Agent", mobileUA)
+                    .build()
+
+                val response = chain.proceed(newRequest)
+                if (!response.isSuccessful) return@Interceptor response
+
+                val body = response.body ?: return@Interceptor response
+
+                // Memanipulasi Content-Range agar ExoPlayer mengira ini adalah 1 file utuh
+                val virtualStart = reqStart
+                val virtualEnd = if (isFd) fsize - 1 else totalSize - 1
+                val newContentLength = virtualEnd - virtualStart + 1
+                val newContentRange = "bytes $virtualStart-$virtualEnd/$totalSize"
+
+                val builder = response.newBuilder()
+                    .code(206)
+                    .message("Partial Content")
+                    .header("Content-Range", newContentRange)
+                    .header("Content-Length", newContentLength.toString())
+
+                // ── SIHIR DEKRIPSI ON-THE-FLY UNTUK KEPALA VIDEO ──
+                if (isFd) {
+                    val decBody = object : ResponseBody() {
+                        override fun contentType() = body.contentType()
+                        override fun contentLength() = newContentLength
+                        override fun source(): BufferedSource {
+                            return object : ForwardingSource(body.source()) {
+                                // Array byte kunci dari hex string MD5
+                                val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                val secretKey = SecretKeySpec(keyBytes, "AES")
+                                val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+                                val cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
+                                    init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+                                    // Melewati (skip) byte ke offset saat ini agar AES-CTR tetap sinkron
+                                    if (reqStart > 0) {
+                                        val skipBuffer = ByteArray(4096)
+                                        var skipped = 0L
+                                        while (skipped < reqStart) {
+                                            val toSkip = minOf(4096L, reqStart - skipped).toInt()
+                                            update(skipBuffer, 0, toSkip)
+                                            skipped += toSkip
+                                        }
+                                    }
+                                }
+
+                                override fun read(sink: Buffer, byteCount: Long): Long {
+                                    val buffer = Buffer()
+                                    val bytesRead = super.read(buffer, byteCount)
+                                    if (bytesRead != -1L) {
+                                        val dataToDecrypt = buffer.readByteArray()
+                                        val decrypted = cipher.update(dataToDecrypt)
+                                        if (decrypted != null) {
+                                            sink.write(decrypted)
+                                        }
+                                    }
+                                    return bytesRead
+                                }
+                            }.buffer()
+                        }
+                    }
+                    builder.body(decBody)
+                } else {
+                    builder.body(body)
+                }
+
+                return@Interceptor builder.build()
+            }
+            
             when {
                 // ── Turbovidhls & etvp & hownetwork ──────
-                // (Perhatikan sssrr.org sudah DIBUANG dari blok ini agar tidak tersabotase!)
                 url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
@@ -489,19 +565,7 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
-                
-                // ── Hydrax / AbyssCDN (R2 Direct URL) ──────
-                // Ini akan memberikan kunci masuk yang benar (abyssplayer.com) untuk server Hydrax
-                url.contains("sssrr.org") || url.contains("iamcdn.net") -> {
-                    val newRequest = originalRequest.newBuilder()
-                        .header("User-Agent", mobileUA)
-                        .header("Origin",  "https://abyssplayer.com")
-                        .header("Referer", "https://abyssplayer.com/")
-                        .build()
-                    chain.proceed(newRequest)
-                }
-                
-                // ── Google Drive CDN: retry dengan exponential backoff ───────
+                // ── Google Drive CDN ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
