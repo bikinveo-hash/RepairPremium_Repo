@@ -436,7 +436,7 @@ class LayarKacaProvider : MainAPI() {
                     e.printStackTrace()
                 }
             }
-            // Routing HYDRAX (Menangkap URL Interceptor)
+            // Routing HYDRAX
             else if (url.contains("/iframe/hydrax/")) {
                 val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                 val hydraxUrl = "https://abyssplayer.com/?v=$id"
@@ -472,7 +472,6 @@ class LayarKacaProvider : MainAPI() {
                     reqStart = rangeHeader.substring(6).split("-")[0].toLongOrNull() ?: 0L
                 }
 
-                // Meneruskan permintaan ExoPlayer persis apa adanya ke URL Source yang asli
                 val newRequest = originalRequest.newBuilder()
                     .url(srcUrl)
                     .header("Origin", "https://abyssplayer.com")
@@ -485,12 +484,11 @@ class LayarKacaProvider : MainAPI() {
 
                 val body = response.body ?: return@Interceptor response
 
-                // Jika ExoPlayer melompat (seek) melewati 64KB pertama, berikan data langsung tanpa sentuh AES!
+                // Jika minta data di atas 64KB, langsung teruskan (murni)
                 if (reqStart >= 65536) {
                     return@Interceptor response
                 }
 
-                // Jika ExoPlayer meminta data dari awal, kita intersepsi dan dekripsi 64KB pertamanya
                 val decBody = object : ResponseBody() {
                     override fun contentType() = body.contentType()
                     override fun contentLength() = body.contentLength()
@@ -499,14 +497,14 @@ class LayarKacaProvider : MainAPI() {
                         return object : ForwardingSource(body.source()) {
                             var currentOffset = reqStart
                             
-                            // PERBAIKAN FATAL: Gunakan 32 byte biner dari String, BUKAN hex decoder! (AES-256)
+                            // PERBAIKAN FATAL: Konversi String murni ke 32-Byte (AES-256)
                             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
                             val secretKey = SecretKeySpec(keyBytes, "AES")
                             val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
                             
                             val cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
                                 init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-                                // Sinkronisasi mesin AES-CTR jika ExoPlayer melompat ke tengah 64KB
+                                // Sinkronisasi counter AES-CTR jika stream terpotong di tengah jalan
                                 if (reqStart > 0) {
                                     val skipBuffer = ByteArray(4096)
                                     var skipped = 0L
@@ -524,7 +522,6 @@ class LayarKacaProvider : MainAPI() {
                                 
                                 if (bytesRead != -1L) {
                                     if (currentOffset < 65536) {
-                                        // Berapa byte yang masih terenkripsi di dalam bongkahan ini?
                                         val bytesToDecrypt = minOf(bytesRead, 65536 - currentOffset).toInt()
                                         val dataToDecrypt = buffer.readByteArray(bytesToDecrypt.toLong())
                                         
@@ -533,12 +530,10 @@ class LayarKacaProvider : MainAPI() {
                                             sink.write(decrypted)
                                         }
                                         
-                                        // Sisa byte yang tidak dienkripsi ditulis murni
                                         if (buffer.size > 0) {
                                             sink.write(buffer, buffer.size)
                                         }
                                     } else {
-                                        // 100% murni (sudah lewat blok enkripsi 64KB Hydrax)
                                         sink.write(buffer, buffer.size)
                                     }
                                     currentOffset += bytesRead
@@ -552,7 +547,6 @@ class LayarKacaProvider : MainAPI() {
             }
             
             when {
-                // ── Turbovidhls & etvp & hownetwork ──────
                 url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
@@ -561,7 +555,6 @@ class LayarKacaProvider : MainAPI() {
                         .build()
                     chain.proceed(newRequest)
                 }
-                // ── Google Drive CDN ───────
                 url.contains("googleusercontent.com") -> {
                     var response  = chain.proceed(originalRequest)
                     var retries   = 0
