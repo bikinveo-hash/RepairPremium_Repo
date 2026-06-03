@@ -25,6 +25,8 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
 // =========================================================================
 // DATA CLASSES
 // =========================================================================
@@ -59,10 +61,8 @@ data class CastSource(
     @JsonProperty("type") val type: String?
 )
 
-val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE BYPASS AES-CTR)
+// EXTRACTOR 1: ABYSS / HYDRAX (THE 64KB BYPASS)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -121,23 +121,19 @@ open class AbyssExtractor : ExtractorApi() {
 
                 val fd = fristDatas?.find { it["res_id"]?.toString() == resId }
                 val fdUrl = fd?.get("url")?.toString()
-                val fsize = fd?.get("partSize")?.toString()?.toLongOrNull()
-                val totalSize = fd?.get("size")?.toString()?.toLongOrNull()
 
-                if (path.isNotEmpty() && baseUrl.isNotEmpty() && fdUrl != null && fsize != null && totalSize != null) {
+                if (path.isNotEmpty() && baseUrl.isNotEmpty() && fdUrl != null) {
                     val srcUrl = "$baseUrl/$path"
-                    val ssize = totalSize - fsize
 
-                    // KUNCI RAHASIA: MD5 dari nama file .fd
+                    // KUNCI RAHASIA 64KB: MD5 dari nama file .fd
                     val filename = fdUrl.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // URL Hantu Interceptor
-                    val interceptUrl = "https://hydrax.intercept/play?" +
-                            "fd=${URLEncoder.encode(fdUrl, "UTF-8")}&" +
+                    // URL Proxy (Domain asli agar DNS ExoPlayer tidak Error 2001)
+                    val interceptUrl = "https://abyssplayer.com/hydrax_proxy?" +
                             "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
-                            "fsize=$fsize&ssize=$ssize&key=$fnKeyHex"
+                            "key=$fnKeyHex"
 
                     callback(
                         newExtractorLink(
