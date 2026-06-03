@@ -132,136 +132,225 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            client.soTimeout = 15000 
-            
-            val reader = BufferedReader(InputStreamReader(client.getInputStream()))
-            val output = client.getOutputStream()
+            // Timeout agresif: 30 detik untuk baca header, cegah hang pada persistent connection
+            client.soTimeout = 30000
 
-            val requestLine = reader.readLine() ?: return
-            val parts = requestLine.split(" ")
-            if (parts.size < 2) return
-            val path = parts[1]
+            val rawInput  = client.getInputStream()
+            val output    = client.getOutputStream()
 
+            // ---------------------------------------------------------------
+            // FIX: Baca HTTP header byte-per-byte sampai \r\n\r\n.
+            // BufferedReader.readLine() berbahaya di sini karena ia akan terus
+            // menunggu data dari socket (blocking) pada HTTP/1.1 keep-alive
+            // connection — ExoPlayer tidak selalu menutup koneksi setelah header.
+            // Dengan membaca sampai \r\n\r\n kita tahu persis kapan header selesai.
+            // ---------------------------------------------------------------
+            val headerBuf  = StringBuilder()
+            val byteArr    = ByteArray(1)
+            var lastFour   = ""
+            var headerDone = false
+            val maxHeader  = 8192 // batas maksimal header 8KB
+            while (headerBuf.length < maxHeader) {
+                val n = rawInput.read(byteArr)
+                if (n == -1) break
+                val ch = byteArr[0].toInt().toChar()
+                headerBuf.append(ch)
+                lastFour = (lastFour + ch).takeLast(4)
+                if (lastFour == "\r\n\r\n") { headerDone = true; break }
+            }
+            if (!headerDone) return
+
+            // Parse request line dan semua header
+            val headerLines = headerBuf.toString().split("\r\n")
+            val requestLine = headerLines.firstOrNull() ?: return
+            val reqParts    = requestLine.split(" ")
+            if (reqParts.size < 2) return
+            val path = reqParts[1]
             if (!path.contains("?url=")) return
-            
-            val query = path.substringAfter("?")
+
+            val query  = path.substringAfter("?")
             val params = query.split("&").associate { param ->
                 val eqIdx = param.indexOf('=')
                 if (eqIdx == -1) param to ""
                 else param.substring(0, eqIdx) to param.substring(eqIdx + 1)
             }
-            
-            val encodedUrl = params["url"] ?: return
-            val keyHex = params["key"] ?: return
-            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
+            val encodedUrl = params["url"] ?: return
+            val keyHex     = params["key"] ?: return
+            val realUrl    = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+
+            // Ambil Range header dari request ExoPlayer
             var rangeHeader: String? = null
-            while (true) {
-                val line = reader.readLine()
-                if (line.isNullOrEmpty()) break
+            for (line in headerLines.drop(1)) {
                 if (line.lowercase().startsWith("range:")) {
                     rangeHeader = line.substringAfter(":").trim()
+                    break
                 }
             }
 
-            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            // reqStart = byte pertama yang diminta player
+            val reqStart = rangeHeader
+                ?.removePrefix("bytes=")
+                ?.split("-")?.getOrNull(0)
+                ?.toLongOrNull() ?: 0L
 
-            val request = Request.Builder()
+            // ---------------------------------------------------------------
+            // FIX: Kirim Range request ke CDN Hydrax.
+            // Ada 3 skenario response CDN:
+            //   (A) 206 Partial Content + data dari reqStart  → ideal, langsung pakai
+            //   (B) 416 Range Not Satisfiable                 → retry tanpa Range header,
+            //                                                    lalu skip manual ke reqStart
+            //   (C) 200 OK (CDN abaikan Range, kirim dari 0) → skip manual ke reqStart
+            // ---------------------------------------------------------------
+            fun buildCdnRequest(withRange: Boolean) = Request.Builder()
                 .url(realUrl)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer", "https://abyssplayer.com/")
-                .header("Origin", "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity")
-                .apply {
-                    if (rangeHeader != null) header("Range", rangeHeader)
-                }
+                .header("User-Agent",       "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer",          "https://abyssplayer.com/")
+                .header("Origin",           "https://abyssplayer.com")
+                .header("Accept-Encoding",  "identity")
+                .apply { if (withRange && rangeHeader != null) header("Range", rangeHeader) }
                 .build()
 
-            response = app.baseClient.newCall(request).execute()
+            response = app.baseClient.newCall(buildCdnRequest(withRange = true)).execute()
 
-            if (!response.isSuccessful) return
-
-            val code = response.code
-            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
-            for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) || 
-                    key.equals("content-encoding", true) || 
-                    key.equals("connection", true)) continue
-                output.write("$key: $value\r\n".toByteArray())
+            // Skenario B: CDN tolak Range → retry dari awal tanpa Range header
+            if (response.code == 416) {
+                response.close()
+                response = app.baseClient.newCall(buildCdnRequest(withRange = false)).execute()
             }
-            output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val body = response.body
+            if (!response.isSuccessful) {
+                // Kirim 503 ke player agar tidak hang menunggu response
+                output.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".toByteArray())
+                output.flush()
+                return
+            }
+
+            val cdnCode = response.code
+            val body    = response.body
             val inputStream = body.byteStream()
 
             // ---------------------------------------------------------------
-            // HYDRAX ENKRIPSI HANYA DI 64KB PERTAMA (byte 0–65535).
-            // Setelah byte ke-65536, semua data adalah PLAINTEXT murni.
-            //
-            // Logika seek (Opsi B):
-            //   - reqStart >= 65536 → ZONA PLAINTEXT, tidak perlu cipher sama sekali.
-            //                         Langsung forward stream ke player.
-            //   - reqStart < 65536  → ZONA ENKRIPSI, cipher CTR harus di-advance
-            //                         ke posisi reqStart terlebih dahulu sebelum decrypt.
-            //
-            // Ini fix untuk masalah "seek jauh → buffering forever":
-            // Sebelumnya cipher selalu mulai dari counter-0, sehingga byte yang
-            // dikirim ke player adalah data terenkripsi mentah → player tidak bisa decode.
+            // Skenario C: CDN balas 200 (bukan 206) padahal kita minta range.
+            // CDN kirim dari byte 0, kita harus skip manual sampai reqStart.
+            // Ini sering terjadi saat seek ke menit terakhir — CDN kecil tidak
+            // support Range request dan selalu kirim file dari awal.
             // ---------------------------------------------------------------
+            var streamOffset = 0L // posisi aktual yang sudah kita baca dari CDN stream
+            if (cdnCode == 200 && reqStart > 0) {
+                // Skip byte dari CDN sampai posisi reqStart
+                val skipBuf   = ByteArray(65536)
+                var remaining = reqStart
+                while (remaining > 0) {
+                    val toRead = minOf(remaining, skipBuf.size.toLong()).toInt()
+                    val nRead  = inputStream.read(skipBuf, 0, toRead)
+                    if (nRead == -1) break
+                    remaining    -= nRead
+                    streamOffset += nRead
+                }
+                // Setelah skip, posisi stream sudah di reqStart
+            }
 
+            // Tentukan status code dan header yang dikirim ke player
+            // Kalau CDN balas 206, teruskan 206. Kalau CDN balas 200 tapi kita
+            // sudah skip manual, tetap kirim 206 agar ExoPlayer tahu ini partial.
+            val replyCode = if (reqStart > 0) 206 else 200
+            val replyMsg  = if (replyCode == 206) "Partial Content" else "OK"
+
+            output.write("HTTP/1.1 $replyCode $replyMsg\r\n".toByteArray())
+
+            // Forward header CDN ke player, kecuali header yang perlu dikontrol proxy
+            val skipHeaders = setOf(
+                "transfer-encoding", "content-encoding", "connection",
+                "content-range", "content-length" // kita recompute ini di bawah
+            )
+            for ((key, value) in response.headers) {
+                if (key.lowercase() in skipHeaders) continue
+                output.write("$key: $value\r\n".toByteArray())
+            }
+
+            // Tambah Content-Range header yang benar agar ExoPlayer tidak bingung
+            val contentLength = response.headers["Content-Length"]?.toLongOrNull()
+            if (replyCode == 206) {
+                if (contentLength != null) {
+                    val totalSize = if (cdnCode == 206) reqStart + contentLength else contentLength
+                    val endByte   = totalSize - 1
+                    output.write("Content-Range: bytes $reqStart-$endByte/$totalSize\r\n".toByteArray())
+                    output.write("Content-Length: ${totalSize - reqStart}\r\n".toByteArray())
+                } else {
+                    output.write("Content-Range: bytes $reqStart-*/*\r\n".toByteArray())
+                }
+            } else {
+                if (contentLength != null) {
+                    output.write("Content-Length: $contentLength\r\n".toByteArray())
+                }
+            }
+
+            output.write("Accept-Ranges: bytes\r\nConnection: close\r\n\r\n".toByteArray())
+            output.flush()
+
+            // ---------------------------------------------------------------
+            // STREAM + DECRYPT
+            //
+            // HYDRAX enkripsi HANYA 64KB pertama (byte 0–65535), sisanya plaintext.
+            //
+            //   - streamOffset = posisi aktual di CDN stream (setelah skip manual)
+            //   - offset       = posisi byte yang sedang dikirim ke player
+            //
+            // Cipher CTR hanya diinisialisasi kalau zona enkripsi masih relevan.
+            // ---------------------------------------------------------------
             val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
             val secretKey = SecretKeySpec(keyBytes, "AES")
 
-            // Cipher hanya diinisialisasi kalau reqStart masih di zona enkripsi
-            val cipher: Cipher? = if (reqStart < 65536L) {
+            // streamOffset setelah skip manual = reqStart (kalau skenario C)
+            // atau 0 (kalau skenario A/B, CDN sudah kirim dari reqStart)
+            val decryptOffset = if (cdnCode == 206) reqStart else streamOffset
+
+            val cipher: Cipher? = if (decryptOffset < 65536L) {
                 val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
                 Cipher.getInstance("AES/CTR/NoPadding").also {
                     it.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-                    // Advance CTR counter ke posisi reqStart dengan memproses dummy bytes.
-                    // Ini aman karena reqStart dijamin < 65536 (max 65535 bytes dummy).
-                    if (reqStart > 0) {
-                        it.update(ByteArray(reqStart.toInt()))
-                    }
+                    // Advance CTR ke posisi decryptOffset (max 65535, aman untuk toInt())
+                    if (decryptOffset > 0) it.update(ByteArray(decryptOffset.toInt()))
                 }
             } else {
-                null // reqStart >= 65536 → zona plaintext, cipher tidak diperlukan
+                null // sudah di zona plaintext, tidak perlu cipher
             }
 
-            var offset = reqStart
+            var offset = decryptOffset
             val buffer = ByteArray(32768)
             var bytesRead: Int
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 when {
-                    // Kasus 1: seluruh chunk sudah di zona plaintext → forward langsung
+                    // Kasus 1: seluruh chunk di zona plaintext → forward langsung
                     offset >= 65536L -> {
                         output.write(buffer, 0, bytesRead)
                     }
-                    // Kasus 2: sebagian chunk masih di zona enkripsi, sebagian sudah plaintext
-                    // Contoh: offset=65500, bytesRead=1024 → 36 byte pertama di-decrypt, sisanya raw
+                    // Kasus 2: chunk melintasi batas enkripsi (boundary crossing)
                     offset + bytesRead > 65536L -> {
-                        val encryptedPart = (65536L - offset).toInt() // berapa byte yang masih di zona enkripsi
-                        val decrypted = cipher!!.update(buffer, 0, encryptedPart)
-                        if (decrypted != null) output.write(decrypted)
-                        // Sisa chunk setelah byte ke-65536 adalah plaintext
-                        output.write(buffer, encryptedPart, bytesRead - encryptedPart)
+                        val encPart = (65536L - offset).toInt()
+                        val dec = cipher!!.update(buffer, 0, encPart)
+                        if (dec != null) output.write(dec)
+                        output.write(buffer, encPart, bytesRead - encPart)
                     }
-                    // Kasus 3: seluruh chunk masih di zona enkripsi → decrypt semua
+                    // Kasus 3: seluruh chunk masih di zona enkripsi
                     else -> {
-                        val decrypted = cipher!!.update(buffer, 0, bytesRead)
-                        if (decrypted != null) output.write(decrypted)
+                        val dec = cipher!!.update(buffer, 0, bytesRead)
+                        if (dec != null) output.write(dec)
                     }
                 }
                 offset += bytesRead
                 output.flush()
             }
+
         } catch (e: SocketException) {
-            // Wajar saat user melakukan seek brutal
+            // Wajar saat user seek brutal atau player tutup koneksi lebih awal
         } catch (e: Exception) {
-            // Abaikan error streaming putus
+            // Abaikan error streaming lain
         } finally {
             try { response?.close() } catch (e: Exception) {}
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() }    catch (e: Exception) {}
         }
     }
 }
