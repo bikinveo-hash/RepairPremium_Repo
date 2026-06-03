@@ -8,17 +8,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.Interceptor
-import okhttp3.ResponseBody
-import okio.Buffer
-import okio.BufferedSource
-import okio.ForwardingSource
-import okio.buffer
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -162,7 +154,7 @@ class LayarKacaProvider : MainAPI() {
         val headers = mapOf(
             "Origin"     to mainUrl,
             "Referer"    to "$mainUrl/",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
         )
         
         try {
@@ -451,7 +443,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR (THE 64KB AES-256 DECRYPTER)
+    // MENCEGAH INTERCEPTOR MEMBLOCK PROXY LOKAL KITA
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
@@ -459,92 +451,6 @@ class LayarKacaProvider : MainAPI() {
         return Interceptor { chain ->
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
-
-            // ── BYPASS HYDRAX (Presisi 64KB - AES-256) ──
-            if (url.contains("hydrax_proxy")) {
-                val uri = android.net.Uri.parse(url)
-                val srcUrl = uri.getQueryParameter("src")!!
-                val keyHex = uri.getQueryParameter("key")!!
-
-                val rangeHeader = originalRequest.header("Range")
-                var reqStart = 0L
-                if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
-                    reqStart = rangeHeader.substring(6).split("-")[0].toLongOrNull() ?: 0L
-                }
-
-                val newRequest = originalRequest.newBuilder()
-                    .url(srcUrl)
-                    .header("Origin", "https://abyssplayer.com")
-                    .header("Referer", "https://abyssplayer.com/")
-                    .header("User-Agent", mobileUA)
-                    .build()
-
-                val response = chain.proceed(newRequest)
-                if (!response.isSuccessful) return@Interceptor response
-
-                val body = response.body ?: return@Interceptor response
-
-                // Jika minta data di atas 64KB, langsung teruskan (murni)
-                if (reqStart >= 65536) {
-                    return@Interceptor response
-                }
-
-                val decBody = object : ResponseBody() {
-                    override fun contentType() = body.contentType()
-                    override fun contentLength() = body.contentLength()
-                    
-                    override fun source(): BufferedSource {
-                        return object : ForwardingSource(body.source()) {
-                            var currentOffset = reqStart
-                            
-                            // PERBAIKAN FATAL: Konversi String murni ke 32-Byte (AES-256)
-                            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-                            val secretKey = SecretKeySpec(keyBytes, "AES")
-                            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-                            
-                            val cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
-                                init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-                                // Sinkronisasi counter AES-CTR jika stream terpotong di tengah jalan
-                                if (reqStart > 0) {
-                                    val skipBuffer = ByteArray(4096)
-                                    var skipped = 0L
-                                    while (skipped < reqStart) {
-                                        val toSkip = minOf(4096L, reqStart - skipped).toInt()
-                                        update(skipBuffer, 0, toSkip)
-                                        skipped += toSkip
-                                    }
-                                }
-                            }
-
-                            override fun read(sink: Buffer, byteCount: Long): Long {
-                                val buffer = Buffer()
-                                val bytesRead = super.read(buffer, byteCount)
-                                
-                                if (bytesRead != -1L) {
-                                    if (currentOffset < 65536) {
-                                        val bytesToDecrypt = minOf(bytesRead, 65536 - currentOffset).toInt()
-                                        val dataToDecrypt = buffer.readByteArray(bytesToDecrypt.toLong())
-                                        
-                                        val decrypted = cipher.update(dataToDecrypt)
-                                        if (decrypted != null) {
-                                            sink.write(decrypted)
-                                        }
-                                        
-                                        if (buffer.size > 0) {
-                                            sink.write(buffer, buffer.size)
-                                        }
-                                    } else {
-                                        sink.write(buffer, buffer.size)
-                                    }
-                                    currentOffset += bytesRead
-                                }
-                                return bytesRead
-                            }
-                        }.buffer()
-                    }
-                }
-                return@Interceptor response.newBuilder().body(decBody).build()
-            }
             
             when {
                 url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
