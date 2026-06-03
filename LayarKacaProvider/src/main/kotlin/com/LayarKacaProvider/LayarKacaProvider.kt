@@ -54,12 +54,8 @@ class LayarKacaProvider : MainAPI() {
             }.awaitAll().filterNotNull()
         }
 
-        // hasNextPage memberi tahu CloudStream untuk terus mengambil halaman berikutnya
-        return newHomePageResponse(
-            name = request.name, 
-            list = list, 
-            hasNextPage = list.isNotEmpty()
-        )
+        // PERBAIKAN: Menggunakan format parameter posisi (request, list, hasNext) yang sesuai dengan MainAPI.kt
+        return newHomePageResponse(request, list, list.isNotEmpty())
     }
 
     // =========================================================================
@@ -465,6 +461,7 @@ class LayarKacaProvider : MainAPI() {
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
             
+            // Bypass Localhost agar tidak diubah-ubah headernya
             if (url.contains("127.0.0.1")) {
                 return@Interceptor chain.proceed(originalRequest)
             }
