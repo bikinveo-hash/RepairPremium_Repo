@@ -14,6 +14,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -61,7 +62,7 @@ data class CastSource(
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE - DIRECT PATH)
+// EXTRACTOR 1: ABYSS / HYDRAX (NATIVE BYPASS AES-CTR)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -75,26 +76,25 @@ open class AbyssExtractor : ExtractorApi() {
         "Accept"     to "*/*"
     )
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         val pageRef = referer ?: "$mainUrl/"
-        val slug = extractSlugFromUrl(url) ?: return null
+        val slug = extractSlugFromUrl(url) ?: return
         val hdrs = baseHeaders(pageRef)
 
         try {
-            // 1. Ambil data terenkripsi dari HTML
+            // 1. Ambil JSON dari HTML
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
-            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
+            val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
-            val md5Id = dataJson["md5_id"]?.toString() ?: return null
-            val userId = dataJson["user_id"]?.toString() ?: return null
-            val mediaStr = dataJson["media"]?.toString() ?: return null
+            val md5Id = dataJson["md5_id"]?.toString() ?: return
+            val userId = dataJson["user_id"]?.toString() ?: return
+            val mediaStr = dataJson["media"]?.toString() ?: return
 
-            // 2. Dekripsi Media JSON
+            // 2. Dekripsi Media JSON (Kunci md5 user_id:slug:md5_id)
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
@@ -112,23 +112,42 @@ open class AbyssExtractor : ExtractorApi() {
 
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
+            val fristDatas = mp4?.get("fristDatas") as? List<Map<String, Any>>
 
-            // 3. Bangun Direct URL yang bersih
+            // 3. Bangun URL Interceptor Hantu
             mp4Sources?.forEach { src ->
-                val label   = src["label"]?.toString()  ?: "Unknown"
-                val codec   = src["codec"]?.toString()  ?: "h264"
-                val path    = src["path"]?.toString()   ?: ""
-                val baseUrl = src["url"]?.toString()    ?: ""
+                val label = src["label"]?.toString() ?: "Unknown"
+                val codec = src["codec"]?.toString() ?: "h264"
+                val path = src["path"]?.toString() ?: ""
+                val baseUrl = src["url"]?.toString() ?: ""
+                val resId = src["res_id"]?.toString()
 
-                if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
-                    val directUrl = "$baseUrl/$path"
+                val fd = fristDatas?.find { it["res_id"]?.toString() == resId }
+                val fdUrl = fd?.get("url")?.toString()
+                val fsize = fd?.get("partSize")?.toString()?.toLongOrNull()
+                val totalSize = fd?.get("size")?.toString()?.toLongOrNull()
 
-                    sources.add(
+                if (path.isNotEmpty() && baseUrl.isNotEmpty() && fdUrl != null && fsize != null && totalSize != null) {
+                    val srcUrl = "$baseUrl/$path"
+                    val ssize = totalSize - fsize
+
+                    // Kunci dekripsi Video Kepala (.fd) adalah MD5 dari nama filenya!
+                    val filename = fdUrl.substringAfterLast("/")
+                    val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
+                    val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
+
+                    // URL Hantu yang akan dicegat oleh Interceptor CloudStream kita
+                    val interceptUrl = "https://hydrax.intercept/play?" +
+                            "fd=${URLEncoder.encode(fdUrl, "UTF-8")}&" +
+                            "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
+                            "fsize=$fsize&ssize=$ssize&key=$fnKeyHex"
+
+                    callback(
                         newExtractorLink(
                             source = name,
-                            name   = "$name $label [$codec]",
-                            url    = directUrl,
-                            type   = ExtractorLinkType.VIDEO
+                            name = "$name HD $label [$codec]",
+                            url = interceptUrl,
+                            type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = pageRef
                             this.quality = labelToQuality(label)
@@ -140,33 +159,22 @@ open class AbyssExtractor : ExtractorApi() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return sources.ifEmpty { null }
     }
 
     private fun extractSlugFromUrl(url: String): String? {
         val vParam = url.substringAfter("?v=", "").substringBefore("&")
         if (vParam.isNotEmpty() && url.contains("?v=")) return vParam
-
-        Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""")
-            .find(url)?.groupValues?.get(1)
-            ?.let { return it }
-
-        return url.split("?").first()
-            .trimEnd('/')
-            .split('/')
-            .lastOrNull()
-            ?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,20}")) }
+        Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""").find(url)?.groupValues?.get(1)?.let { return it }
+        return url.split("?").first().trimEnd('/').split('/').lastOrNull()?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,20}")) }
     }
 
     private fun labelToQuality(label: String): Int = when {
         label.contains("2160") || label.contains("4k", ignoreCase = true) -> Qualities.P2160.value
-        label.contains("1440")                                              -> Qualities.P1440.value
-        label.contains("1080")                                              -> Qualities.P1080.value
-        label.contains("720")                                               -> Qualities.P720.value
-        label.contains("480")                                               -> Qualities.P480.value
-        label.contains("360")                                               -> Qualities.P360.value
-        label.contains("240")                                               -> Qualities.P240.value
-        else                                                                -> Qualities.Unknown.value
+        label.contains("1440") -> Qualities.P1440.value
+        label.contains("1080") -> Qualities.P1080.value
+        label.contains("720") -> Qualities.P720.value
+        label.contains("480") -> Qualities.P480.value
+        else -> Qualities.Unknown.value
     }
 }
 
