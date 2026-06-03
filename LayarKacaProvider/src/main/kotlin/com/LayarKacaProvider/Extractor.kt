@@ -82,7 +82,6 @@ open class AbyssExtractor : ExtractorApi() {
         val hdrs = baseHeaders(pageRef)
 
         try {
-            // 1. Ambil JSON dari HTML
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
@@ -94,7 +93,6 @@ open class AbyssExtractor : ExtractorApi() {
             val userId = dataJson["user_id"]?.toString() ?: return
             val mediaStr = dataJson["media"]?.toString() ?: return
 
-            // 2. Dekripsi Media JSON (Kunci md5 user_id:slug:md5_id)
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
@@ -114,7 +112,6 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
             val fristDatas = mp4?.get("fristDatas") as? List<Map<String, Any>>
 
-            // 3. Bangun URL Interceptor Hantu
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "h264"
@@ -131,12 +128,12 @@ open class AbyssExtractor : ExtractorApi() {
                     val srcUrl = "$baseUrl/$path"
                     val ssize = totalSize - fsize
 
-                    // Kunci dekripsi Video Kepala (.fd) adalah MD5 dari nama filenya!
+                    // KUNCI RAHASIA: MD5 dari nama file .fd
                     val filename = fdUrl.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // URL Hantu yang akan dicegat oleh Interceptor CloudStream kita
+                    // URL Hantu Interceptor
                     val interceptUrl = "https://hydrax.intercept/play?" +
                             "fd=${URLEncoder.encode(fdUrl, "UTF-8")}&" +
                             "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
