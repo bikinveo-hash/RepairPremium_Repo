@@ -23,6 +23,46 @@ class LayarKacaProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     // =========================================================================
+    // KATEGORI LENGKAP & INFINITE SCROLL (SESUAI WEB LK21)
+    // =========================================================================
+    override val mainPage = mainPageOf(
+        "latest/page/" to "Film Terbaru",
+        "top-series-today/page/" to "Series Unggulan",
+        "latest-series/page/" to "Series Update",
+        "populer/page/" to "Top Bulan Ini",
+        "rekomendasi-film-pintar/page/" to "Rekomendasi Untukmu",
+        "nonton-bareng-keluarga/page/" to "Nonton Bareng Keluarga",
+        "genre/action/page/" to "Action Terbaru",
+        "genre/romance/page/" to "Romance Terbaru",
+        "genre/comedy/page/" to "Comedy Terbaru",
+        "genre/horror/page/" to "Horror Terbaru",
+        "country/south-korea/page/" to "Korea Terbaru",
+        "country/thailand/page/" to "Thailand Terbaru",
+        "country/india/page/" to "India Terbaru"
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = "$mainUrl/${request.data}$page/"
+        val document = app.get(url).document
+
+        // Mengambil container film di halaman manapun
+        val elements = document.select("div#post-container article, div.grid-archive article, article.item")
+        
+        val list = coroutineScope {
+            elements.mapNotNull { element ->
+                async { toSearchResult(element) }
+            }.awaitAll().filterNotNull()
+        }
+
+        // hasNextPage memberi tahu CloudStream untuk terus mengambil halaman berikutnya
+        return newHomePageResponse(
+            name = request.name, 
+            list = list, 
+            hasNextPage = list.isNotEmpty()
+        )
+    }
+
+    // =========================================================================
     // RC4 DECRYPT
     // =========================================================================
     private fun decryptRC4(key: String, encryptedBase64: String): String {
@@ -83,26 +123,6 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("quality") val quality: String?,
         @JsonProperty("year") val year: Int?
     )
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(mainUrl).document
-        val items = ArrayList<HomePageList>()
-
-        suspend fun addWidget(sectionTitle: String, selector: String) {
-            val elements = document.select(selector).toList()
-            val list = coroutineScope {
-                elements.map { async { toSearchResult(it) } }.awaitAll().filterNotNull()
-            }
-            if (list.isNotEmpty()) items.add(HomePageList(sectionTitle, list))
-        }
-
-        addWidget("Film Terbaru",     "div.widget[data-type='latest-movies'] li.slider article")
-        addWidget("Series Unggulan",  "div.widget[data-type='top-series-today'] li.slider article")
-        addWidget("Horror Terbaru",   "div.widget[data-type='latest-horror'] li.slider article")
-        addWidget("Daftar Lengkap",   "div#post-container article")
-
-        return newHomePageResponse(items)
-    }
 
     private suspend fun toSearchResult(element: Element): SearchResponse? {
         val rawTitle = element.select("h3.poster-title, h2.entry-title, h1.page-title, div.title").text().trim()
@@ -438,9 +458,6 @@ class LayarKacaProvider : MainAPI() {
         return true
     }
 
-    // =========================================================================
-    // MENCEGAH INTERCEPTOR MEM-BLOCK PROXY LOKAL
-    // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
@@ -448,7 +465,6 @@ class LayarKacaProvider : MainAPI() {
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
             
-            // Bypass Localhost agar tidak diubah-ubah headernya
             if (url.contains("127.0.0.1")) {
                 return@Interceptor chain.proceed(originalRequest)
             }
