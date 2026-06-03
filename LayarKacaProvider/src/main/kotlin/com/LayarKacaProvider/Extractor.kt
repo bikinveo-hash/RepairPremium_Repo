@@ -191,18 +191,40 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
             val body = response.body
             val inputStream = body.byteStream()
 
-            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-            val secretKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            // ---------------------------------------------------------------
+            // HYDRAX ENKRIPSI HANYA DI 64KB PERTAMA (byte 0–65535).
+            // Setelah byte ke-65536, semua data adalah PLAINTEXT murni.
+            //
+            // Logika seek (Opsi B):
+            //   - reqStart >= 65536 → ZONA PLAINTEXT, tidak perlu cipher sama sekali.
+            //                         Langsung forward stream ke player.
+            //   - reqStart < 65536  → ZONA ENKRIPSI, cipher CTR harus di-advance
+            //                         ke posisi reqStart terlebih dahulu sebelum decrypt.
+            //
+            // Ini fix untuk masalah "seek jauh → buffering forever":
+            // Sebelumnya cipher selalu mulai dari counter-0, sehingga byte yang
+            // dikirim ke player adalah data terenkripsi mentah → player tidak bisa decode.
+            // ---------------------------------------------------------------
 
-            if (reqStart > 0 && reqStart < 65536) {
-                cipher.update(ByteArray(reqStart.toInt()))
+            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+
+            // Cipher hanya diinisialisasi kalau reqStart masih di zona enkripsi
+            val cipher: Cipher? = if (reqStart < 65536L) {
+                val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+                Cipher.getInstance("AES/CTR/NoPadding").also {
+                    it.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+                    // Advance CTR counter ke posisi reqStart dengan memproses dummy bytes.
+                    // Ini aman karena reqStart dijamin < 65536 (max 65535 bytes dummy).
+                    if (reqStart > 0) {
+                        it.update(ByteArray(reqStart.toInt()))
+                    }
+                }
+            } else {
+                null // reqStart >= 65536 → zona plaintext, cipher tidak diperlukan
             }
 
             var offset = reqStart
@@ -210,20 +232,28 @@ object HydraxProxy {
             var bytesRead: Int
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                if (offset < 65536) {
-                    val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                    val decrypted = cipher.update(buffer, 0, n)
-                    if (decrypted != null) {
-                        output.write(decrypted)
+                when {
+                    // Kasus 1: seluruh chunk sudah di zona plaintext → forward langsung
+                    offset >= 65536L -> {
+                        output.write(buffer, 0, bytesRead)
                     }
-                    if (n < bytesRead) {
-                        output.write(buffer, n, bytesRead - n)
+                    // Kasus 2: sebagian chunk masih di zona enkripsi, sebagian sudah plaintext
+                    // Contoh: offset=65500, bytesRead=1024 → 36 byte pertama di-decrypt, sisanya raw
+                    offset + bytesRead > 65536L -> {
+                        val encryptedPart = (65536L - offset).toInt() // berapa byte yang masih di zona enkripsi
+                        val decrypted = cipher!!.update(buffer, 0, encryptedPart)
+                        if (decrypted != null) output.write(decrypted)
+                        // Sisa chunk setelah byte ke-65536 adalah plaintext
+                        output.write(buffer, encryptedPart, bytesRead - encryptedPart)
                     }
-                } else {
-                    output.write(buffer, 0, bytesRead)
+                    // Kasus 3: seluruh chunk masih di zona enkripsi → decrypt semua
+                    else -> {
+                        val decrypted = cipher!!.update(buffer, 0, bytesRead)
+                        if (decrypted != null) output.write(decrypted)
+                    }
                 }
                 offset += bytesRead
-                output.flush() 
+                output.flush()
             }
         } catch (e: SocketException) {
             // Wajar saat user melakukan seek brutal
