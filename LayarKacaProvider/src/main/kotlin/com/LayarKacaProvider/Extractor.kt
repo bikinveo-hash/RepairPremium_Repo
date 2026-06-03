@@ -12,9 +12,11 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.URLEncoder
+import okhttp3.Request
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.ServerSocket
+import java.net.Socket
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -24,8 +26,159 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlin.concurrent.thread
 
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
+// =========================================================================
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET)
+// =========================================================================
+object HydraxProxy {
+    var port: Int = 0
+    private var isRunning = false
+    private var serverSocket: ServerSocket? = null
+
+    fun start() {
+        if (isRunning) return
+        try {
+            // Membuka Server di port acak yang kosong, khusus untuk Localhost (127.0.0.1)
+            serverSocket = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+            port = serverSocket!!.localPort
+            isRunning = true
+            thread {
+                while (isRunning) {
+                    try {
+                        val client = serverSocket!!.accept()
+                        // Multi-threading: Mampu melayani banyak request ExoPlayer bersamaan!
+                        thread { handleClient(client) }
+                    } catch (e: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun handleClient(client: Socket) {
+        try {
+            val reader = BufferedReader(InputStreamReader(client.getInputStream()))
+            val output = client.getOutputStream()
+
+            val requestLine = reader.readLine() ?: return
+            val parts = requestLine.split(" ")
+            if (parts.size < 2) return
+            val path = parts[1]
+
+            if (!path.contains("?url=")) return
+            
+            // Ekstrak URL asli dan Kunci dari request Localhost
+            val query = path.substringAfter("?")
+            val params = query.split("&").associate { 
+                val kv = it.split("=")
+                kv[0] to (if (kv.size > 1) kv[1] else "")
+            }
+            
+            val encodedUrl = params["url"] ?: return
+            val keyHex = params["key"] ?: return
+            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+
+            // Ambil Range permintaan dari ExoPlayer
+            var range = "bytes=0-"
+            while (true) {
+                val line = reader.readLine()
+                if (line.isNullOrEmpty()) break
+                if (line.lowercase().startsWith("range:")) {
+                    range = line.substringAfter(":").trim()
+                }
+            }
+
+            val reqStart = range.replace("bytes=", "").split("-")[0].toLongOrNull() ?: 0L
+
+            // Tembak request murni ke Hydrax
+            val request = Request.Builder()
+                .url(realUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://abyssplayer.com/")
+                .header("Origin", "https://abyssplayer.com")
+                .header("Range", "bytes=$reqStart-")
+                .build()
+
+            val response = app.baseClient.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                client.close()
+                return
+            }
+
+            // Kembalikan header asli dari Hydrax ke ExoPlayer
+            val code = response.code
+            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
+            for ((key, value) in response.headers) {
+                if (key.equals("transfer-encoding", true) || key.equals("content-encoding", true)) continue
+                output.write("$key: $value\r\n".toByteArray())
+            }
+            output.write("\r\n".toByteArray())
+
+            val body = response.body ?: return
+            val inputStream = body.byteStream()
+
+            // Jika ExoPlayer meminta data yang letaknya jauh di atas 64KB, Bypass AES!
+            if (reqStart >= 65536) {
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                }
+                output.flush()
+            } else {
+                // SIHIR DEKRIPSI KTP (AES-256 MUTLAK)
+                val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
+                val secretKey = SecretKeySpec(keyBytes, "AES")
+                val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+                val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+                // Sinkronisasi mesin AES jika ExoPlayer melompat ke tengah
+                if (reqStart > 0) {
+                    var skipped = 0L
+                    while (skipped < reqStart) {
+                        val toSkip = minOf(4096L, reqStart - skipped).toInt()
+                        cipher.update(ByteArray(toSkip))
+                        skipped += toSkip
+                    }
+                }
+
+                var offset = reqStart
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    if (offset < 65536) {
+                        // Presisi: Hanya dekripsi sampai batas byte 65.536
+                        val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
+                        val decrypted = cipher.update(buffer, 0, n)
+                        if (decrypted != null) {
+                            output.write(decrypted)
+                        }
+                        // Sisa buffer murni yang lolos dari 64KB
+                        if (n < bytesRead) {
+                            output.write(buffer, n, bytesRead - n)
+                        }
+                    } else {
+                        // 100% murni
+                        output.write(buffer, 0, bytesRead)
+                    }
+                    offset += bytesRead
+                }
+                output.flush()
+            }
+        } catch (e: Exception) {
+            // Abaikan error saat user menghentikan film (broken pipe)
+        } finally {
+            try { client.close() } catch(e: Exception) {}
+        }
+    }
+}
 
 // =========================================================================
 // DATA CLASSES
@@ -62,7 +215,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (THE 64KB AES-256 BYPASS)
+// EXTRACTOR 1: ABYSS / HYDRAX
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -85,7 +238,7 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
+            val decodedDatas = String(Base64.decode(datas, Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
@@ -97,7 +250,6 @@ open class AbyssExtractor : ExtractorApi() {
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
             val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
 
-            // Dekripsi JSON Hydrax menggunakan MD5 Hash
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val ivBytes = keyBytes.copyOfRange(0, 16)
 
@@ -112,7 +264,7 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
 
-            // KITA FOKUS MENGAMBIL 'SOURCES' SAJA (KARENA SUDAH TERBUKTI BERISI FULL VIDEO)
+            // KITA HANYA MENGAMBIL 'SOURCES' KARENA MENGANDUNG FULL VIDEO
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "h264"
@@ -122,26 +274,27 @@ open class AbyssExtractor : ExtractorApi() {
                 if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
 
-                    // KUNCI RAHASIA AES-256: MD5 dari nama file 'sources'
+                    // KUNCI RAHASIA: MD5 dari nama file 'sources'
                     val filename = path.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // URL Hantu dengan domain asli (Mencegah Error 2001: UnknownHostException)
-                    val interceptUrl = "https://abyssplayer.com/hydrax_proxy?" +
-                            "src=${URLEncoder.encode(srcUrl, "UTF-8")}&" +
-                            "key=$fnKeyHex"
+                    // Menghidupkan Server Proxy Lokal kita!
+                    HydraxProxy.start()
+
+                    // Membungkus URL asli menjadi URL Localhost
+                    val encodedUrl = Base64.encodeToString(srcUrl.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
+                    val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
                     callback(
                         newExtractorLink(
                             source = name,
                             name = "$name HD $label [$codec]",
-                            url = interceptUrl,
+                            url = localProxyUrl,
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = pageRef
                             this.quality = labelToQuality(label)
-                            this.headers = hdrs
                         }
                     )
                 }
@@ -183,7 +336,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
             if (id.isEmpty()) return null
 
             val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
                 "Referer"    to "https://playeriframe.sbs/"
             )
 
@@ -241,7 +394,7 @@ open class HowNetworkExtractor : ExtractorApi() {
                     "Origin" to mainUrl,
                     "Referer" to url,
                     "Accept" to "*/*",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                 ),
                 data = mapOf(
                     "r" to "https://playeriframe.sbs/",
@@ -320,7 +473,7 @@ open class CastExtractor : ExtractorApi() {
         val videoId = url.substringAfterLast("/")
         
         val commonHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
             "Origin" to mainUrl,
             "Referer" to url,
             "X-Embed-Origin" to "playeriframe.sbs",
