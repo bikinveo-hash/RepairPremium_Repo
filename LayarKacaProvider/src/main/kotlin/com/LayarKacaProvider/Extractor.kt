@@ -34,6 +34,62 @@ import kotlin.concurrent.thread
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
+// DATA CLASSES UNTUK TYPE-SAFE JSON PARSING (ANTI-WARNING)
+// =========================================================================
+data class HydraxData(
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("md5_id") val md5_id: String? = null,
+    @JsonProperty("user_id") val user_id: String? = null,
+    @JsonProperty("media") val media: String? = null
+)
+
+data class HydraxMedia(
+    @JsonProperty("mp4") val mp4: HydraxMp4? = null
+)
+
+data class HydraxMp4(
+    @JsonProperty("sources") val sources: List<HydraxSource>? = null
+)
+
+data class HydraxSource(
+    @JsonProperty("label") val label: String? = null,
+    @JsonProperty("codec") val codec: String? = null,
+    @JsonProperty("path") val path: String? = null,
+    @JsonProperty("url") val url: String? = null
+)
+
+data class HowNetworkResponse(
+    @JsonProperty("poster") val poster: String?,
+    @JsonProperty("file") val file: String?,
+    @JsonProperty("type") val type: String?,
+    @JsonProperty("title") val title: String?
+)
+
+data class CastChalResp(
+    @JsonProperty("nonce") val nonce: String?, 
+    @JsonProperty("challenge_id") val challenge_id: String?
+)
+data class CastAttestResp(
+    @JsonProperty("token") val token: String?
+)
+data class CastPbResp(
+    @JsonProperty("playback") val playback: CastPlaybackInfo?
+)
+data class CastPlaybackInfo(
+    @JsonProperty("iv") val iv: String?, 
+    @JsonProperty("payload") val payload: String?, 
+    @JsonProperty("key_parts") val key_parts: List<String>?
+)
+data class CastDecrypted(
+    @JsonProperty("sources") val sources: List<CastSource>?
+)
+data class CastSource(
+    @JsonProperty("url") val url: String?, 
+    @JsonProperty("label") val label: String?, 
+    @JsonProperty("type") val type: String?
+)
+
+// =========================================================================
 // MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF)
 // =========================================================================
 object HydraxProxy {
@@ -63,7 +119,6 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            // Atur timeout agar socket tidak nyangkut saat ExoPlayer lambat merespons
             client.soTimeout = 15000 
             
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
@@ -97,13 +152,12 @@ object HydraxProxy {
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
-            // 1. Tembak request ke Hydrax
             val request = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity") // Mencegah gzip yang merusak ukuran byte
+                .header("Accept-Encoding", "identity")
                 .apply {
                     if (rangeHeader != null) header("Range", rangeHeader)
                 }
@@ -113,7 +167,6 @@ object HydraxProxy {
 
             if (!response.isSuccessful) return
 
-            // 2. Tulis Header Balasan ke ExoPlayer
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
@@ -122,11 +175,10 @@ object HydraxProxy {
                     key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
-            // Menambahkan header koneksi agar ExoPlayer tahu stream tetap dijaga
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // 3. Persiapkan Mesin Dekripsi AES-256
-            val body = response.body ?: return
+            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
+            val body = response.body
             val inputStream = body.byteStream()
 
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
@@ -135,14 +187,12 @@ object HydraxProxy {
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
-            // Sinkronisasi mesin AES jika ExoPlayer minta potong kompas
             if (reqStart > 0 && reqStart < 65536) {
                 cipher.update(ByteArray(reqStart.toInt()))
             }
 
-            // 4. Stream Data dengan Presisi Tinggi
             var offset = reqStart
-            val buffer = ByteArray(32768) // 32KB buffer optimal untuk ExoPlayer
+            val buffer = ByteArray(32768)
             var bytesRead: Int
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
@@ -159,52 +209,18 @@ object HydraxProxy {
                     output.write(buffer, 0, bytesRead)
                 }
                 offset += bytesRead
-                output.flush() // Mencegah penumpukan data di RAM (Obat EOF)
+                output.flush() 
             }
         } catch (e: SocketException) {
-            // Wajar terjadi saat user memutar/seek video secara brutal
+            // Wajar saat user melakukan seek brutal
         } catch (e: Exception) {
-            // Abaikan error putus streaming
+            // Abaikan error streaming putus
         } finally {
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
         }
     }
 }
-
-// =========================================================================
-// DATA CLASSES
-// =========================================================================
-data class HowNetworkResponse(
-    @JsonProperty("poster") val poster: String?,
-    @JsonProperty("file") val file: String?,
-    @JsonProperty("type") val type: String?,
-    @JsonProperty("title") val title: String?
-)
-
-data class CastChalResp(
-    @JsonProperty("nonce") val nonce: String?, 
-    @JsonProperty("challenge_id") val challenge_id: String?
-)
-data class CastAttestResp(
-    @JsonProperty("token") val token: String?
-)
-data class CastPbResp(
-    @JsonProperty("playback") val playback: CastPlaybackInfo?
-)
-data class CastPlaybackInfo(
-    @JsonProperty("iv") val iv: String?, 
-    @JsonProperty("payload") val payload: String?, 
-    @JsonProperty("key_parts") val key_parts: List<String>?
-)
-data class CastDecrypted(
-    @JsonProperty("sources") val sources: List<CastSource>?
-)
-data class CastSource(
-    @JsonProperty("url") val url: String?, 
-    @JsonProperty("label") val label: String?, 
-    @JsonProperty("type") val type: String?
-)
 
 // =========================================================================
 // EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY)
@@ -230,13 +246,14 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
+            // Perbaikan Warning 2-5: Parsing menggunakan Type-Safe Data Classes
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
-            val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
+            val dataJson = mapper.readValue(decodedDatas, HydraxData::class.java)
 
-            val infoSlug = dataJson["slug"]?.toString() ?: slug
-            val md5Id = dataJson["md5_id"]?.toString() ?: return
-            val userId = dataJson["user_id"]?.toString() ?: return
-            val mediaStr = dataJson["media"]?.toString() ?: return
+            val infoSlug = dataJson.slug ?: slug
+            val md5Id = dataJson.md5_id ?: return
+            val userId = dataJson.user_id ?: return
+            val mediaStr = dataJson.media ?: return
 
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
             val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
@@ -251,16 +268,15 @@ open class AbyssExtractor : ExtractorApi() {
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
             val decryptedBytes = cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1))
-            val mediaJson = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), Map::class.java) as Map<String, Any>
+            val mediaJson = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), HydraxMedia::class.java)
 
-            val mp4 = mediaJson["mp4"] as? Map<String, Any>
-            val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
+            val mp4Sources = mediaJson.mp4?.sources
 
             mp4Sources?.forEach { src ->
-                val label = src["label"]?.toString() ?: "Unknown"
-                val codec = src["codec"]?.toString() ?: "h264"
-                val path = src["path"]?.toString() ?: ""
-                val baseUrl = src["url"]?.toString() ?: ""
+                val label = src.label ?: "Unknown"
+                val codec = src.codec ?: "h264"
+                val path = src.path ?: ""
+                val baseUrl = src.url ?: ""
 
                 if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
@@ -269,7 +285,6 @@ open class AbyssExtractor : ExtractorApi() {
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // Menghidupkan Server Proxy Lokal
                     HydraxProxy.start()
 
                     val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
@@ -277,7 +292,7 @@ open class AbyssExtractor : ExtractorApi() {
 
                     callback(
                         newExtractorLink(
-                            source = name, // "Abyss" -> Rapi 1 Sumber
+                            source = name,
                             name = name,
                             url = localProxyUrl,
                             type = ExtractorLinkType.VIDEO
