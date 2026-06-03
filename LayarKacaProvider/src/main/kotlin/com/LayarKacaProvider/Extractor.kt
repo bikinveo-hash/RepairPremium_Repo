@@ -93,27 +93,40 @@ data class CastSource(
 // MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF)
 // =========================================================================
 object HydraxProxy {
-    var port: Int = 0
-    private var isRunning = false
-    private var serverSocket: ServerSocket? = null
+    @Volatile var port: Int = 0
+    @Volatile private var isRunning = false
+    @Volatile private var serverSocket: ServerSocket? = null
 
+    @Synchronized
     fun start() {
         if (isRunning) return
         try {
-            serverSocket = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
-            port = serverSocket!!.localPort
+            val ss = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+            serverSocket = ss
+            port = ss.localPort
             isRunning = true
-            thread {
+            thread(isDaemon = true) {
                 while (isRunning) {
                     try {
-                        val client = serverSocket!!.accept()
-                        thread { handleClient(client) }
-                    } catch (e: Exception) {}
+                        val client = ss.accept()
+                        thread(isDaemon = true) { handleClient(client) }
+                    } catch (e: Exception) {
+                        // ServerSocket closed or interrupted — exit loop cleanly
+                        if (!isRunning) break
+                    }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    @Synchronized
+    fun stop() {
+        isRunning = false
+        try { serverSocket?.close() } catch (e: Exception) {}
+        serverSocket = null
+        port = 0
     }
 
     private fun handleClient(client: Socket) {
@@ -132,9 +145,10 @@ object HydraxProxy {
             if (!path.contains("?url=")) return
             
             val query = path.substringAfter("?")
-            val params = query.split("&").associate { 
-                val kv = it.split("=")
-                kv[0] to (if (kv.size > 1) kv[1] else "")
+            val params = query.split("&").associate { param ->
+                val eqIdx = param.indexOf('=')
+                if (eqIdx == -1) param to ""
+                else param.substring(0, eqIdx) to param.substring(eqIdx + 1)
             }
             
             val encodedUrl = params["url"] ?: return
@@ -453,22 +467,28 @@ open class CastExtractor : ExtractorApi() {
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
     private fun derToRaw(der: ByteArray): ByteArray {
+        // DER SEQUENCE tag (0x30) at [0], length at [1] — skip to inner SEQUENCE
         var offset = 2
-        val rLength = der[offset + 1].toInt()
+        // INTEGER tag (0x02) at offset, length at offset+1
+        val rLength = der[offset + 1].toInt() and 0xFF
         val rOffset = offset + 2
         offset += 2 + rLength
-        val sLength = der[offset + 1].toInt()
+        val sLength = der[offset + 1].toInt() and 0xFF
         val sOffset = offset + 2
-        
+
         val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
         val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
-        
+
+        // Clamp to max 32 bytes in case of unexpected oversized values
+        val rClamped = if (rStr.size > 32) rStr.copyOfRange(rStr.size - 32, rStr.size) else rStr
+        val sClamped = if (sStr.size > 32) sStr.copyOfRange(sStr.size - 32, sStr.size) else sStr
+
         val rPadded = ByteArray(32) { 0 }
         val sPadded = ByteArray(32) { 0 }
-    
-        System.arraycopy(rStr, 0, rPadded, 32 - rStr.size, rStr.size)
-        System.arraycopy(sStr, 0, sPadded, 32 - sStr.size, sStr.size)
-        
+
+        System.arraycopy(rClamped, 0, rPadded, 32 - rClamped.size, rClamped.size)
+        System.arraycopy(sClamped, 0, sPadded, 32 - sClamped.size, sClamped.size)
+
         return rPadded + sPadded
     }
 
