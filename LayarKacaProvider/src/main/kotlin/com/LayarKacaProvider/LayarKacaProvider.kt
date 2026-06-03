@@ -27,7 +27,6 @@ class LayarKacaProvider : MainAPI() {
         "top-series-today/" to "Series Unggulan",
         "latest-series/" to "Series Update",
         "populer/" to "Top Bulan Ini",
-        "rekomendasi-film-pintar/" to "Rekomendasi Untukmu",
         "nonton-bareng-keluarga/" to "Nonton Bareng Keluarga",
         "genre/action/" to "Action Terbaru",
         "genre/romance/" to "Romance Terbaru",
