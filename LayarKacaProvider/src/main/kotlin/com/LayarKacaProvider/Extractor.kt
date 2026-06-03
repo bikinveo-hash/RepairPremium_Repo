@@ -12,9 +12,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
-import okhttp3.MediaType
 import okhttp3.Request
-import okhttp3.RequestBody
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
@@ -228,7 +226,7 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            val decodedDatas = String(Base64.decode(datas, Base64.DEFAULT), Charsets.ISO_8859_1)
+            val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, Map::class.java) as Map<String, Any>
 
             val infoSlug = dataJson["slug"]?.toString() ?: slug
@@ -273,7 +271,7 @@ open class AbyssExtractor : ExtractorApi() {
                     HydraxProxy.start()
 
                     // Membungkus URL asli menjadi URL Localhost
-                    val encodedUrl = Base64.encodeToString(srcUrl.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
+                    val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
                     val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
                     callback(
@@ -427,14 +425,14 @@ open class CastExtractor : ExtractorApi() {
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    private fun b64url(b: ByteArray): String = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    private fun b64url(b: ByteArray): String = android.util.Base64.encodeToString(b, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
     private fun b64urlDecode(s: String): ByteArray {
         var standardized = s.replace("-", "+").replace("_", "/")
         val padding = 4 - (standardized.length % 4)
         if (padding != 4) {
             standardized += "=".repeat(padding)
         }
-        return Base64.decode(standardized, Base64.DEFAULT)
+        return android.util.Base64.decode(standardized, android.util.Base64.DEFAULT)
     }
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
@@ -496,7 +494,8 @@ open class CastExtractor : ExtractorApi() {
             if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) { 0 } + xBytes
             if (yBytes.size < 32) yBytes = ByteArray(32 - yBytes.size) { 0 } + yBytes
 
-            val attestPayloadStr = mapper.writeValueAsString(mapOf(
+            // KITA MENGGUNAKAN FITUR 'json' BAWAAN CLOUDSTREAM!
+            val attestPayload = mapOf(
                 "viewer_id" to b64url(getRandomBytes(16)),
                 "device_id" to b64url(getRandomBytes(16)),
                 "challenge_id" to cid,
@@ -508,19 +507,15 @@ open class CastExtractor : ExtractorApi() {
                 ),
                 "client" to mapOf("user_agent" to commonHeaders["User-Agent"]!!),
                 "attributes" to mapOf("entropy" to "high")
-            ))
+            )
 
-            // MEMPERBAIKI ERROR BUILD OKHTTP DI SINI
-            val jsonMediaType = MediaType.parse("application/json")
-            val attestBody = RequestBody.create(jsonMediaType, attestPayloadStr)
-            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestBody)
-            
+            // Mengirim Payload JSON langsung melalui `json` parameter bawaan NiceHttp
+            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, json = attestPayload)
             val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch(e:Exception){ null } ?: return null
             val token = attestJson.token ?: return null
 
-            val pbPayloadStr = mapper.writeValueAsString(mapOf("fingerprint" to mapOf("token" to token)))
-            val pbBody = RequestBody.create(jsonMediaType, pbPayloadStr)
-            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbBody)
+            val pbPayload = mapOf("fingerprint" to mapOf("token" to token))
+            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, json = pbPayload)
             
             val pbResp = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch(e:Exception){ null } ?: return null
             val iv = b64urlDecode(pbResp.iv ?: return null)
