@@ -451,24 +451,20 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // =========================================================================
-    // VIDEO INTERCEPTOR (JANTUNG PENYATU & DEKRIPTOR HYDRAX)
+    // VIDEO INTERCEPTOR (THE 64KB DECRYPTER)
     // =========================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
-        val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
         return Interceptor { chain ->
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
 
-            // ── BYPASS HYDRAX (.fd + Sources Merger & Decrypter) ──
-            if (url.contains("hydrax.intercept")) {
+            // ── BYPASS HYDRAX (Presisi 64KB) ──
+            if (url.contains("hydrax_proxy")) {
                 val uri = android.net.Uri.parse(url)
-                val fdUrl = uri.getQueryParameter("fd")!!
                 val srcUrl = uri.getQueryParameter("src")!!
-                val fsize = uri.getQueryParameter("fsize")!!.toLong()
-                val ssize = uri.getQueryParameter("ssize")!!.toLong()
                 val keyHex = uri.getQueryParameter("key")!!
-                val totalSize = fsize + ssize
 
                 val rangeHeader = originalRequest.header("Range")
                 var reqStart = 0L
@@ -476,15 +472,9 @@ class LayarKacaProvider : MainAPI() {
                     reqStart = rangeHeader.substring(6).split("-")[0].toLongOrNull() ?: 0L
                 }
 
-                // Menentukan apakah ExoPlayer sedang meminta Kepala (.fd) atau Badan (src)
-                val isFd = reqStart < fsize
-                val targetUrl = if (isFd) fdUrl else srcUrl
-                val actualStart = if (isFd) reqStart else reqStart - fsize
-                
-                // Meneruskan permintaan ExoPlayer ke server Hydrax yang asli
+                // Meneruskan permintaan ExoPlayer persis apa adanya ke URL Source
                 val newRequest = originalRequest.newBuilder()
-                    .url(targetUrl)
-                    .header("Range", "bytes=$actualStart-")
+                    .url(srcUrl)
                     .header("Origin", "https://abyssplayer.com")
                     .header("Referer", "https://abyssplayer.com/")
                     .header("User-Agent", mobileUA)
@@ -495,64 +485,68 @@ class LayarKacaProvider : MainAPI() {
 
                 val body = response.body ?: return@Interceptor response
 
-                // Memanipulasi Content-Range agar ExoPlayer mengira ini adalah 1 file utuh
-                val virtualStart = reqStart
-                val virtualEnd = if (isFd) fsize - 1 else totalSize - 1
-                val newContentLength = virtualEnd - virtualStart + 1
-                val newContentRange = "bytes $virtualStart-$virtualEnd/$totalSize"
+                // Jika ExoPlayer meminta data yang letaknya melebihi 64KB, berikan langsung tanpa sentuh AES!
+                if (reqStart >= 65536) {
+                    return@Interceptor response
+                }
 
-                val builder = response.newBuilder()
-                    .code(206)
-                    .message("Partial Content")
-                    .header("Content-Range", newContentRange)
-                    .header("Content-Length", newContentLength.toString())
-
-                // ── SIHIR DEKRIPSI ON-THE-FLY UNTUK KEPALA VIDEO ──
-                if (isFd) {
-                    val decBody = object : ResponseBody() {
-                        override fun contentType() = body.contentType()
-                        override fun contentLength() = newContentLength
-                        override fun source(): BufferedSource {
-                            return object : ForwardingSource(body.source()) {
-                                // Array byte kunci dari hex string MD5
-                                val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                                val secretKey = SecretKeySpec(keyBytes, "AES")
-                                val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-                                val cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
-                                    init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-                                    // Melewati (skip) byte ke offset saat ini agar AES-CTR tetap sinkron
-                                    if (reqStart > 0) {
-                                        val skipBuffer = ByteArray(4096)
-                                        var skipped = 0L
-                                        while (skipped < reqStart) {
-                                            val toSkip = minOf(4096L, reqStart - skipped).toInt()
-                                            update(skipBuffer, 0, toSkip)
-                                            skipped += toSkip
-                                        }
+                // Jika meminta dari awal, kita intersepsi dan dekripsi 64KB pertamanya
+                val decBody = object : ResponseBody() {
+                    override fun contentType() = body.contentType()
+                    override fun contentLength() = body.contentLength()
+                    
+                    override fun source(): BufferedSource {
+                        return object : ForwardingSource(body.source()) {
+                            var currentOffset = reqStart
+                            val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                            val secretKey = SecretKeySpec(keyBytes, "AES")
+                            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+                            
+                            val cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
+                                init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+                                // Sinkronisasi mesin AES-CTR jika ExoPlayer melompat ke tengah 64KB
+                                if (reqStart > 0) {
+                                    val skipBuffer = ByteArray(4096)
+                                    var skipped = 0L
+                                    while (skipped < reqStart) {
+                                        val toSkip = minOf(4096L, reqStart - skipped).toInt()
+                                        update(skipBuffer, 0, toSkip)
+                                        skipped += toSkip
                                     }
                                 }
+                            }
 
-                                override fun read(sink: Buffer, byteCount: Long): Long {
-                                    val buffer = Buffer()
-                                    val bytesRead = super.read(buffer, byteCount)
-                                    if (bytesRead != -1L) {
-                                        val dataToDecrypt = buffer.readByteArray()
+                            override fun read(sink: Buffer, byteCount: Long): Long {
+                                val buffer = Buffer()
+                                val bytesRead = super.read(buffer, byteCount)
+                                
+                                if (bytesRead != -1L) {
+                                    if (currentOffset < 65536) {
+                                        // Berapa byte yang harus didekripsi di dalam bongkahan ini?
+                                        val bytesToDecrypt = minOf(bytesRead, 65536 - currentOffset).toInt()
+                                        val dataToDecrypt = buffer.readByteArray(bytesToDecrypt.toLong())
+                                        
                                         val decrypted = cipher.update(dataToDecrypt)
                                         if (decrypted != null) {
                                             sink.write(decrypted)
                                         }
+                                        
+                                        // Sisa byte yang tidak dienkripsi ditulis murni
+                                        if (buffer.size > 0) {
+                                            sink.write(buffer, buffer.size)
+                                        }
+                                    } else {
+                                        // 100% murni (sudah lewat blok enkripsi 64KB)
+                                        sink.write(buffer, buffer.size)
                                     }
-                                    return bytesRead
+                                    currentOffset += bytesRead
                                 }
-                            }.buffer()
-                        }
+                                return bytesRead
+                            }
+                        }.buffer()
                     }
-                    builder.body(decBody)
-                } else {
-                    builder.body(body)
                 }
-
-                return@Interceptor builder.build()
+                return@Interceptor response.newBuilder().body(decBody).build()
             }
             
             when {
