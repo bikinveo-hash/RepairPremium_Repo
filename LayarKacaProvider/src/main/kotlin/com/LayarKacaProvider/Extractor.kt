@@ -16,34 +16,35 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.math.BigInteger
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.security.interfaces.ECPublicKey
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
-// FIX #12: Rename agar tidak konflik dengan `mapper` di MainAPI.kt
-val jsonMapper: ObjectMapper = jacksonObjectMapper()
+val mapper: ObjectMapper = jacksonObjectMapper()
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
-// =========================================================================
-// DATA CLASSES UNTUK TYPE-SAFE JSON PARSING
-// =========================================================================
+// =============================================================================
+// DATA CLASSES
+// =============================================================================
 data class HydraxData(
-    @JsonProperty("slug")    val slug: String?    = null,
-    @JsonProperty("md5_id")  val md5_id: String?  = null,
+    @JsonProperty("slug")    val slug: String?   = null,
+    @JsonProperty("md5_id")  val md5_id: String? = null,
     @JsonProperty("user_id") val user_id: String? = null,
-    @JsonProperty("media")   val media: String?   = null
+    @JsonProperty("media")   val media: String?  = null
 )
 
 data class HydraxMedia(
@@ -92,60 +93,41 @@ data class CastSource(
     @JsonProperty("type")  val type: String?
 )
 
-// =========================================================================
-// MESIN SERVER PROXY LOKAL (ANTI-CRONET & ANTI-EOF)
-//
-// FIX SEEK:
-//   Masalah utama: AES/CTR adalah stream cipher — byte ke-N hanya bisa
-//   didapat setelah memproses byte 0..(N-1). Seekjauh langsung ke menit
-//   terakhir berarti `reqStart` bisa jutaan byte.
-//
-//   Kode lama punya dua bug:
-//   1) Hanya skip cipher untuk reqStart < 65536 — seek di atas itu tidak
-//      di-handle sama sekali, video corrupt.
-//   2) cipher.update(ByteArray(reqStart.toInt())) untuk skip —
-//      ini allocate array sebesar reqStart byte di memory. Seek ke menit
-//      terakhir film 2 jam = ~500MB array → OOM crash.
-//
-//   FIX: Gunakan counter block number (CBN) dari AES/CTR.
-//   AES/CTR bekerja per-block 16 byte. Untuk seek ke offset N:
-//   - Block yang dibutuhkan = N / 16
-//   - Byte offset dalam block itu = N % 16
-//   Kita bisa langsung set counter ke block tersebut tanpa memproses
-//   semua byte sebelumnya. Ini O(1) — tidak peduli seberapa jauh seek.
-// =========================================================================
+
+// =============================================================================
+// LOCAL PROXY UNTUK HYDRAX (AES/CTR DENGAN SEEK YANG BENAR)
+// =============================================================================
 object HydraxProxy {
     var port: Int = 0
-    @Volatile private var isRunning = false
+
+    // FIX #3: Pakai AtomicBoolean agar thread-safe (tidak ada race condition)
+    private val isRunning = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
 
+    // FIX #2: Pakai thread pool, bukan thread baru per koneksi
+    private val threadPool = Executors.newCachedThreadPool()
+
     fun start() {
-        if (isRunning) return
+        // FIX #3: compareAndSet memastikan hanya satu instance yang start
+        if (!isRunning.compareAndSet(false, true)) return
         try {
             serverSocket = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
             port = serverSocket!!.localPort
-            isRunning = true
-            thread(isDaemon = true, name = "HydraxProxy") {
-                while (isRunning) {
+            thread(isDaemon = true) {
+                while (isRunning.get()) {
                     try {
                         val client = serverSocket!!.accept()
-                        thread(isDaemon = true) { handleClient(client) }
+                        // FIX #2: Submit ke thread pool, bukan spawn thread baru
+                        threadPool.submit { handleClient(client) }
                     } catch (e: Exception) {
-                        if (isRunning) e.printStackTrace()
+                        if (isRunning.get()) e.printStackTrace()
                     }
                 }
             }
         } catch (e: Exception) {
+            isRunning.set(false)
             e.printStackTrace()
         }
-    }
-
-    // FIX #1: Tambah stop() agar tidak leak thread saat plugin di-reload
-    fun stop() {
-        isRunning = false
-        try { serverSocket?.close() } catch (e: Exception) {}
-        serverSocket = null
-        port = 0
     }
 
     private fun handleClient(client: Socket) {
@@ -163,20 +145,21 @@ object HydraxProxy {
 
             if (!path.contains("?url=")) return
 
-            val query = path.substringAfter("?")
-
-            // FIX #15: split dengan limit=2 agar nilai Base64 yang mengandung '=' tidak terpotong
+            val query  = path.substringAfter("?")
             val params = query.split("&").associate {
                 val kv = it.split("=", limit = 2)
-                kv[0] to (if (kv.size > 1) kv[1] else "")
+                kv[0] to (kv.getOrElse(1) { "" })
             }
 
             val encodedUrl = params["url"] ?: return
             val keyHex     = params["key"]  ?: return
 
-            // FIX #2: URL-decode dulu sebelum Base64-decode
-            val decodedEncoded = URLDecoder.decode(encodedUrl, "UTF-8")
-            val realUrl = String(Base64.decode(decodedEncoded, Base64.URL_SAFE))
+            // FIX #4: Base64 decode dibungkus try-catch
+            val realUrl = try {
+                String(Base64.decode(encodedUrl, Base64.URL_SAFE), Charsets.UTF_8)
+            } catch (e: Exception) {
+                return
+            }
 
             var rangeHeader: String? = null
             while (true) {
@@ -187,148 +170,115 @@ object HydraxProxy {
                 }
             }
 
-            // Byte offset yang diminta player (posisi seek)
             val reqStart = rangeHeader
                 ?.replace("bytes=", "")
                 ?.split("-")
-                ?.get(0)
+                ?.getOrNull(0)
                 ?.toLongOrNull() ?: 0L
 
             val request = Request.Builder()
                 .url(realUrl)
-                .header("User-Agent",      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer",         "https://abyssplayer.com/")
-                .header("Origin",          "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity")
+                .header("User-Agent",       "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer",          "https://abyssplayer.com/")
+                .header("Origin",           "https://abyssplayer.com")
+                .header("Accept-Encoding",  "identity")
                 .apply { if (rangeHeader != null) header("Range", rangeHeader) }
                 .build()
 
             response = app.baseClient.newCall(request).execute()
             if (!response.isSuccessful) return
 
-            output.write("HTTP/1.1 ${response.code} ${response.message}\r\n".toByteArray())
-            for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) ||
-                    key.equals("content-encoding",  true) ||
-                    key.equals("connection",         true)) continue
-                output.write("$key: $value\r\n".toByteArray())
+            val code = response.code
+            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
+            for ((k, v) in response.headers) {
+                if (k.equals("transfer-encoding", true) ||
+                    k.equals("content-encoding",  true) ||
+                    k.equals("connection",         true)) continue
+                output.write("$k: $v\r\n".toByteArray())
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val body = response.body
-            val inputStream = body.byteStream()
+            val inputStream = response.body.byteStream()
 
-            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
-
-            // =================================================================
-            // FIX SEEK: Inisialisasi AES/CTR langsung ke block yang benar
+            // ─────────────────────────────────────────────────────────────────
+            // FIX #1: AES/CTR SEEK YANG BENAR
             //
-            // AES/CTR encrypt/decrypt per-block 16 byte. Counter awal (nonce)
-            // ada di ivSpec. Untuk seek ke byte N:
-            //   - blockNumber = N / 16  → jumlah block yang sudah terlewati
-            //   - byteOffsetInBlock = N % 16  → posisi dalam block aktif
+            // AES/CTR bekerja dengan "counter block":
+            //   Block ke-N = Encrypt(IV + N)  → XOR dengan plaintext
             //
-            // Cara set counter: increment nonce sebesar blockNumber.
-            // Nonce = 16 byte little-endian integer (untuk CTR mode).
+            // Untuk seek ke byte offset B:
+            //   Block yang dibutuhkan = B / 16
+            //   Byte dalam block      = B % 16
             //
-            // Setelah counter di-set, cipher akan langsung output keystream
-            // yang tepat untuk posisi tersebut — O(1), tidak perlu skip manual.
-            //
-            // Catatan: Zone encrypt hanya 65536 byte pertama (batas server).
-            //          Di luar itu data plaintext — tidak perlu cipher sama sekali.
-            // =================================================================
-            val ENCRYPTED_ZONE = 65536L  // Hydrax hanya enkripsi 64KB pertama
-
+            // Kita LANGSUNG set counter ke nilai yang tepat,
+            // tanpa perlu loop decrypt dummy bytes yang lambat.
+            // ─────────────────────────────────────────────────────────────────
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)   // 32 bytes
             val secretKey = SecretKeySpec(keyBytes, "AES")
-            val baseIv    = keyBytes.copyOfRange(0, 16)
 
-            // Cipher sudah siap di posisi reqStart (hanya jika masih di zona enkripsi)
-            val cipher: Cipher?
-            val byteOffsetInBlock: Int
+            // Hitung block offset dan byte-dalam-block
+            val blockOffset   = reqStart / 16L
+            val byteInBlock   = (reqStart % 16L).toInt()
 
-            if (reqStart < ENCRYPTED_ZONE) {
-                // Hitung block number dan byte offset dalam block aktif
-                val blockNumber      = reqStart / 16L
-                byteOffsetInBlock    = (reqStart % 16).toInt()
+            // Ambil IV awal (16 byte pertama dari key)
+            val ivBytes = keyBytes.copyOfRange(0, 16)
 
-                // Increment nonce (counter) sebesar blockNumber
-                val counterIv = incrementCounter(baseIv, blockNumber)
-                val ivSpec    = IvParameterSpec(counterIv)
+            // Increment IV sebagai big-endian integer → counter yang tepat
+            val ivInt        = BigInteger(1, ivBytes)
+            val newCounterInt = ivInt.add(BigInteger.valueOf(blockOffset))
 
-                cipher = Cipher.getInstance("AES/CTR/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-
-                // Jika kita mulai di tengah block, buang byte awal yang tidak relevan
-                // dengan menghasilkan dummy output sebesar byteOffsetInBlock
-                if (byteOffsetInBlock > 0) {
-                    cipher.update(ByteArray(byteOffsetInBlock))
-                }
-            } else {
-                // Seek melewati zona enkripsi — tidak perlu cipher sama sekali
-                cipher = null
-                byteOffsetInBlock = 0
+            // Konversi kembali ke 16-byte array (big-endian, zero-padded)
+            var newIvBytes = newCounterInt.toByteArray()
+            newIvBytes = when {
+                newIvBytes.size < 16 -> ByteArray(16 - newIvBytes.size) + newIvBytes
+                newIvBytes.size > 16 -> newIvBytes.copyOfRange(newIvBytes.size - 16, newIvBytes.size)
+                else                 -> newIvBytes
             }
 
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(newIvBytes))
+
+            // Kalau reqStart tidak tepat di awal block, skip sisa byte di block pertama
+            if (byteInBlock > 0) {
+                cipher.update(ByteArray(byteInBlock))
+            }
+
+            // Stream data dengan dekripsi hanya pada 64KB pertama
             var offset = reqStart
             val buffer = ByteArray(32768)
             var bytesRead: Int
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                if (cipher != null && offset < ENCRYPTED_ZONE) {
-                    // Hitung berapa byte dari buffer ini masih dalam zona enkripsi
-                    val encryptedInThisChunk = minOf(bytesRead.toLong(), ENCRYPTED_ZONE - offset).toInt()
-
-                    // Decrypt bagian yang terenkripsi
-                    val decrypted = cipher.update(buffer, 0, encryptedInThisChunk)
+                if (offset < 65536L) {
+                    val n         = minOf(bytesRead.toLong(), 65536L - offset).toInt()
+                    val decrypted = cipher.update(buffer, 0, n)
                     if (decrypted != null) output.write(decrypted)
-
-                    // Tulis sisa chunk (jika ada) yang sudah di luar zona enkripsi
-                    if (encryptedInThisChunk < bytesRead) {
-                        output.write(buffer, encryptedInThisChunk, bytesRead - encryptedInThisChunk)
-                    }
+                    if (n < bytesRead)    output.write(buffer, n, bytesRead - n)
                 } else {
-                    // Seluruh chunk di luar zona enkripsi — tulis langsung
                     output.write(buffer, 0, bytesRead)
                 }
-
                 offset += bytesRead
                 output.flush()
             }
 
         } catch (e: SocketException) {
-            // Normal saat user seek/skip agresif — player tutup koneksi lama
+            // Normal saat user seek / stop video
         } catch (e: Exception) {
             // Abaikan error streaming lainnya
         } finally {
-            try { response?.close() } catch (e: Exception) {}
-            try { client.close()   } catch (e: Exception) {}
+            try { response?.close() } catch (_: Exception) {}
+            try { client.close()    } catch (_: Exception) {}
         }
-    }
-
-    /**
-     * Increment AES/CTR nonce (128-bit big-endian counter) sebesar [amount] block.
-     * Ini adalah operasi O(1) — jauh lebih efisien daripada memproses jutaan byte.
-     */
-    private fun incrementCounter(nonce: ByteArray, amount: Long): ByteArray {
-        val result = nonce.copyOf()
-        var carry  = amount
-        // Increment dari byte paling kanan (big-endian counter)
-        for (i in result.indices.reversed()) {
-            val sum = (result[i].toLong() and 0xFF) + (carry and 0xFF)
-            result[i] = (sum and 0xFF).toByte()
-            carry = (carry ushr 8) + (sum ushr 8)
-            if (carry == 0L) break
-        }
-        return result
     }
 }
 
-// =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY)
-// =========================================================================
+
+// =============================================================================
+// EXTRACTOR 1: ABYSS / HYDRAX
+// =============================================================================
 open class AbyssExtractor : ExtractorApi() {
-    override val name        = "Abyss"
-    override val mainUrl     = "https://abyssplayer.com"
+    override val name         = "Abyss"
+    override val mainUrl      = "https://abyssplayer.com"
     override val requiresReferer = true
 
     private fun baseHeaders(referer: String): Map<String, String> = mapOf(
@@ -338,6 +288,7 @@ open class AbyssExtractor : ExtractorApi() {
         "Accept"     to "*/*"
     )
 
+    // FIX #5: Override getUrl versi baru (dengan subtitleCallback & callback)
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -356,74 +307,64 @@ open class AbyssExtractor : ExtractorApi() {
                 android.util.Base64.decode(datas, android.util.Base64.DEFAULT),
                 Charsets.ISO_8859_1
             )
-            // FIX #12: gunakan jsonMapper (bukan mapper) agar tidak shadow MainAPI mapper
-            val dataJson = jsonMapper.readValue(decodedDatas, HydraxData::class.java)
+            val dataJson = mapper.readValue(decodedDatas, HydraxData::class.java)
 
-            val infoSlug = dataJson.slug    ?: slug
+            val infoSlug = dataJson.slug ?: slug
             val md5Id    = dataJson.md5_id  ?: return
             val userId   = dataJson.user_id ?: return
             val mediaStr = dataJson.media   ?: return
 
             val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
-            val md5Hash   = MessageDigest.getInstance("MD5").digest(hashInput)
-            val keyHex    = md5Hash.joinToString("") { "%02x".format(it) }
+            val keyHex    = MessageDigest.getInstance("MD5").digest(hashInput)
+                .joinToString("") { "%02x".format(it) }
 
-            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-            val ivBytes  = keyBytes.copyOfRange(0, 16)
+            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
+            val ivBytes   = keyBytes.copyOfRange(0, 16)
 
-            val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
-            val secretKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec    = IvParameterSpec(ivBytes)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(keyBytes, "AES"),
+                IvParameterSpec(ivBytes)
+            )
 
             val decryptedBytes = cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1))
-            val mediaJson = jsonMapper.readValue(
+            val mediaJson      = mapper.readValue(
                 String(decryptedBytes, Charsets.UTF_8),
                 HydraxMedia::class.java
             )
 
-            val mp4Sources = mediaJson.mp4?.sources
-
-            mp4Sources?.forEach { src ->
+            mediaJson.mp4?.sources?.forEach { src ->
                 val label   = src.label ?: "Unknown"
-                val path    = src.path  ?: ""
-                val baseUrl = src.url   ?: ""
+                val path    = src.path  ?: return@forEach
+                val baseUrl = src.url   ?: return@forEach
+                if (path.isEmpty() || baseUrl.isEmpty()) return@forEach
 
-                if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
-                    val srcUrl   = "$baseUrl/$path"
-                    val filename = path.substringAfterLast("/")
-                    val fnHash   = MessageDigest.getInstance("MD5")
-                        .digest(filename.toByteArray(Charsets.UTF_8))
-                    val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
+                val srcUrl   = "$baseUrl/$path"
+                val filename = path.substringAfterLast("/")
+                val fnKeyHex = MessageDigest.getInstance("MD5")
+                    .digest(filename.toByteArray(Charsets.UTF_8))
+                    .joinToString("") { "%02x".format(it) }
 
-                    HydraxProxy.start()
+                HydraxProxy.start()
 
-                    // FIX #15 (sisi encode): pakai URL_SAFE | NO_WRAP agar tidak ada '=' padding
-                    // dan URL-encode hasilnya agar aman di query string
-                    val encodedUrl = URLEncoder.encode(
-                        android.util.Base64.encodeToString(
-                            srcUrl.toByteArray(),
-                            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                        ),
-                        "UTF-8"
-                    )
-                    val localProxyUrl =
-                        "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
+                val encodedUrl    = android.util.Base64.encodeToString(
+                    srcUrl.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
+                )
+                val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
-                    // FIX #11: newExtractorLink adalah suspend fun, tidak perlu wrapper
-                    // (sudah dalam suspend context getUrl)
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name   = name,
-                            url    = localProxyUrl,
-                            type   = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = pageRef
-                            this.quality = labelToQuality(label)
-                        }
-                    )
-                }
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name   = "$name $label",
+                        url    = localProxyUrl,
+                        type   = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = pageRef
+                        this.quality = labelToQuality(label)
+                    }
+                )
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -432,11 +373,11 @@ open class AbyssExtractor : ExtractorApi() {
 
     private fun extractSlugFromUrl(url: String): String? {
         val vParam = url.substringAfter("?v=", "").substringBefore("&")
-        if (vParam.isNotEmpty() && url.contains("?v=")) return vParam
+        if (vParam.isNotEmpty()) return vParam
         Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""")
             .find(url)?.groupValues?.get(1)?.let { return it }
-        return url.split("?").first().trimEnd('/').split('/')
-            .lastOrNull()?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,20}")) }
+        return url.split("?").first().trimEnd('/').split('/').lastOrNull()
+            ?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,20}")) }
     }
 
     private fun labelToQuality(label: String): Int = when {
@@ -449,19 +390,25 @@ open class AbyssExtractor : ExtractorApi() {
     }
 }
 
-// =========================================================================
+
+// =============================================================================
 // EXTRACTOR 2: TURBO VIP
-// =========================================================================
+// =============================================================================
 open class Lk21TurboExtractor : ExtractorApi() {
-    override var name    = "LK21 TurboVIP"
-    override var mainUrl = "https://turbovidhls.com"
+    override var name         = "LK21 TurboVIP"
+    override var mainUrl      = "https://turbovidhls.com"
     override val requiresReferer = false
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    // FIX #5: Override getUrl versi baru
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
             val id = url.substringAfter("/t/").substringBefore("?")
-            if (id.isEmpty()) return null
+            if (id.isEmpty()) return
 
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
@@ -474,46 +421,54 @@ open class Lk21TurboExtractor : ExtractorApi() {
             if (m3u8Url.isNullOrBlank()) {
                 m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
-            if (m3u8Url.isNullOrBlank()) return null
+            if (m3u8Url.isNullOrBlank()) return
 
-            val isMp4 = m3u8Url.endsWith(".mp4", ignoreCase = true)
-            val type  = if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+            val type = if (m3u8Url.endsWith(".mp4", ignoreCase = true))
+                ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
 
-            sources.add(
+            callback(
                 newExtractorLink(
                     source = "LK21 TurboVIP",
                     name   = "TurboVIP HD",
                     url    = m3u8Url,
                     type   = type
                 ) {
-                    this.referer  = "$mainUrl/"
-                    this.quality  = Qualities.Unknown.value
-                    this.headers  = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/")
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf(
+                        "Origin"  to mainUrl,
+                        "Referer" to "$mainUrl/"
+                    )
                 }
             )
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return sources
     }
 }
 
-// =========================================================================
+
+// =============================================================================
 // EXTRACTOR 3: HOW NETWORK (P2P)
-// =========================================================================
+// =============================================================================
 open class HowNetworkExtractor : ExtractorApi() {
-    override var name    = "LK21 HowNetwork"
-    override var mainUrl = "https://cloud.hownetwork.xyz"
+    override var name         = "LK21 HowNetwork"
+    override var mainUrl      = "https://cloud.hownetwork.xyz"
     override val requiresReferer = false
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    // FIX #5: Override getUrl versi baru
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
             val id = url.substringAfter("id=").substringBefore("&")
-            if (id.isEmpty()) return null
+            if (id.isEmpty()) return
 
-            val responseText = app.post(
-                url     = "$mainUrl/api2.php?id=$id",
+            val response = app.post(
+                url  = "$mainUrl/api2.php?id=$id",
                 headers = mapOf(
                     "Origin"     to mainUrl,
                     "Referer"    to url,
@@ -526,44 +481,45 @@ open class HowNetworkExtractor : ExtractorApi() {
                 )
             ).text
 
-            // FIX #12: gunakan jsonMapper
-            val parsedRes = try {
-                jsonMapper.readValue(responseText, HowNetworkResponse::class.java)
-            } catch (e: Exception) { null }
+            val parsedRes  = try { mapper.readValue(response, HowNetworkResponse::class.java) } catch (e: Exception) { null }
+            val m3u8Url    = parsedRes?.file
+            if (m3u8Url.isNullOrBlank()) return
 
-            val m3u8Url = parsedRes?.file
-            if (!m3u8Url.isNullOrBlank()) {
-                sources.add(
-                    newExtractorLink(
-                        source = "LK21 HowNetwork",
-                        name   = "HowNetwork HD",
-                        url    = m3u8Url,
-                        type   = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf("Origin" to mainUrl, "Referer" to "$mainUrl/")
-                    }
-                )
-            }
+            callback(
+                newExtractorLink(
+                    source = "LK21 HowNetwork",
+                    name   = "HowNetwork HD",
+                    url    = m3u8Url,
+                    type   = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf(
+                        "Origin"  to mainUrl,
+                        "Referer" to "$mainUrl/"
+                    )
+                }
+            )
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return sources
     }
 }
 
-// =========================================================================
+
+// =============================================================================
 // EXTRACTOR 4: CAST HD
-// =========================================================================
+// =============================================================================
 open class CastExtractor : ExtractorApi() {
-    override var name    = "CAST HD"
-    override var mainUrl = "https://weneverbeenfree.com"
+    override var name         = "CAST HD"
+    override var mainUrl      = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    private fun b64url(b: ByteArray): String = android.util.Base64.encodeToString(
-        b, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-    )
+    private fun b64url(b: ByteArray): String =
+        android.util.Base64.encodeToString(
+            b,
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+        )
 
     private fun b64urlDecode(s: String): ByteArray {
         var std = s.replace("-", "+").replace("_", "/")
@@ -575,80 +531,48 @@ open class CastExtractor : ExtractorApi() {
     private fun getRandomBytes(size: Int): ByteArray =
         ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
-    // FIX #7: DER parsing yang benar dengan handle long-form length encoding
-    // DER signature bisa punya length > 127 byte, di mana byte pertama length
-    // adalah 0x80|numBytes dan numBytes byte berikutnya adalah panjang sebenarnya.
-    private fun parseDerLength(der: ByteArray, offset: Int): Pair<Int, Int> {
-        val b = der[offset].toInt() and 0xFF
-        return if (b < 0x80) {
-            // Short form: panjang langsung di byte ini
-            Pair(b, offset + 1)
-        } else {
-            // Long form: b & 0x7F = jumlah byte panjang berikutnya
-            val numLenBytes = b and 0x7F
-            var len = 0
-            for (i in 0 until numLenBytes) {
-                len = (len shl 8) or (der[offset + 1 + i].toInt() and 0xFF)
-            }
-            Pair(len, offset + 1 + numLenBytes)
-        }
-    }
-
     private fun derToRaw(der: ByteArray): ByteArray {
-        // DER SEQUENCE: 0x30 <len> 0x02 <rLen> <r> 0x02 <sLen> <s>
-        var offset = 1  // skip 0x30 (SEQUENCE tag)
-        val (_, seqBodyStart) = parseDerLength(der, offset)
-        offset = seqBodyStart
+        var offset  = 2
+        val rLength = der[offset + 1].toInt()
+        val rOffset = offset + 2
+        offset     += 2 + rLength
+        val sLength = der[offset + 1].toInt()
+        val sOffset = offset + 2
 
-        // Parse R
-        check(der[offset] == 0x02.toByte()) { "Expected INTEGER tag for R" }
-        offset++
-        val (rLength, rStart) = parseDerLength(der, offset)
-        offset = rStart
-        val rBytes = der.copyOfRange(offset, offset + rLength)
-        offset += rLength
+        val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
+        val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
 
-        // Parse S
-        check(der[offset] == 0x02.toByte()) { "Expected INTEGER tag for S" }
-        offset++
-        val (sLength, sStart) = parseDerLength(der, offset)
-        offset = sStart
-        val sBytes = der.copyOfRange(offset, offset + sLength)
-
-        // Drop leading zero padding (DER tambahkan 0x00 jika bit tinggi set)
-        val rStripped = rBytes.dropWhile { it == 0.toByte() }.toByteArray()
-        val sStripped = sBytes.dropWhile { it == 0.toByte() }.toByteArray()
-
-        // Pad ke 32 byte (P-256 = 32 byte per komponen)
-        val rPadded = ByteArray(32); val sPadded = ByteArray(32)
-        System.arraycopy(rStripped, 0, rPadded, 32 - rStripped.size, rStripped.size)
-        System.arraycopy(sStripped, 0, sPadded, 32 - sStripped.size, sStripped.size)
-
+        val rPadded = ByteArray(32)
+        val sPadded = ByteArray(32)
+        System.arraycopy(rStr, 0, rPadded, 32 - rStr.size, rStr.size)
+        System.arraycopy(sStr, 0, sPadded, 32 - sStr.size, sStr.size)
         return rPadded + sPadded
     }
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val sources = mutableListOf<ExtractorLink>()
+    // FIX #5: Override getUrl versi baru
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         val videoId = url.substringAfterLast("/")
 
         val commonHeaders = mapOf(
-            "User-Agent"       to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-            "Origin"           to mainUrl,
-            "Referer"          to url,
-            "X-Embed-Origin"   to "playeriframe.sbs",
-            "X-Embed-Parent"   to url,
-            "X-Embed-Referer"  to "https://playeriframe.sbs/"
+            "User-Agent"      to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+            "Origin"          to mainUrl,
+            "Referer"         to url,
+            "X-Embed-Origin"  to "playeriframe.sbs",
+            "X-Embed-Parent"  to url,
+            "X-Embed-Referer" to "https://playeriframe.sbs/"
         )
 
         try {
             val chalRes  = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
-            // FIX #12: gunakan jsonMapper
-            val chalJson = try {
-                jsonMapper.readValue(chalRes.text, CastChalResp::class.java)
-            } catch (e: Exception) { null } ?: return null
+            val chalJson = try { mapper.readValue(chalRes.text, CastChalResp::class.java) } catch (e: Exception) { null } ?: return
 
-            val nonce = chalJson.nonce          ?: return null
-            val cid   = chalJson.challenge_id   ?: return null
+            val nonce = chalJson.nonce          ?: return
+            val cid   = chalJson.challenge_id   ?: return
 
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
@@ -657,17 +581,16 @@ open class CastExtractor : ExtractorApi() {
             val sig = Signature.getInstance("SHA256withECDSA")
             sig.initSign(kp.private)
             sig.update(nonce.toByteArray(Charsets.UTF_8))
-            // FIX #7: derToRaw sekarang handle long-form DER dengan benar
             val rawSignature = derToRaw(sig.sign())
 
-            val pub = kp.public as ECPublicKey
+            val pub    = kp.public as ECPublicKey
             var xBytes = pub.w.affineX.toByteArray()
             var yBytes = pub.w.affineY.toByteArray()
 
             if (xBytes.size > 32) xBytes = xBytes.copyOfRange(xBytes.size - 32, xBytes.size)
             if (yBytes.size > 32) yBytes = yBytes.copyOfRange(yBytes.size - 32, yBytes.size)
-            if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) { 0 } + xBytes
-            if (yBytes.size < 32) yBytes = ByteArray(32 - yBytes.size) { 0 } + yBytes
+            if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) + xBytes
+            if (yBytes.size < 32) yBytes = ByteArray(32 - yBytes.size) + yBytes
 
             val attestPayload = mapOf(
                 "viewer_id"    to b64url(getRandomBytes(16)),
@@ -685,21 +608,16 @@ open class CastExtractor : ExtractorApi() {
             )
 
             val attestRes  = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, json = attestPayload)
-            val attestJson = try {
-                jsonMapper.readValue(attestRes.text, CastAttestResp::class.java)
-            } catch (e: Exception) { null } ?: return null
-            val token = attestJson.token ?: return null
+            val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch (e: Exception) { null } ?: return
+            val token      = attestJson.token ?: return
 
             val pbPayload = mapOf("fingerprint" to mapOf("token" to token))
             val pbRes     = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, json = pbPayload)
+            val pbResp    = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch (e: Exception) { null } ?: return
 
-            val pbResp = try {
-                jsonMapper.readValue(pbRes.text, CastPbResp::class.java)?.playback
-            } catch (e: Exception) { null } ?: return null
-
-            val iv      = b64urlDecode(pbResp.iv      ?: return null)
-            val payload = b64urlDecode(pbResp.payload  ?: return null)
-            val keyParts = pbResp.key_parts            ?: return null
+            val iv      = b64urlDecode(pbResp.iv      ?: return)
+            val payload = b64urlDecode(pbResp.payload  ?: return)
+            val keyParts = pbResp.key_parts            ?: return
 
             val keysToTest = mutableListOf<ByteArray>()
             val chunks16   = mutableListOf<ByteArray>()
@@ -710,7 +628,7 @@ open class CastExtractor : ExtractorApi() {
                     val dec = b64urlDecode(p)
                     if (dec.size == 32)      keysToTest.add(dec)
                     else if (dec.size == 16) chunks16.add(dec)
-                } catch (e: Exception) {}
+                } catch (_: Exception) {}
             }
 
             for (i in chunks16.indices) {
@@ -719,49 +637,40 @@ open class CastExtractor : ExtractorApi() {
                 }
             }
 
-            var realUrl: String? = null
-            var qualityLabel     = "HD"
-
             for (keyBytes in keysToTest) {
                 try {
-                    val cipher    = Cipher.getInstance("AES/GCM/NoPadding")
-                    val spec      = GCMParameterSpec(128, iv)
-                    val secretKey = SecretKeySpec(keyBytes, "AES")
-                    cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-                    val decrypted = cipher.doFinal(payload)
+                    val aesCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    aesCipher.init(
+                        Cipher.DECRYPT_MODE,
+                        SecretKeySpec(keyBytes, "AES"),
+                        GCMParameterSpec(128, iv)
+                    )
+                    val decrypted  = aesCipher.doFinal(payload)
+                    val parsedData = mapper.readValue(String(decrypted, Charsets.UTF_8), CastDecrypted::class.java)
+                    val realUrl    = parsedData?.sources?.firstOrNull()?.url ?: continue
+                    val qualLabel  = parsedData.sources?.firstOrNull()?.label ?: "HD"
 
-                    val jsonString = String(decrypted, Charsets.UTF_8)
-                    // FIX #12: gunakan jsonMapper
-                    val parsedData = jsonMapper.readValue(jsonString, CastDecrypted::class.java)
-
-                    realUrl      = parsedData?.sources?.firstOrNull()?.url
-                    qualityLabel = parsedData?.sources?.firstOrNull()?.label ?: "HD"
-
-                    if (realUrl != null) break
-                } catch (e: Exception) {}
-            }
-
-            if (realUrl != null) {
-                sources.add(
-                    newExtractorLink(
-                        source = "CAST HD",
-                        name   = "CAST $qualityLabel",
-                        url    = realUrl,
-                        type   = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "Origin"     to mainUrl,
-                            "Referer"    to "$mainUrl/",
-                            "User-Agent" to commonHeaders["User-Agent"]!!
-                        )
-                    }
-                )
+                    callback(
+                        newExtractorLink(
+                            source = "CAST HD",
+                            name   = "CAST $qualLabel",
+                            url    = realUrl,
+                            type   = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mapOf(
+                                "Origin"     to mainUrl,
+                                "Referer"    to "$mainUrl/",
+                                "User-Agent" to commonHeaders["User-Agent"]!!
+                            )
+                        }
+                    )
+                    break  // Berhasil, hentikan loop key
+                } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return sources
     }
 }
