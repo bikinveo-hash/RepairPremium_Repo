@@ -12,11 +12,14 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
+import okhttp3.MediaType
 import okhttp3.Request
+import okhttp3.RequestBody
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -31,7 +34,7 @@ import kotlin.concurrent.thread
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET)
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET MULTI-THREAD)
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
@@ -41,7 +44,7 @@ object HydraxProxy {
     fun start() {
         if (isRunning) return
         try {
-            // Membuka Server di port acak yang kosong, khusus untuk Localhost (127.0.0.1)
+            // Membuka Server di port acak khusus Localhost
             serverSocket = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
             port = serverSocket!!.localPort
             isRunning = true
@@ -49,7 +52,7 @@ object HydraxProxy {
                 while (isRunning) {
                     try {
                         val client = serverSocket!!.accept()
-                        // Multi-threading: Mampu melayani banyak request ExoPlayer bersamaan!
+                        // Multi-threading agar ExoPlayer tidak macet saat melompat (seek)
                         thread { handleClient(client) }
                     } catch (e: Exception) {}
                 }
@@ -82,25 +85,27 @@ object HydraxProxy {
             val keyHex = params["key"] ?: return
             val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
-            // Ambil Range permintaan dari ExoPlayer
-            var range = "bytes=0-"
+            // Ambil MURNI Range permintaan dari ExoPlayer
+            var rangeHeader: String? = null
             while (true) {
                 val line = reader.readLine()
                 if (line.isNullOrEmpty()) break
                 if (line.lowercase().startsWith("range:")) {
-                    range = line.substringAfter(":").trim()
+                    rangeHeader = line.substringAfter(":").trim()
                 }
             }
 
-            val reqStart = range.replace("bytes=", "").split("-")[0].toLongOrNull() ?: 0L
+            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
-            // Tembak request murni ke Hydrax
+            // Tembak request MURNI ke Hydrax
             val request = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
-                .header("Range", "bytes=$reqStart-")
+                .apply {
+                    if (rangeHeader != null) header("Range", rangeHeader)
+                }
                 .build()
 
             val response = app.baseClient.newCall(request).execute()
@@ -114,7 +119,7 @@ object HydraxProxy {
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) || key.equals("content-encoding", true)) continue
+                if (key.equals("transfer-encoding", true) || key.equals("content-encoding", true) || key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
             output.write("\r\n".toByteArray())
@@ -122,58 +127,43 @@ object HydraxProxy {
             val body = response.body ?: return
             val inputStream = body.byteStream()
 
-            // Jika ExoPlayer meminta data yang letaknya jauh di atas 64KB, Bypass AES!
-            if (reqStart >= 65536) {
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+            // SIHIR DEKRIPSI KTP (AES-256 MUTLAK)
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+            // Fast-Forward sinkronisasi mesin AES jika ExoPlayer melompat ke area 64KB
+            if (reqStart > 0 && reqStart < 65536) {
+                cipher.update(ByteArray(reqStart.toInt()))
+            }
+
+            var offset = reqStart
+            val buffer = ByteArray(32768)
+            var bytesRead: Int
+
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                if (offset < 65536) {
+                    // Presisi: Hanya dekripsi sampai batas byte 65.536
+                    val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
+                    val decrypted = cipher.update(buffer, 0, n)
+                    if (decrypted != null) {
+                        output.write(decrypted)
+                    }
+                    // Sisa buffer murni yang lolos dari 64KB ditulis apa adanya
+                    if (n < bytesRead) {
+                        output.write(buffer, n, bytesRead - n)
+                    }
+                } else {
+                    // 100% murni
                     output.write(buffer, 0, bytesRead)
                 }
-                output.flush()
-            } else {
-                // SIHIR DEKRIPSI KTP (AES-256 MUTLAK)
-                val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-                val secretKey = SecretKeySpec(keyBytes, "AES")
-                val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-                val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-
-                // Sinkronisasi mesin AES jika ExoPlayer melompat ke tengah
-                if (reqStart > 0) {
-                    var skipped = 0L
-                    while (skipped < reqStart) {
-                        val toSkip = minOf(4096L, reqStart - skipped).toInt()
-                        cipher.update(ByteArray(toSkip))
-                        skipped += toSkip
-                    }
-                }
-
-                var offset = reqStart
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    if (offset < 65536) {
-                        // Presisi: Hanya dekripsi sampai batas byte 65.536
-                        val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                        val decrypted = cipher.update(buffer, 0, n)
-                        if (decrypted != null) {
-                            output.write(decrypted)
-                        }
-                        // Sisa buffer murni yang lolos dari 64KB
-                        if (n < bytesRead) {
-                            output.write(buffer, n, bytesRead - n)
-                        }
-                    } else {
-                        // 100% murni
-                        output.write(buffer, 0, bytesRead)
-                    }
-                    offset += bytesRead
-                }
-                output.flush()
+                offset += bytesRead
             }
+            output.flush()
         } catch (e: Exception) {
-            // Abaikan error saat user menghentikan film (broken pipe)
+            // Abaikan error saat user melakukan seek / close player
         } finally {
             try { client.close() } catch(e: Exception) {}
         }
@@ -215,7 +205,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX
+// EXTRACTOR 1: ABYSS / HYDRAX (PROXY LOKAL BYPASS)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -264,7 +254,7 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4 = mediaJson["mp4"] as? Map<String, Any>
             val mp4Sources = mp4?.get("sources") as? List<Map<String, Any>>
 
-            // KITA HANYA MENGAMBIL 'SOURCES' KARENA MENGANDUNG FULL VIDEO
+            // Kita looping setiap resolusi untuk dibuatkan URL Proxy Lokal masing-masing
             mp4Sources?.forEach { src ->
                 val label = src["label"]?.toString() ?: "Unknown"
                 val codec = src["codec"]?.toString() ?: "h264"
@@ -274,12 +264,12 @@ open class AbyssExtractor : ExtractorApi() {
                 if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
 
-                    // KUNCI RAHASIA: MD5 dari nama file 'sources'
+                    // KUNCI RAHASIA: MD5 dari nama file 'sources' masing-masing resolusi
                     val filename = path.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                    // Menghidupkan Server Proxy Lokal kita!
+                    // Nyalakan Server Proxy Lokal kita!
                     HydraxProxy.start()
 
                     // Membungkus URL asli menjadi URL Localhost
@@ -430,7 +420,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: CAST HD
+// EXTRACTOR 4: CAST HD (Telah diperbaiki bug OkHttp-nya)
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name = "CAST HD"
@@ -520,12 +510,17 @@ open class CastExtractor : ExtractorApi() {
                 "attributes" to mapOf("entropy" to "high")
             ))
 
-            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
+            // MEMPERBAIKI ERROR BUILD OKHTTP DI SINI
+            val jsonMediaType = MediaType.parse("application/json")
+            val attestBody = RequestBody.create(jsonMediaType, attestPayloadStr)
+            val attestRes = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, requestBody = attestBody)
+            
             val attestJson = try { mapper.readValue(attestRes.text, CastAttestResp::class.java) } catch(e:Exception){ null } ?: return null
             val token = attestJson.token ?: return null
 
             val pbPayloadStr = mapper.writeValueAsString(mapOf("fingerprint" to mapOf("token" to token)))
-            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbPayloadStr.toRequestBody("application/json".toMediaTypeOrNull()))
+            val pbBody = RequestBody.create(jsonMediaType, pbPayloadStr)
+            val pbRes = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, requestBody = pbBody)
             
             val pbResp = try { mapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch(e:Exception){ null } ?: return null
             val iv = b64urlDecode(pbResp.iv ?: return null)
