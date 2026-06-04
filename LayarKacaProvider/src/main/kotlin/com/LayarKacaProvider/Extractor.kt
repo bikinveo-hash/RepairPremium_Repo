@@ -48,14 +48,24 @@ data class HydraxMedia(
 )
 
 data class HydraxMp4(
-    @JsonProperty("sources") val sources: List<HydraxSource>? = null
+    @JsonProperty("sources") val sources: List<HydraxSource>? = null,
+    @JsonProperty("fristDatas") val fristDatas: List<HydraxFristData>? = null
 )
 
 data class HydraxSource(
     @JsonProperty("label") val label: String? = null,
     @JsonProperty("codec") val codec: String? = null,
     @JsonProperty("path") val path: String? = null,
-    @JsonProperty("url") val url: String? = null
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("size") val size: Long? = null,
+    @JsonProperty("partSize") val partSize: Long? = null
+)
+
+data class HydraxFristData(
+    @JsonProperty("res_id") val res_id: Int? = null,
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("size") val size: Long? = null,
+    @JsonProperty("partSize") val partSize: Long? = null
 )
 
 data class HowNetworkResponse(
@@ -119,8 +129,8 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            client.soTimeout = 15000 
-            
+            client.soTimeout = 30000
+
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -130,16 +140,20 @@ object HydraxProxy {
             val path = parts[1]
 
             if (!path.contains("?url=")) return
-            
+
             val query = path.substringAfter("?")
-            val params = query.split("&").associate { 
-                val kv = it.split("=")
-                kv[0] to (if (kv.size > 1) kv[1] else "")
+            // Param bisa berisi '=' dalam base64, jadi parse hanya pada '&' pertama per key
+            val params = mutableMapOf<String, String>()
+            query.split("&").forEach {
+                val idx = it.indexOf("=")
+                if (idx > 0) params[it.substring(0, idx)] = it.substring(idx + 1)
             }
-            
+
             val encodedUrl = params["url"] ?: return
-            val keyHex = params["key"] ?: return
-            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+            val keyHex    = params["key"] ?: return
+            val fileSize  = params["fileSize"]?.toLongOrNull() ?: 0L
+            val partSize  = params["partSize"]?.toLongOrNull() ?: 0L
+            val realUrl   = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
             var rangeHeader: String? = null
             while (true) {
@@ -150,80 +164,93 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            // ── Hitung global byte range yang diminta player ──────────────────
+            val globalStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            val globalEnd   = rangeHeader?.replace("bytes=", "")?.split("-")?.getOrNull(1)?.toLongOrNull()
+                              ?: ((if (fileSize > 0) fileSize else partSize) - 1L)
+
+            // ── Multi-part routing ────────────────────────────────────────────
+            // Jika partSize diketahui dan file lebih besar dari satu part,
+            // hitung offset dalam part yang benar lalu fetch dengan Range yang sudah disesuaikan.
+            val (fetchUrl, offsetInPart, partIndex) = if (partSize > 0 && fileSize > partSize) {
+                val pIdx      = (globalStart / partSize).toInt()          // 0-based
+                val offInPart = globalStart % partSize
+                // URL semua part identik (CDN load-balance per Range request)
+                Triple(realUrl, offInPart, pIdx)
+            } else {
+                Triple(realUrl, globalStart, 0)
+            }
+
+            // Hitung end offset dalam part
+            val partEnd = if (partSize > 0 && fileSize > partSize) {
+                val partStart = partIndex.toLong() * partSize
+                val partLast  = partStart + partSize - 1L
+                minOf(globalEnd - partIndex.toLong() * partSize, partSize - 1L)
+            } else {
+                globalEnd
+            }
+
+            val cdnRange = "bytes=$offsetInPart-$partEnd"
 
             val request = Request.Builder()
-                .url(realUrl)
+                .url(fetchUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer", "https://abyssplayer.com/")
-                .header("Origin", "https://abyssplayer.com")
+                .header("Referer",    "https://abyssplayer.com/")
+                .header("Origin",     "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
-                .apply {
-                    if (rangeHeader != null) header("Range", rangeHeader)
-                }
+                .header("Range", cdnRange)
                 .build()
 
             response = app.baseClient.newCall(request).execute()
 
-            if (!response.isSuccessful) return
-
-            val code = response.code
-            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
-            for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) || 
-                    key.equals("content-encoding", true) || 
-                    key.equals("connection", true)) continue
-                output.write("$key: $value\r\n".toByteArray())
+            if (!response.isSuccessful) {
+                output.write("HTTP/1.1 ${response.code} ${response.message}\r\nConnection: close\r\n\r\n".toByteArray())
+                return
             }
+
+            // ── Tulis response header ke player ──────────────────────────────
+            val totalSize = if (fileSize > 0) fileSize else (partSize.takeIf { it > 0 } ?: (globalEnd + 1L))
+            val responseCode = if (rangeHeader != null) 206 else 200
+
+            output.write("HTTP/1.1 $responseCode Partial Content\r\n".toByteArray())
+            output.write("Content-Type: video/mp4\r\n".toByteArray())
+            output.write("Accept-Ranges: bytes\r\n".toByteArray())
+
+            val contentLength = globalEnd - globalStart + 1L
+            output.write("Content-Length: $contentLength\r\n".toByteArray())
+            output.write("Content-Range: bytes $globalStart-$globalEnd/$totalSize\r\n".toByteArray())
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
-            val body = response.body
+            // ── Streaming + decrypt ───────────────────────────────────────────
+            // Enkripsi hanya berlaku pada 65536 byte PERTAMA per part (bukan per file global)
+            val encBoundary = 65536L
+            val keyBytes    = keyHex.toByteArray(Charsets.UTF_8)
+            val secretKey   = SecretKeySpec(keyBytes, "AES")
+            val ivSpec      = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+            val cipher      = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+            // Jika mulai dari tengah zona enkripsi dalam part ini, skip cipher state
+            if (offsetInPart > 0 && offsetInPart < encBoundary) {
+                cipher.update(ByteArray(offsetInPart.toInt()))
+            }
+
+            val body        = response.body
             val inputStream = body.byteStream()
+            val buffer      = ByteArray(32768)
+            var bytesRead:  Int
+            var posInPart   = offsetInPart   // posisi saat ini dalam part (untuk cek enkripsi boundary)
 
-            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-            val secretKey = SecretKeySpec(keyBytes, "AES")
-
-            // FIX: AES-CTR mengenkripsi SELURUH file dari byte 0, bukan hanya 65536 byte pertama.
-            // Saat seek (reqStart > 0), kita harus menginisialisasi counter AES-CTR
-            // pada posisi block yang TEPAT, bukan membuang dummy bytes.
-            //
-            // AES-CTR memproses data per-block 16 byte. Untuk posisi byte N:
-            //   block_number = N / 16        → berapa block yang sudah dilewati
-            //   block_remainder = N % 16     → byte sisa di dalam block terakhir
-            //
-            // IV awal adalah keyBytes[0..15] sebagai big-endian integer,
-            // lalu counter = iv_int + block_number.
-            val ivInt = java.math.BigInteger(1, keyBytes.copyOfRange(0, 16))
-            val blockNumber = java.math.BigInteger.valueOf(reqStart / 16)
-            val blockRemainder = (reqStart % 16).toInt()
-            val counterStart = ivInt.add(blockNumber)
-
-            // Buat IvParameterSpec dari counter yang sudah digeser
-            val counterBytes = counterStart.toByteArray().let { raw ->
-                // pastikan selalu 16 byte (big-endian, zero-padded di kiri)
-                if (raw.size >= 16) raw.copyOfRange(raw.size - 16, raw.size)
-                else ByteArray(16 - raw.size) + raw
-            }
-            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(counterBytes))
-
-            // Jika reqStart tidak tepat di batas block (blockRemainder > 0),
-            // "buang" sisa byte di block pertama agar keystream sejajar dengan data.
-            if (blockRemainder > 0) {
-                cipher.update(ByteArray(blockRemainder))
-            }
-
-            val buffer = ByteArray(32768)
-            var bytesRead: Int
-
-            // FIX: Decrypt SEMUA byte yang masuk — tidak ada batas 65536.
-            // CDN Hydrax mengenkripsi seluruh file dengan AES-CTR stream cipher.
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                val decrypted = cipher.update(buffer, 0, bytesRead)
-                if (decrypted != null) {
-                    output.write(decrypted)
+                if (posInPart < encBoundary) {
+                    val n = minOf(bytesRead.toLong(), encBoundary - posInPart).toInt()
+                    val decrypted = cipher.update(buffer, 0, n)
+                    if (decrypted != null) output.write(decrypted)
+                    if (n < bytesRead) output.write(buffer, n, bytesRead - n)
+                } else {
+                    output.write(buffer, 0, bytesRead)
                 }
+                posInPart += bytesRead
                 output.flush()
             }
         } catch (e: SocketException) {
@@ -288,29 +315,31 @@ open class AbyssExtractor : ExtractorApi() {
             val mp4Sources = mediaJson.mp4?.sources
 
             mp4Sources?.forEach { src ->
-                val label = src.label ?: "Unknown"
-                val codec = src.codec ?: "h264"
-                val path = src.path ?: ""
-                val baseUrl = src.url ?: ""
+                val label    = src.label ?: "Unknown"
+                val path     = src.path ?: ""
+                val baseUrl  = src.url ?: ""
+                val fileSize = src.size ?: 0L
+                val partSize = src.partSize ?: 0L
 
                 if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
                     val srcUrl = "$baseUrl/$path"
 
                     val filename = path.substringAfterLast("/")
-                    val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
+                    val fnHash   = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
                     HydraxProxy.start()
 
                     val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
-                    val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
+                    // Kirim fileSize & partSize ke proxy agar bisa routing multi-part
+                    val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex&fileSize=$fileSize&partSize=$partSize"
 
                     callback(
                         newExtractorLink(
                             source = name,
-                            name = name,
-                            url = localProxyUrl,
-                            type = ExtractorLinkType.VIDEO
+                            name   = name,
+                            url    = localProxyUrl,
+                            type   = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = pageRef
                             this.quality = labelToQuality(label)
