@@ -119,8 +119,9 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            client.soTimeout = 15000 
-            
+            // Fix #3: timeout dinaikkan agar seek jauh tidak putus sebelum data datang
+            client.soTimeout = 60000
+
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -130,16 +131,16 @@ object HydraxProxy {
             val path = parts[1]
 
             if (!path.contains("?url=")) return
-            
+
             val query = path.substringAfter("?")
-            val params = query.split("&").associate { 
-                val kv = it.split("=")
+            val params = query.split("&").associate {
+                val kv = it.split("=", limit = 2)
                 kv[0] to (if (kv.size > 1) kv[1] else "")
             }
-            
+
             val encodedUrl = params["url"] ?: return
-            val keyHex = params["key"] ?: return
-            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+            val keyHex    = params["key"]  ?: return
+            val realUrl   = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
             var rangeHeader: String? = null
             while (true) {
@@ -150,7 +151,10 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            val reqStart = rangeHeader
+                ?.replace("bytes=", "")
+                ?.split("-")?.get(0)
+                ?.toLongOrNull() ?: 0L
 
             val request = Request.Builder()
                 .url(realUrl)
@@ -158,58 +162,74 @@ object HydraxProxy {
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
-                .apply {
-                    if (rangeHeader != null) header("Range", rangeHeader)
-                }
+                .apply { if (rangeHeader != null) header("Range", rangeHeader) }
                 .build()
 
             response = app.baseClient.newCall(request).execute()
-
             if (!response.isSuccessful) return
 
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) || 
-                    key.equals("content-encoding", true) || 
+                if (key.equals("transfer-encoding", true) ||
+                    key.equals("content-encoding", true)  ||
                     key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
-            val body = response.body
-            val inputStream = body.byteStream()
+            val inputStream = response.body.byteStream()
 
-            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
-            val secretKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            // Batas enkripsi: hanya 65536 byte pertama file yang dienkripsi Hydrax
+            val ENCRYPT_LIMIT = 65536L
 
-            if (reqStart > 0 && reqStart < 65536) {
-                cipher.update(ByteArray(reqStart.toInt()))
-            }
+            // Fix #1 & #2: cipher harus di-sync ke posisi reqStart agar CTR counter tepat.
+            // cipherSkip = berapa byte cipher yang harus di-buang sebelum data real.
+            val cipherSkip    = minOf(reqStart, ENCRYPT_LIMIT)
+            val needsDecrypt  = reqStart < ENCRYPT_LIMIT
 
-            var offset = reqStart
             val buffer = ByteArray(32768)
             var bytesRead: Int
+            var offset = reqStart
 
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                if (offset < 65536) {
-                    val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                    val decrypted = cipher.update(buffer, 0, n)
-                    if (decrypted != null) {
-                        output.write(decrypted)
-                    }
-                    if (n < bytesRead) {
-                        output.write(buffer, n, bytesRead - n)
-                    }
-                } else {
-                    output.write(buffer, 0, bytesRead)
+            if (needsDecrypt) {
+                val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
+                val secretKey = SecretKeySpec(keyBytes, "AES")
+                val ivSpec    = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+                val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+                // Fix #2: skip per-chunk agar tidak crash saat reqStart sangat besar.
+                // (ByteArray(reqStart.toInt()) crash kalau reqStart > ~2GB)
+                var remaining = cipherSkip
+                val skipBuf   = ByteArray(32768)
+                while (remaining > 0) {
+                    val n = minOf(remaining, skipBuf.size.toLong()).toInt()
+                    cipher.update(skipBuf, 0, n)
+                    remaining -= n
                 }
-                offset += bytesRead
-                output.flush() 
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    if (offset < ENCRYPT_LIMIT) {
+                        // Bagian yang masih dalam zona enkripsi — dekripsi dulu
+                        val n         = minOf(bytesRead.toLong(), ENCRYPT_LIMIT - offset).toInt()
+                        val decrypted = cipher.update(buffer, 0, n)
+                        if (decrypted != null) output.write(decrypted)
+                        // Sisa chunk yang sudah lewat batas — kirim raw
+                        if (n < bytesRead) output.write(buffer, n, bytesRead - n)
+                    } else {
+                        // Seluruh chunk sudah di luar zona enkripsi — kirim raw langsung
+                        output.write(buffer, 0, bytesRead)
+                    }
+                    offset += bytesRead
+                    output.flush()
+                }
+            } else {
+                // reqStart >= 65536: semua data di request ini sudah plain, tidak perlu decrypt
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    output.flush()
+                }
             }
         } catch (e: SocketException) {
             // Wajar saat user melakukan seek brutal
