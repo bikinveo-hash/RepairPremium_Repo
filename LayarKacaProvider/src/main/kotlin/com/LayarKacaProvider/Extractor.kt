@@ -119,9 +119,8 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            // Fix #3: timeout dinaikkan agar seek jauh tidak putus sebelum data datang
-            client.soTimeout = 60000
-
+            client.soTimeout = 15000 
+            
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -131,16 +130,16 @@ object HydraxProxy {
             val path = parts[1]
 
             if (!path.contains("?url=")) return
-
+            
             val query = path.substringAfter("?")
-            val params = query.split("&").associate {
-                val kv = it.split("=", limit = 2)
+            val params = query.split("&").associate { 
+                val kv = it.split("=")
                 kv[0] to (if (kv.size > 1) kv[1] else "")
             }
-
+            
             val encodedUrl = params["url"] ?: return
-            val keyHex    = params["key"]  ?: return
-            val realUrl   = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+            val keyHex = params["key"] ?: return
+            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
             var rangeHeader: String? = null
             while (true) {
@@ -151,10 +150,7 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart = rangeHeader
-                ?.replace("bytes=", "")
-                ?.split("-")?.get(0)
-                ?.toLongOrNull() ?: 0L
+            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
             val request = Request.Builder()
                 .url(realUrl)
@@ -162,74 +158,73 @@ object HydraxProxy {
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
-                .apply { if (rangeHeader != null) header("Range", rangeHeader) }
+                .apply {
+                    if (rangeHeader != null) header("Range", rangeHeader)
+                }
                 .build()
 
             response = app.baseClient.newCall(request).execute()
+
             if (!response.isSuccessful) return
 
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) ||
-                    key.equals("content-encoding", true)  ||
+                if (key.equals("transfer-encoding", true) || 
+                    key.equals("content-encoding", true) || 
                     key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val inputStream = response.body.byteStream()
+            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
+            val body = response.body
+            val inputStream = body.byteStream()
 
-            // Batas enkripsi: hanya 65536 byte pertama file yang dienkripsi Hydrax
-            val ENCRYPT_LIMIT = 65536L
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
+            val secretKey = SecretKeySpec(keyBytes, "AES")
 
-            // Fix #1 & #2: cipher harus di-sync ke posisi reqStart agar CTR counter tepat.
-            // cipherSkip = berapa byte cipher yang harus di-buang sebelum data real.
-            val cipherSkip    = minOf(reqStart, ENCRYPT_LIMIT)
-            val needsDecrypt  = reqStart < ENCRYPT_LIMIT
+            // FIX: AES-CTR mengenkripsi SELURUH file dari byte 0, bukan hanya 65536 byte pertama.
+            // Saat seek (reqStart > 0), kita harus menginisialisasi counter AES-CTR
+            // pada posisi block yang TEPAT, bukan membuang dummy bytes.
+            //
+            // AES-CTR memproses data per-block 16 byte. Untuk posisi byte N:
+            //   block_number = N / 16        → berapa block yang sudah dilewati
+            //   block_remainder = N % 16     → byte sisa di dalam block terakhir
+            //
+            // IV awal adalah keyBytes[0..15] sebagai big-endian integer,
+            // lalu counter = iv_int + block_number.
+            val ivInt = java.math.BigInteger(1, keyBytes.copyOfRange(0, 16))
+            val blockNumber = java.math.BigInteger.valueOf(reqStart / 16)
+            val blockRemainder = (reqStart % 16).toInt()
+            val counterStart = ivInt.add(blockNumber)
+
+            // Buat IvParameterSpec dari counter yang sudah digeser
+            val counterBytes = counterStart.toByteArray().let { raw ->
+                // pastikan selalu 16 byte (big-endian, zero-padded di kiri)
+                if (raw.size >= 16) raw.copyOfRange(raw.size - 16, raw.size)
+                else ByteArray(16 - raw.size) + raw
+            }
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(counterBytes))
+
+            // Jika reqStart tidak tepat di batas block (blockRemainder > 0),
+            // "buang" sisa byte di block pertama agar keystream sejajar dengan data.
+            if (blockRemainder > 0) {
+                cipher.update(ByteArray(blockRemainder))
+            }
 
             val buffer = ByteArray(32768)
             var bytesRead: Int
-            var offset = reqStart
 
-            if (needsDecrypt) {
-                val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
-                val secretKey = SecretKeySpec(keyBytes, "AES")
-                val ivSpec    = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-                val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
-
-                // Fix #2: skip per-chunk agar tidak crash saat reqStart sangat besar.
-                // (ByteArray(reqStart.toInt()) crash kalau reqStart > ~2GB)
-                var remaining = cipherSkip
-                val skipBuf   = ByteArray(32768)
-                while (remaining > 0) {
-                    val n = minOf(remaining, skipBuf.size.toLong()).toInt()
-                    cipher.update(skipBuf, 0, n)
-                    remaining -= n
+            // FIX: Decrypt SEMUA byte yang masuk — tidak ada batas 65536.
+            // CDN Hydrax mengenkripsi seluruh file dengan AES-CTR stream cipher.
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                val decrypted = cipher.update(buffer, 0, bytesRead)
+                if (decrypted != null) {
+                    output.write(decrypted)
                 }
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    if (offset < ENCRYPT_LIMIT) {
-                        // Bagian yang masih dalam zona enkripsi — dekripsi dulu
-                        val n         = minOf(bytesRead.toLong(), ENCRYPT_LIMIT - offset).toInt()
-                        val decrypted = cipher.update(buffer, 0, n)
-                        if (decrypted != null) output.write(decrypted)
-                        // Sisa chunk yang sudah lewat batas — kirim raw
-                        if (n < bytesRead) output.write(buffer, n, bytesRead - n)
-                    } else {
-                        // Seluruh chunk sudah di luar zona enkripsi — kirim raw langsung
-                        output.write(buffer, 0, bytesRead)
-                    }
-                    offset += bytesRead
-                    output.flush()
-                }
-            } else {
-                // reqStart >= 65536: semua data di request ini sudah plain, tidak perlu decrypt
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                    output.flush()
-                }
+                output.flush()
             }
         } catch (e: SocketException) {
             // Wajar saat user melakukan seek brutal
