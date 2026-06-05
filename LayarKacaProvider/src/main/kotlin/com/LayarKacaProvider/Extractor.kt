@@ -56,9 +56,6 @@ data class HydraxSource(
     @JsonProperty("codec")    val codec:    String? = null,
     @JsonProperty("path")     val path:     String? = null,
     @JsonProperty("url")      val url:      String? = null,
-    // FIX: tambah dua field ini yang sebelumnya tidak di-parse.
-    // size     = total ukuran file asli (semua part digabung).
-    // partSize = ukuran satu URL/CDN-file (satu bagian dari total).
     @JsonProperty("size")     val size:     Long?   = null,
     @JsonProperty("partSize") val partSize: Long?   = null
 )
@@ -95,7 +92,7 @@ data class CastSource(
 )
 
 // =========================================================================
-// HYDRAX PROXY
+// HYDRAX PROXY (ULTIMATE FIX - ANTI EMPTY RESPONSE)
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
@@ -124,20 +121,19 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            // Timeout lebih longgar untuk koneksi lambat
             client.soTimeout = 30_000
 
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
-            // ── Baca request line ─────────────────────────────────────────
             val requestLine = reader.readLine() ?: return
             val reqParts    = requestLine.split(" ")
             if (reqParts.size < 2) return
+            
+            val method  = reqParts[0]
             val reqPath = reqParts[1]
             if (!reqPath.contains("?url=")) return
 
-            // ── Parse query params ────────────────────────────────────────
             val params = reqPath.substringAfter("?")
                 .split("&")
                 .associate {
@@ -146,10 +142,9 @@ object HydraxProxy {
                 }
 
             val encodedUrl = params["url"] ?: return
-            val keyHex     = params["key"]  ?: return
+            val keyHex     = params["key"] ?: return
             val realUrl    = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
-            // ── Baca semua headers dari ExoPlayer ─────────────────────────
             var rangeHeader: String? = null
             while (true) {
                 val line = reader.readLine()
@@ -159,72 +154,65 @@ object HydraxProxy {
                 }
             }
 
-            // Byte yang diminta ExoPlayer
             val reqStart: Long = rangeHeader
                 ?.replace("bytes=", "")
                 ?.split("-")?.getOrNull(0)
                 ?.toLongOrNull() ?: 0L
 
-            // ── Request ke CDN ────────────────────────────────────────────
             val cdnRequest = Request.Builder()
                 .url(realUrl)
-                .header("User-Agent",      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer",         "https://abyssplayer.com/")
-                .header("Origin",          "https://abyssplayer.com")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://abyssplayer.com/")
+                .header("Origin", "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
                 .apply { if (rangeHeader != null) header("Range", rangeHeader) }
                 .build()
 
-            response = app.baseClient.newCall(cdnRequest).execute()
-            if (!response.isSuccessful) return
+            // Tangkap error timeout/CDN block agar ExoPlayer mendapat response yg tepat
+            response = try {
+                app.baseClient.newCall(cdnRequest).execute()
+            } catch (e: Exception) {
+                output.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".toByteArray())
+                output.flush()
+                return
+            }
 
-            val code         = response.code
-            val contentRange = response.header("Content-Range") // "bytes START-END/TOTAL"
+            val code = response.code
+            val msg  = if (response.message.isEmpty()) "OK" else response.message
+            val contentRange = response.header("Content-Range")
 
-            // ── FIX UTAMA: tentukan actualOffset dari respons CDN ─────────
-            //
-            // BUG SEBELUMNYA:
-            //   Proxy selalu pakai reqStart sebagai cipher offset.
-            //   Tapi CDN Hydrax kadang balas dengan HTTP 200 OK dan
-            //   mengirim data dari byte ke-0, mengabaikan Range header.
-            //   Akibatnya cipher di-advance ke reqStart (misal 5.000.000),
-            //   padahal data yang datang dari CDN dimulai dari byte 0.
-            //   Hasil dekripsi 64KB pertama = garbage → ExoPlayer stuck.
-            //
-            // FIX:
-            //   Baca Content-Range dari respons CDN untuk tahu dari byte
-            //   berapa data yang sebenarnya dikirim, baru advance cipher.
-            //
             val actualOffset: Long = when {
                 code == 206 && contentRange != null -> {
-                    // CDN honor Range. Baca START dari "bytes START-END/TOTAL"
-                    contentRange
-                        .substringAfter("bytes ", "")
-                        .substringBefore("-")
-                        .toLongOrNull() ?: reqStart
+                    contentRange.substringAfter("bytes ", "").substringBefore("-").toLongOrNull() ?: reqStart
                 }
-                code == 200 -> {
-                    // CDN abaikan Range, kirim dari awal file → offset = 0
-                    0L
-                }
+                code == 200 -> 0L
                 else -> reqStart
             }
 
-            // ── Siapkan cipher AES-CTR ────────────────────────────────────
-            //
-            // Sistem enkripsi Hydrax (dari sw_bundle.js):
-            //   - Hanya 65536 byte PERTAMA per file yang dienkripsi AES-CTR
-            //   - Key = fn_key (MD5 dari nama file), 32 hex char, pakai as-is UTF-8
-            //   - IV  = 16 byte pertama key
-            //   - Selebihnya (byte 65536+) adalah plain data, tidak dienkripsi
-            //
-            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)   // 32 bytes
-            val ivBytes   = keyBytes.copyOfRange(0, 16)            // IV = 16 byte pertama
+            // Tulis header ke ExoPlayer di awal
+            output.write("HTTP/1.1 $code $msg\r\n".toByteArray())
+            for ((hKey, hVal) in response.headers) {
+                if (hKey.equals("transfer-encoding", ignoreCase = true)) continue
+                if (hKey.equals("content-encoding", ignoreCase = true)) continue
+                if (hKey.equals("connection", ignoreCase = true)) continue
+                output.write("$hKey: $hVal\r\n".toByteArray())
+            }
+            output.write("Connection: close\r\n\r\n".toByteArray())
+            
+            // Wajib Flush Buffer agar ExoPlayer tahu Header sudah lengkap
+            output.flush() 
+
+            // Jika status HTTP gagal atau ExoPlayer cuma minta HEAD, cukup sampai sini
+            if (!response.isSuccessful || method.equals("HEAD", ignoreCase = true)) {
+                return
+            }
+
+            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
+            val ivBytes   = keyBytes.copyOfRange(0, 16)
             val secretKey = SecretKeySpec(keyBytes, "AES")
             val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(ivBytes))
 
-            // Advance cipher state ke actualOffset (hanya jika masih di region enkripsi)
             if (actualOffset in 1L until 65536L) {
                 var remaining = actualOffset
                 val skipBuf   = ByteArray(8192)
@@ -235,49 +223,28 @@ object HydraxProxy {
                 }
             }
 
-            // ── Forward response headers ke ExoPlayer ────────────────────
-            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
-
-            for ((hKey, hVal) in response.headers) {
-                // Skip hop-by-hop headers yang tidak boleh diforward
-                if (hKey.equals("transfer-encoding", ignoreCase = true)) continue
-                if (hKey.equals("content-encoding",  ignoreCase = true)) continue
-                if (hKey.equals("connection",         ignoreCase = true)) continue
-                output.write("$hKey: $hVal\r\n".toByteArray())
-            }
-            output.write("Connection: close\r\n\r\n".toByteArray())
-
-            // ── Stream + dekripsi ─────────────────────────────────────────
-            val inputStream = response.body.byteStream()
+            val inputStream = response.body?.byteStream() ?: return
             val buffer      = ByteArray(32768)
             var bytesRead:  Int
             var streamPos   = actualOffset
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (streamPos < 65536L) {
-                    // Buffer (sebagian atau seluruhnya) di region terenkripsi
                     val n = minOf(bytesRead.toLong(), 65536L - streamPos).toInt()
-
-                    // Dekripsi bagian terenkripsi
                     val decrypted = cipher.update(buffer, 0, n)
                     if (decrypted != null) output.write(decrypted)
-
-                    // Sisa buffer (jika ada) sudah plain
                     if (n < bytesRead) output.write(buffer, n, bytesRead - n)
-
                 } else {
-                    // Seluruh buffer plain (di luar 64KB pertama)
                     output.write(buffer, 0, bytesRead)
                 }
-
                 streamPos += bytesRead
-                output.flush()
+                output.flush() 
             }
 
         } catch (_: SocketException) {
-            // Normal: ExoPlayer putus koneksi saat seek atau stop
+            // Normal jika user close/seek player
         } catch (e: Exception) {
-            e.printStackTrace()
+            // Abaikan agar tidak crash
         } finally {
             try { response?.close() } catch (_: Exception) {}
             try { client.close()    } catch (_: Exception) {}
@@ -368,7 +335,6 @@ open class AbyssExtractor : ExtractorApi() {
                 val localProxyUrl =
                     "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
-                // TAMBAHKAN BARIS INI:
                 println("LINK TESTER: $localProxyUrl")
 
                 callback(
@@ -408,7 +374,7 @@ open class AbyssExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 2: TURBO VIP  (tidak ada perubahan)
+// EXTRACTOR 2: TURBO VIP
 // =========================================================================
 open class Lk21TurboExtractor : ExtractorApi() {
     override var name          = "LK21 TurboVIP"
@@ -453,7 +419,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: HOW NETWORK  (tidak ada perubahan)
+// EXTRACTOR 3: HOW NETWORK
 // =========================================================================
 open class HowNetworkExtractor : ExtractorApi() {
     override var name          = "LK21 HowNetwork"
@@ -505,7 +471,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: CAST HD  (tidak ada perubahan)
+// EXTRACTOR 4: CAST HD
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name          = "CAST HD"
