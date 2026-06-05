@@ -91,13 +91,24 @@ data class CastSource(
     @JsonProperty("type")  val type:  String?
 )
 
-// =========================================================================
-// HYDRAX PROXY (ULTIMATE FIX - ANTI EMPTY RESPONSE)
-// =========================================================================
+// ==============================================================================
+// HYDRAX PROXY - FIXED v3.0
+// Bug Fix: ExoPlayer Error 2004 saat seek ke menit terakhir video
+//
+// ROOT CAUSE yang diperbaiki:
+//   1. HTTP 416 dari CDN di-forward mentah ke ExoPlayer -> Error 2004
+//   2. Range request tidak di-clamp ke batas file_size yang diketahui
+//   3. Content-Length tidak di-cache antar request, ExoPlayer tidak tahu EOF
+//   4. HTTP 200 dari CDN tidak dikonversi ke 206 saat range diminta
+// ==============================================================================
 object HydraxProxy {
     var port: Int = 0
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
+
+    // Cache ukuran file per URL agar bisa clamp range request
+    // Key = URL CDN (original), Value = ukuran file dalam bytes
+    private val fileSizeCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     fun start() {
         if (isRunning) return
@@ -126,10 +137,11 @@ object HydraxProxy {
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
+            // ── Parse request line ────────────────────────────────────────────
             val requestLine = reader.readLine() ?: return
             val reqParts    = requestLine.split(" ")
             if (reqParts.size < 2) return
-            
+
             val method  = reqParts[0]
             val reqPath = reqParts[1]
             if (!reqPath.contains("?url=")) return
@@ -145,6 +157,7 @@ object HydraxProxy {
             val keyHex     = params["key"] ?: return
             val realUrl    = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
+            // ── Baca semua header dari ExoPlayer ─────────────────────────────
             var rangeHeader: String? = null
             while (true) {
                 val line = reader.readLine()
@@ -154,21 +167,33 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart: Long = rangeHeader
-                ?.replace("bytes=", "")
-                ?.split("-")?.getOrNull(0)
-                ?.toLongOrNull() ?: 0L
+            // ── Parse range yang diminta ExoPlayer ───────────────────────────
+            val (reqStart, reqEnd) = parseRange(rangeHeader)
 
+            // ── [FIX A] Clamp range terhadap file_size yang sudah diketahui ──
+            // Jika kita sudah tahu ukuran file dari request sebelumnya,
+            // kita bisa validasi range sebelum diteruskan ke CDN.
+            val cachedFileSize = fileSizeCache[realUrl]
+            if (cachedFileSize != null && reqStart >= cachedFileSize) {
+                // ExoPlayer minta range di luar file — kirim 416 RFC-7233 compliant
+                // ExoPlayer akan baca Content-Range: bytes */SIZE dan berhenti retry
+                sendProper416(output, cachedFileSize)
+                return
+            }
+
+            // ── [FIX B] Clamp reqEnd agar tidak melampaui batas file ─────────
+            val clampedRangeHeader = buildClampedRange(rangeHeader, reqStart, reqEnd, cachedFileSize)
+
+            // ── Kirim request ke CDN ──────────────────────────────────────────
             val cdnRequest = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer", "https://abyssplayer.com/")
-                .header("Origin", "https://abyssplayer.com")
+                .header("Referer",    "https://abyssplayer.com/")
+                .header("Origin",     "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
-                .apply { if (rangeHeader != null) header("Range", rangeHeader) }
+                .apply { if (clampedRangeHeader != null) header("Range", clampedRangeHeader) }
                 .build()
 
-            // Tangkap error timeout/CDN block agar ExoPlayer mendapat response yg tepat
             response = try {
                 app.baseClient.newCall(cdnRequest).execute()
             } catch (e: Exception) {
@@ -177,42 +202,111 @@ object HydraxProxy {
                 return
             }
 
-            val code = response.code
-            val msg  = if (response.message.isEmpty()) "OK" else response.message
+            val code         = response.code
             val contentRange = response.header("Content-Range")
+            val contentLen   = response.header("Content-Length")?.toLongOrNull()
 
+            // ── [FIX C] Cache ukuran file dari response CDN ──────────────────
+            val totalFileSize: Long? = when {
+                // Content-Range: bytes X-Y/Z -> ambil Z
+                contentRange != null -> {
+                    contentRange.substringAfter("/", "").toLongOrNull()
+                }
+                // Content-Length tersedia di response 200
+                code == 200 && contentLen != null -> contentLen
+                else -> cachedFileSize
+            }
+            if (totalFileSize != null && totalFileSize > 0) {
+                fileSizeCache[realUrl] = totalFileSize
+            }
+
+            // ── [FIX D] Tangani HTTP 416 dari CDN ────────────────────────────
+            // Daripada forward 416 mentah (yang crash ExoPlayer),
+            // kirim 416 RFC-7233 yang benar dengan Content-Range: bytes */<size>
+            if (code == 416) {
+                val knownSize = totalFileSize ?: cachedFileSize
+                sendProper416(output, knownSize)
+                return
+            }
+
+            // ── [FIX E] Tangani kode error lain (403, 404, 5xx) ──────────────
+            // Konversi ke 503 agar ExoPlayer retry bukan crash permanen
+            if (code == 403 || code == 404) {
+                output.write(
+                    "HTTP/1.1 503 Service Unavailable\r\n" +
+                    "Retry-After: 3\r\n" +
+                    "Connection: close\r\n\r\n"
+                    .toByteArray()
+                )
+                output.flush()
+                return
+            }
+
+            // ── [FIX F] Konversi HTTP 200 -> 206 jika range diminta ──────────
+            // CDN kadang merespons 200 padahal kita minta Range.
+            // ExoPlayer mengharapkan 206 + Content-Range agar tahu posisi data.
+            val (statusCode, statusMsg, extraHeaders) = when {
+                code == 200 && rangeHeader != null && totalFileSize != null -> {
+                    // CDN kirim full file padahal range diminta
+                    // Kita "pura-pura" jadi 206 dengan Content-Range yang benar
+                    val actualStart = 0L
+                    val actualEnd   = totalFileSize - 1
+                    Triple(
+                        206, "Partial Content",
+                        listOf("Content-Range" to "bytes $actualStart-$actualEnd/$totalFileSize")
+                    )
+                }
+                else -> Triple(code, if (response.message.isEmpty()) "OK" else response.message, emptyList())
+            }
+
+            // ── Hitung actualOffset untuk sinkronisasi AES-CTR ───────────────
             val actualOffset: Long = when {
-                code == 206 && contentRange != null -> {
+                statusCode == 206 && contentRange != null -> {
                     contentRange.substringAfter("bytes ", "").substringBefore("-").toLongOrNull() ?: reqStart
+                }
+                statusCode == 206 && rangeHeader != null && code == 200 -> {
+                    // Kita konversi 200 -> 206, data CDN mulai dari byte 0
+                    0L
                 }
                 code == 200 -> 0L
                 else -> reqStart
             }
 
-            // Tulis header ke ExoPlayer di awal
-            output.write("HTTP/1.1 $code $msg\r\n".toByteArray())
+            // ── Tulis header response ke ExoPlayer ───────────────────────────
+            output.write("HTTP/1.1 $statusCode $statusMsg\r\n".toByteArray())
+
+            // Forward header dari CDN (dengan filter)
             for ((hKey, hVal) in response.headers) {
                 if (hKey.equals("transfer-encoding", ignoreCase = true)) continue
-                if (hKey.equals("content-encoding", ignoreCase = true)) continue
-                if (hKey.equals("connection", ignoreCase = true)) continue
+                if (hKey.equals("content-encoding",  ignoreCase = true)) continue
+                if (hKey.equals("connection",         ignoreCase = true)) continue
+                // Jika kita konversi 200->206, skip Content-Range asli CDN (akan kita ganti)
+                if (statusCode == 206 && code == 200 && hKey.equals("content-range", ignoreCase = true)) continue
                 output.write("$hKey: $hVal\r\n".toByteArray())
             }
-            output.write("Connection: close\r\n\r\n".toByteArray())
-            
-            // Wajib Flush Buffer agar ExoPlayer tahu Header sudah lengkap
-            output.flush() 
 
-            // Jika status HTTP gagal atau ExoPlayer cuma minta HEAD, cukup sampai sini
+            // Tambah header ekstra (misal Content-Range untuk konversi 200->206)
+            for ((hKey, hVal) in extraHeaders) {
+                output.write("$hKey: $hVal\r\n".toByteArray())
+            }
+
+            output.write("Connection: close\r\n\r\n".toByteArray())
+            output.flush()
+
+            // ── Jika HEAD request atau response error, berhenti di sini ──────
             if (!response.isSuccessful || method.equals("HEAD", ignoreCase = true)) {
                 return
             }
 
+            // ── Setup AES-CTR cipher ──────────────────────────────────────────
             val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
             val ivBytes   = keyBytes.copyOfRange(0, 16)
             val secretKey = SecretKeySpec(keyBytes, "AES")
             val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(ivBytes))
 
+            // Advance cipher state ke posisi actualOffset
+            // (hanya perlu jika kita mulai di tengah zona terenkripsi 0..64KB)
             if (actualOffset in 1L until 65536L) {
                 var remaining = actualOffset
                 val skipBuf   = ByteArray(8192)
@@ -223,6 +317,7 @@ object HydraxProxy {
                 }
             }
 
+            // ── Stream data: dekripsi 64KB pertama, passthrough sisanya ──────
             val inputStream = response.body?.byteStream() ?: return
             val buffer      = ByteArray(32768)
             var bytesRead:  Int
@@ -230,25 +325,79 @@ object HydraxProxy {
 
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (streamPos < 65536L) {
-                    val n = minOf(bytesRead.toLong(), 65536L - streamPos).toInt()
-                    val decrypted = cipher.update(buffer, 0, n)
+                    val encryptedBytes = minOf(bytesRead.toLong(), 65536L - streamPos).toInt()
+                    val decrypted      = cipher.update(buffer, 0, encryptedBytes)
                     if (decrypted != null) output.write(decrypted)
-                    if (n < bytesRead) output.write(buffer, n, bytesRead - n)
+                    // Sisa buffer yang sudah di luar zona enkripsi
+                    if (encryptedBytes < bytesRead) {
+                        output.write(buffer, encryptedBytes, bytesRead - encryptedBytes)
+                    }
                 } else {
+                    // Di luar 64KB pertama: raw passthrough tanpa dekripsi
                     output.write(buffer, 0, bytesRead)
                 }
                 streamPos += bytesRead
-                output.flush() 
+                output.flush()
             }
 
         } catch (_: SocketException) {
-            // Normal jika user close/seek player
-        } catch (e: Exception) {
-            // Abaikan agar tidak crash
+            // Normal: user seek/close player, koneksi terputus
+        } catch (_: Exception) {
+            // Abaikan agar thread tidak crash
         } finally {
             try { response?.close() } catch (_: Exception) {}
             try { client.close()    } catch (_: Exception) {}
         }
+    }
+
+    // ── Helper: Parse Range header ─────────────────────────────────────────
+    // Mengembalikan Pair(start, end) dimana end=-1 berarti open-ended
+    private fun parseRange(rangeHeader: String?): Pair<Long, Long> {
+        if (rangeHeader == null) return Pair(0L, -1L)
+        val rangeVal = rangeHeader.removePrefix("bytes=")
+        val parts    = rangeVal.split("-")
+        val start    = parts.getOrNull(0)?.toLongOrNull() ?: 0L
+        val end      = parts.getOrNull(1)?.toLongOrNull() ?: -1L
+        return Pair(start, end)
+    }
+
+    // ── Helper: Clamp range agar tidak melampaui file_size ────────────────
+    private fun buildClampedRange(
+        original:  String?,
+        reqStart:  Long,
+        reqEnd:    Long,
+        fileSize:  Long?
+    ): String? {
+        if (original == null) return null
+        if (fileSize == null || fileSize <= 0) return original
+
+        val clampedStart = minOf(reqStart, fileSize - 1)
+        val clampedEnd   = when {
+            reqEnd < 0           -> ""            // open-ended, biarkan CDN tentukan
+            reqEnd >= fileSize   -> (fileSize - 1).toString()
+            else                 -> reqEnd.toString()
+        }
+        return if (clampedEnd.isEmpty()) "bytes=$clampedStart-"
+               else "bytes=$clampedStart-$clampedEnd"
+    }
+
+    // ── Helper: Kirim 416 RFC-7233 compliant ──────────────────────────────
+    // RFC 7233 §4.4: jika server tahu total size, sertakan Content-Range: bytes */<size>
+    // ExoPlayer akan baca ini dan tahu batas file => berhenti minta range yg tidak valid
+    private fun sendProper416(output: java.io.OutputStream, fileSize: Long?) {
+        val crHeader = if (fileSize != null && fileSize > 0) {
+            "Content-Range: bytes */$fileSize\r\n"
+        } else {
+            ""
+        }
+        output.write(
+            ("HTTP/1.1 416 Range Not Satisfiable\r\n" +
+            crHeader +
+            "Content-Length: 0\r\n" +
+            "Connection: close\r\n\r\n")
+            .toByteArray()
+        )
+        output.flush()
     }
 }
 
