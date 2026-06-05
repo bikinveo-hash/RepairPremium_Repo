@@ -368,6 +368,9 @@ open class AbyssExtractor : ExtractorApi() {
                 val localProxyUrl =
                     "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
+                // TAMBAHKAN BARIS INI:
+                println("LINK TESTER: $localProxyUrl")
+
                 callback(
                     newExtractorLink(
                         source = name,
