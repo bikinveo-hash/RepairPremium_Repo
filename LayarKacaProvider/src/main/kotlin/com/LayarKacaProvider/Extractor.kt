@@ -97,6 +97,18 @@ object HydraxProxy {
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
+    // 1. Buat custom OkHttpClient khusus Proxy untuk membypass limit 5 koneksi
+    private val proxyClient by lazy {
+        app.baseClient.newBuilder()
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .dispatcher(okhttp3.Dispatcher().apply { 
+                maxRequests = 100
+                maxRequestsPerHost = 100 // Buka limit agar ExoPlayer bebas melakukan seek brutal
+            })
+            .build()
+    }
+
     fun start() {
         if (isRunning) return
         try {
@@ -163,7 +175,8 @@ object HydraxProxy {
                 }
                 .build()
 
-            response = app.baseClient.newCall(request).execute()
+            // 2. Eksekusi menggunakan custom proxyClient, bukan app.baseClient
+            response = proxyClient.newCall(request).execute()
 
             if (!response.isSuccessful) return
 
@@ -177,52 +190,45 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val body = response.body
+            val body = response.body ?: return
             val inputStream = body.byteStream()
 
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val secretKey = SecretKeySpec(keyBytes, "AES")
             val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            
-            // Mode ENCRYPT untuk generate keystream murni dari array kosong
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
-            // 1. PRA-GENERATE KEYSTREAM 64KB
-            val rawZeroes = ByteArray(65536)
-            val keystream = cipher.doFinal(rawZeroes)
+            if (reqStart > 0 && reqStart < 65536) {
+                cipher.update(ByteArray(reqStart.toInt()))
+            }
 
             var offset = reqStart
             val buffer = ByteArray(32768)
             var bytesRead: Int
 
-            // 2. LOOP PEMBACAAN & MANUAL XOR
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (offset < 65536) {
                     val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                    
-                    // Operasi XOR manual: Sangat aman dari bug internal JCA dan presisi
-                    for (i in 0 until n) {
-                        val currentOffset = (offset + i).toInt()
-                        if (currentOffset < keystream.size) {
-                            buffer[i] = (buffer[i].toInt() xor keystream[currentOffset].toInt()).toByte()
-                        }
+                    val decrypted = cipher.update(buffer, 0, n)
+                    if (decrypted != null) {
+                        output.write(decrypted)
                     }
-                }
-                
-                try {
+                    if (n < bytesRead) {
+                        output.write(buffer, n, bytesRead - n)
+                    }
+                } else {
                     output.write(buffer, 0, bytesRead)
-                    offset += bytesRead
-                    output.flush() 
-                } catch (e: Exception) {
-                    break // Socket putus/ditutup ExoPlayer
                 }
+                offset += bytesRead
+                output.flush() 
             }
         } catch (e: SocketException) {
             // Wajar saat user melakukan seek brutal
         } catch (e: Exception) {
             // Abaikan error streaming putus
         } finally {
+            // 3. Pastikan memori langsung bersih saat ExoPlayer memutus koneksi
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
         }
