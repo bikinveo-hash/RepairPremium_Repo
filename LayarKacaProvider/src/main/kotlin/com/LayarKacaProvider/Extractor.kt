@@ -65,7 +65,7 @@ data class CastDecrypted(@JsonProperty("sources") val sources: List<CastSource>?
 data class CastSource(@JsonProperty("url") val url: String?, @JsonProperty("label") val label: String?, @JsonProperty("type") val type: String?)
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL ANTI-EMPTY-RESPONSE
+// MESIN SERVER PROXY LOKAL: ANTI 2004 & 416 CRASH
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
@@ -124,7 +124,6 @@ object HydraxProxy {
             val realUrl = String(android.util.Base64.decode(encodedUrl, android.util.Base64.URL_SAFE))
 
             var rangeHeader: String? = null
-            // Baca header Range dari request ExoPlayer
             while (true) {
                 val line = reader.readLine()
                 if (line.isNullOrEmpty()) break
@@ -141,7 +140,6 @@ object HydraxProxy {
             while (redirectCount < 10) {
                 val reqBuilder = Request.Builder()
                     .url(currentUrl)
-                    // FIX: U-A harus SAMA PERSIS dengan Extractor agar tidak 403 Forbidden
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
                     .header("Referer", "https://abyssplayer.com/")
                     .header("Origin", "https://abyssplayer.com")
@@ -168,9 +166,20 @@ object HydraxProxy {
                 }
             }
 
-            // FIX: Cegah ERR_EMPTY_RESPONSE dengan memberitahu error ke ExoPlayer
             if (response == null) {
                 output.write("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n".toByteArray())
+                return
+            }
+
+            // ==============================================================
+            // OBAT ERROR 2004: MENCEGAH EXOPLAYER CRASH KARENA 416
+            // ==============================================================
+            if (response!!.code == 416) {
+                // Kita bohongi ExoPlayer dengan 206 Partial Content (0 bytes).
+                output.write("HTTP/1.1 206 Partial Content\r\n".toByteArray())
+                output.write("Content-Range: bytes $reqStart-$reqStart/*\r\n".toByteArray())
+                output.write("Content-Length: 0\r\n".toByteArray())
+                output.write("Connection: close\r\n\r\n".toByteArray())
                 return
             }
 
@@ -178,7 +187,6 @@ object HydraxProxy {
             val isPartial = code == 206
             val actualStart = if (isPartial) reqStart else 0L
 
-            // 1. Tulis Header. Meskipun error (403), player akan tahu dan tidak Empty Response.
             output.write("HTTP/1.1 $code ${response!!.message}\r\n".toByteArray())
             for ((key, value) in response!!.headers) {
                 if (key.equals("transfer-encoding", true) || 
@@ -188,7 +196,6 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // 2. Jika Cloudflare memblokir, kita berhenti di sini (header sudah terkirim)
             if (!response!!.isSuccessful) return
 
             val body = response?.body ?: return
@@ -308,7 +315,6 @@ open class AbyssExtractor : ExtractorApi() {
                         ) {
                             this.referer = pageRef
                             this.quality = labelToQuality(label)
-                            // FIX: Kita WAJIB injeksi User-Agent agar ExoPlayer mengirim U-A Android ke Proxy lokal
                             this.headers = mapOf(
                                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
                             )
