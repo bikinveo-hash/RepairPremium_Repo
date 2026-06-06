@@ -43,62 +43,20 @@ data class HydraxData(
     @JsonProperty("media") val media: String? = null
 )
 
-// FIX: media bisa berisi mp4 DAN/ATAU hls
 data class HydraxMedia(
-    @JsonProperty("mp4") val mp4: HydraxMp4? = null,
-    @JsonProperty("hls") val hls: HydraxHls? = null
+    @JsonProperty("mp4") val mp4: HydraxMp4? = null
 )
 
-// FIX: mp4 sources sekarang punya res_id dan sub untuk domain selection
 data class HydraxMp4(
-    @JsonProperty("sources") val sources: List<HydraxMp4Source>? = null,
-    @JsonProperty("domains") val domains: List<String>? = null,
-    @JsonProperty("fristDatas") val fristDatas: List<HydraxFristData>? = null
+    @JsonProperty("sources") val sources: List<HydraxSource>? = null
 )
 
-data class HydraxMp4Source(
+data class HydraxSource(
     @JsonProperty("label") val label: String? = null,
     @JsonProperty("codec") val codec: String? = null,
-    @JsonProperty("size") val size: Long? = null,
-    @JsonProperty("res_id") val res_id: String? = null,
-    @JsonProperty("sub") val sub: String? = null,
     @JsonProperty("path") val path: String? = null,
     @JsonProperty("url") val url: String? = null
 )
-
-data class HydraxFristData(
-    @JsonProperty("url") val url: String? = null,
-    @JsonProperty("size") val size: Long? = null,
-    @JsonProperty("label") val label: String? = null
-)
-
-// FIX: HLS data classes baru
-data class HydraxHls(
-    @JsonProperty("sources") val sources: List<List<Any>>? = null,
-    @JsonProperty("domains") val domains: List<String>? = null,
-    @JsonProperty("streams") val streams: List<HydraxHlsStream>? = null,
-    @JsonProperty("media") val media: List<HydraxHlsMedia>? = null
-)
-
-data class HydraxHlsStream(
-    @JsonProperty("URI") val uri: String? = null,
-    @JsonProperty("BANDWIDTH") val bandwidth: Long? = null,
-    @JsonProperty("CODECS") val codecs: String? = null,
-    @JsonProperty("RESOLUTION") val resolution: String? = null,
-    @JsonProperty("AUDIO") val audio: String? = null
-)
-
-data class HydraxHlsMedia(
-    @JsonProperty("TYPE") val type: String? = null,
-    @JsonProperty("GROUP-ID") val groupId: String? = null,
-    @JsonProperty("NAME") val name: String? = null,
-    @JsonProperty("LANGUAGE") val language: String? = null,
-    @JsonProperty("URI") val uri: String? = null,
-    @JsonProperty("AUTOSELECT") val autoselect: String? = null
-)
-
-// Legacy alias — dipertahankan agar tidak ada bagian lain yang break
-typealias HydraxSource = HydraxMp4Source
 
 data class HowNetworkResponse(
     @JsonProperty("poster") val poster: String?,
@@ -139,9 +97,13 @@ object HydraxProxy {
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
-    // FIX: Error URL cache — key=url, value=Pair(statusCode, timestampMs)
-    // TTL 5 detik sesuai logic SW
-    private val errorCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Long>>()
+    // 1. Buat HTTP Client khusus tanpa auto-redirect (Sangat penting untuk streaming)
+    private val noRedirectClient by lazy {
+        app.baseClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
 
     fun start() {
         if (isRunning) return
@@ -162,31 +124,6 @@ object HydraxProxy {
         }
     }
 
-    // FIX: Fungsi domain selection dengan round-robin fallback (sesuai SW)
-    fun selectDomain(domains: List<String>, sub: String?, fileSize: Long): String? {
-        if (domains.isEmpty()) return null
-        // Prioritas: domain yang mengandung 'sub' string
-        if (!sub.isNullOrEmpty()) {
-            domains.firstOrNull { it.contains(sub) }?.let { return it }
-        }
-        // Fallback: round-robin berdasarkan fileSize modulo
-        return domains[(fileSize % domains.size).toInt()]
-    }
-
-    // FIX: Cek apakah URL sedang dalam error TTL
-    fun isUrlErrored(url: String): Int? {
-        val entry = errorCache[url] ?: return null
-        val elapsedMs = System.currentTimeMillis() - entry.second
-        if (elapsedMs < 5000L) return entry.first   // masih dalam TTL 5 detik
-        errorCache.remove(url)                        // expired, hapus
-        return null
-    }
-
-    // FIX: Catat URL yang error
-    fun recordUrlError(url: String, statusCode: Int) {
-        errorCache[url] = Pair(statusCode, System.currentTimeMillis())
-    }
-
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
@@ -202,29 +139,15 @@ object HydraxProxy {
 
             if (!path.contains("?url=")) return
             
-            // FIX: Query parsing yang lebih robust untuk handle encoded '=' dalam value
             val query = path.substringAfter("?")
-            val params = mutableMapOf<String, String>()
-            query.split("&").forEach {
-                val eqIdx = it.indexOf("=")
-                if (eqIdx > 0) {
-                    params[it.substring(0, eqIdx)] = it.substring(eqIdx + 1)
-                }
+            val params = query.split("&").associate { 
+                val kv = it.split("=")
+                kv[0] to (if (kv.size > 1) kv[1] else "")
             }
             
             val encodedUrl = params["url"] ?: return
-            val keyHex    = params["key"]
-            // FIX: parameter 'decrypt' opsional — kalau tidak ada atau "0", skip decrypt
-            val doDecrypt  = params["decrypt"]?.equals("1") ?: (keyHex != null)
-            val realUrl   = String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP))
-
-            // FIX: Cek error cache sebelum fetch
-            val cachedStatus = isUrlErrored(realUrl)
-            if (cachedStatus != null) {
-                output.write("HTTP/1.1 $cachedStatus Error (cached)\r\nConnection: close\r\n\r\n".toByteArray())
-                output.flush()
-                return
-            }
+            val keyHex = params["key"] ?: return
+            val realUrl = String(android.util.Base64.decode(encodedUrl, android.util.Base64.URL_SAFE))
 
             var rangeHeader: String? = null
             while (true) {
@@ -237,30 +160,47 @@ object HydraxProxy {
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
-            val request = Request.Builder()
-                .url(realUrl)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Referer", "https://abyssplayer.com/")
-                .header("Origin", "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity")
-                .apply {
-                    if (rangeHeader != null) header("Range", rangeHeader)
+            // 2. MANUAL REDIRECT LOOP: Memaksa Range header tetap terbawa meski berpindah server CDN
+            var currentUrl = realUrl
+            var redirectCount = 0
+
+            while (redirectCount < 10) {
+                val reqBuilder = Request.Builder()
+                    .url(currentUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .header("Referer", "https://abyssplayer.com/")
+                    .header("Origin", "https://abyssplayer.com")
+                    .header("Accept-Encoding", "identity") // Menghindari kompresi gzip transparan
+                
+                if (rangeHeader != null) {
+                    reqBuilder.header("Range", rangeHeader)
                 }
-                .build()
 
-            response = app.baseClient.newCall(request).execute()
+                response = noRedirectClient.newCall(reqBuilder.build()).execute()
 
-            // FIX: Catat error ke cache kalau response tidak sukses
-            if (!response.isSuccessful) {
-                recordUrlError(realUrl, response.code)
-                output.write("HTTP/1.1 ${response.code} ${response.message}\r\nConnection: close\r\n\r\n".toByteArray())
-                output.flush()
-                return
+                if (response?.isRedirect == true) {
+                    val location = response?.header("Location")
+                    response?.close() // Bebaskan memori setiap kali redirect
+                    if (location != null) {
+                        currentUrl = location
+                        redirectCount++
+                    } else {
+                        break
+                    }
+                } else {
+                    break
+                }
             }
 
-            val code = response.code
-            output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
-            for ((key, value) in response.headers) {
+            if (response == null || !response!!.isSuccessful) return
+
+            // 3. SAFETY CHECK: Pastikan server tidak menolak Range request
+            val code = response!!.code
+            val isPartial = code == 206
+            val actualStart = if (isPartial) reqStart else 0L
+
+            output.write("HTTP/1.1 $code ${response!!.message}\r\n".toByteArray())
+            for ((key, value) in response!!.headers) {
                 if (key.equals("transfer-encoding", true) || 
                     key.equals("content-encoding", true) || 
                     key.equals("connection", true)) continue
@@ -268,51 +208,42 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val body = response.body
+            val body = response?.body ?: return
             val inputStream = body.byteStream()
 
-            // FIX: Decrypt hanya kalau doDecrypt=true DAN keyHex tersedia
-            if (doDecrypt && keyHex != null) {
-                val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
-                val secretKey = SecretKeySpec(keyBytes, "AES")
-                val ivSpec    = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-                val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
-                // FIX: Skip cipher state untuk seek position (reqStart dalam 64KB pertama)
-                if (reqStart > 0 && reqStart < 65536) {
-                    cipher.update(ByteArray(reqStart.toInt()))
-                }
-
-                var offset    = reqStart
-                val buffer    = ByteArray(32768)
-                var bytesRead: Int
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    if (offset < 65536) {
-                        val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                        val decrypted = cipher.update(buffer, 0, n)
-                        if (decrypted != null) output.write(decrypted)
-                        if (n < bytesRead) output.write(buffer, n, bytesRead - n)
-                    } else {
-                        output.write(buffer, 0, bytesRead)
-                    }
-                    offset += bytesRead
-                    output.flush()
-                }
-            } else {
-                // FIX: Pass-through tanpa decrypt (untuk HLS .m3u8 dan .ts plain, atau URL R2)
-                val buffer    = ByteArray(32768)
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                    output.flush()
-                }
+            // Hanya sinkronisasi cipher state jika kita benar-benar melanjutkan dari potongan tengah (Partial)
+            if (actualStart > 0 && actualStart < 65536) {
+                cipher.update(ByteArray(actualStart.toInt()))
             }
-        } catch (e: SocketException) {
-            // Wajar saat user melakukan seek brutal
+
+            var offset = actualStart
+            val buffer = ByteArray(32768)
+            var bytesRead: Int
+
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                if (offset < 65536) {
+                    val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
+                    val decrypted = cipher.update(buffer, 0, n)
+                    if (decrypted != null) {
+                        output.write(decrypted)
+                    }
+                    if (n < bytesRead) {
+                        output.write(buffer, n, bytesRead - n)
+                    }
+                } else {
+                    output.write(buffer, 0, bytesRead)
+                }
+                offset += bytesRead
+                output.flush() 
+            }
         } catch (e: Exception) {
-            // Abaikan error streaming putus
+            // Abaikan error putus wajar saat user menekan posisi baru di slider video
         } finally {
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
@@ -337,186 +268,70 @@ open class AbyssExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         val pageRef = referer ?: "$mainUrl/"
-        val slug    = extractSlugFromUrl(url) ?: return
-        val hdrs    = baseHeaders(pageRef)
+        val slug = extractSlugFromUrl(url) ?: return
+        val hdrs = baseHeaders(pageRef)
 
         try {
-            val html  = app.get("$mainUrl/?v=$slug", headers = hdrs).text
+            val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
+            // Perbaikan Warning 2-5: Parsing menggunakan Type-Safe Data Classes
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
-            val dataJson     = mapper.readValue(decodedDatas, HydraxData::class.java)
+            val dataJson = mapper.readValue(decodedDatas, HydraxData::class.java)
 
             val infoSlug = dataJson.slug ?: slug
-            val md5Id    = dataJson.md5_id ?: return
-            val userId   = dataJson.user_id ?: return
+            val md5Id = dataJson.md5_id ?: return
+            val userId = dataJson.user_id ?: return
             val mediaStr = dataJson.media ?: return
 
-            // Key derivation: MD5(userId:slug:md5Id) — sesuai SW
-            val hashInput    = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
-            val md5Hash      = MessageDigest.getInstance("MD5").digest(hashInput)
-            val keyHex       = md5Hash.joinToString("") { "%02x".format(it) }
+            val hashInput = "$userId:$infoSlug:$md5Id".toByteArray(Charsets.UTF_8)
+            val md5Hash = MessageDigest.getInstance("MD5").digest(hashInput)
+            val keyHex = md5Hash.joinToString("") { "%02x".format(it) }
 
-            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
-            val ivBytes   = keyBytes.copyOfRange(0, 16)
-            val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
+            val ivBytes = keyBytes.copyOfRange(0, 16)
+
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             val secretKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec    = IvParameterSpec(ivBytes)
+            val ivSpec = IvParameterSpec(ivBytes)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
             val decryptedBytes = cipher.doFinal(mediaStr.toByteArray(Charsets.ISO_8859_1))
-            val mediaJson      = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), HydraxMedia::class.java)
+            val mediaJson = mapper.readValue(String(decryptedBytes, Charsets.UTF_8), HydraxMedia::class.java)
 
-            HydraxProxy.start()
+            val mp4Sources = mediaJson.mp4?.sources
 
-            // ── MP4 Sources ──────────────────────────────────────────────
-            val mp4Data = mediaJson.mp4
-            if (mp4Data != null) {
-                val domains = mp4Data.domains ?: emptyList()
-                mp4Data.sources?.forEach { src ->
-                    val label  = src.label ?: "Unknown"
-                    val codec  = src.codec ?: "h264"
-                    val resId  = src.res_id ?: ""
-                    val sub    = src.sub ?: ""
-                    val size   = src.size ?: 0L
+            mp4Sources?.forEach { src ->
+                val label = src.label ?: "Unknown"
+                val codec = src.codec ?: "h264"
+                val path = src.path ?: ""
+                val baseUrl = src.url ?: ""
 
-                    // FIX: Cek error cache sebelum lanjut
-                    // URL CDN format: https://{domain}/mp4/{slug}/{res_id}/{size}
-                    // Domain selection: sesuai SW — find by sub, fallback round-robin
-                    val domain = HydraxProxy.selectDomain(domains, sub, size)
+                if (path.isNotEmpty() && baseUrl.isNotEmpty()) {
+                    val srcUrl = "$baseUrl/$path"
 
-                    if (domain != null && resId.isNotEmpty() && size > 0L) {
-                        // FIX: URL CDN yang benar dengan res_id (sesuai SW)
-                        val cdnUrl = "https://$domain/mp4/$infoSlug/$resId/$size"
+                    val filename = path.substringAfterLast("/")
+                    val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
+                    val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
 
-                        // FIX: Cek error cache
-                        val cachedErr = HydraxProxy.isUrlErrored(cdnUrl)
-                        if (cachedErr != null) return@forEach
+                    HydraxProxy.start()
 
-                        // Key untuk decrypt: MD5(filename) — last segment of URL
-                        val filename  = cdnUrl.substringAfterLast("/")
-                        val fnHash    = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
-                        val fnKeyHex  = fnHash.joinToString("") { "%02x".format(it) }
+                    val encodedUrl = android.util.Base64.encodeToString(srcUrl.toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+                    val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
 
-                        val encodedUrl    = android.util.Base64.encodeToString(
-                            cdnUrl.toByteArray(),
-                            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                        )
-                        val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex&decrypt=1"
-
-                        callback(
-                            newExtractorLink(
-                                source = name,
-                                name   = "$name $label ($codec)",
-                                url    = localProxyUrl,
-                                type   = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = pageRef
-                                this.quality = labelToQuality(label)
-                            }
-                        )
-                    } else {
-                        // FIX: Fallback ke src.url + src.path kalau tidak ada domain/res_id
-                        // (untuk sumber R2 yang punya url dan path langsung)
-                        val baseUrl = src.url ?: ""
-                        val path    = src.path ?: ""
-                        if (baseUrl.isNotEmpty() && path.isNotEmpty()) {
-                            val srcUrl   = "$baseUrl/$path"
-                            val filename = path.substringAfterLast("/")
-                            val fnHash   = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
-                            val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
-
-                            val cachedErr = HydraxProxy.isUrlErrored(srcUrl)
-                            if (cachedErr != null) return@forEach
-
-                            val encodedUrl    = android.util.Base64.encodeToString(
-                                srcUrl.toByteArray(),
-                                android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                            )
-                            val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex&decrypt=1"
-
-                            callback(
-                                newExtractorLink(
-                                    source = name,
-                                    name   = "$name $label ($codec)",
-                                    url    = localProxyUrl,
-                                    type   = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = pageRef
-                                    this.quality = labelToQuality(label)
-                                }
-                            )
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = name,
+                            url = localProxyUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = pageRef
+                            this.quality = labelToQuality(label)
                         }
-                    }
+                    )
                 }
             }
-
-            // ── HLS Sources ──────────────────────────────────────────────
-            val hlsData = mediaJson.hls
-            if (hlsData != null) {
-                val hlsDomains = hlsData.domains ?: emptyList()
-                val streams    = hlsData.streams ?: emptyList()
-
-                streams.forEach { stream ->
-                    val uri = stream.uri ?: return@forEach
-                    // URI format di SW: "segIdx/md5_id/sub.m3u8?maxSize=..."
-                    // Kita perlu bangun URL ke sumber HLS lewat domain
-                    val uriParts    = uri.substringBefore("?").split(".")
-                    val uriBase     = uriParts.firstOrNull()?.split("/") ?: return@forEach
-                    // uriBase: [segIdx, md5_idVal, sub] (reversed dalam SW)
-                    // Ambil sub dari tail
-                    val sub         = if (uriBase.size >= 3) uriBase.last() else ""
-                    val hlsDomain   = HydraxProxy.selectDomain(hlsDomains, sub, md5Id.hashCode().toLong().and(0xFFFFFFFFL))
-
-                    if (hlsDomain != null) {
-                        // Construct HLS URL langsung ke CDN domain
-                        // Format: https://{domain}/hls/{md5_id}/{uri}
-                        val hlsUrl = "https://$hlsDomain/hls/$md5Id/$uri"
-
-                        val cachedErr = HydraxProxy.isUrlErrored(hlsUrl)
-                        if (cachedErr != null) return@forEach
-
-                        // HLS tidak perlu decrypt di proxy — pass-through
-                        val encodedUrl    = android.util.Base64.encodeToString(
-                            hlsUrl.toByteArray(),
-                            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                        )
-                        val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&decrypt=0"
-
-                        val bandwidth = stream.bandwidth ?: 0L
-                        val resolution = stream.resolution ?: ""
-                        val label = when {
-                            resolution.contains("2160") -> "2160p"
-                            resolution.contains("1440") -> "1440p"
-                            resolution.contains("1080") -> "1080p"
-                            resolution.contains("720")  -> "720p"
-                            resolution.contains("480")  -> "480p"
-                            resolution.contains("360")  -> "360p"
-                            bandwidth >= 4000000L -> "1080p"
-                            bandwidth >= 2000000L -> "720p"
-                            bandwidth >= 1000000L -> "480p"
-                            else -> "360p"
-                        }
-
-                        callback(
-                            newExtractorLink(
-                                source = name,
-                                name   = "$name HLS $label",
-                                url    = localProxyUrl,
-                                type   = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = pageRef
-                                this.quality = labelToQuality(label)
-                                this.headers = mapOf(
-                                    "Origin"  to mainUrl,
-                                    "Referer" to "$mainUrl/"
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -525,18 +340,16 @@ open class AbyssExtractor : ExtractorApi() {
     private fun extractSlugFromUrl(url: String): String? {
         val vParam = url.substringAfter("?v=", "").substringBefore("&")
         if (vParam.isNotEmpty() && url.contains("?v=")) return vParam
-        // FIX: slug pattern diperluas hingga 50 karakter (SW mendukung slug lebih panjang)
-        Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,50})""").find(url)?.groupValues?.get(1)?.let { return it }
-        return url.split("?").first().trimEnd('/').split('/').lastOrNull()
-            ?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,50}")) }
+        Regex("""(?:e|embed|v|play)/([a-zA-Z0-9_\-]{6,20})""").find(url)?.groupValues?.get(1)?.let { return it }
+        return url.split("?").first().trimEnd('/').split('/').lastOrNull()?.takeIf { it.matches(Regex("[a-zA-Z0-9_\\-]{6,20}")) }
     }
 
     private fun labelToQuality(label: String): Int = when {
         label.contains("2160") || label.contains("4k", ignoreCase = true) -> Qualities.P2160.value
         label.contains("1440") -> Qualities.P1440.value
         label.contains("1080") -> Qualities.P1080.value
-        label.contains("720")  -> Qualities.P720.value
-        label.contains("480")  -> Qualities.P480.value
+        label.contains("720") -> Qualities.P720.value
+        label.contains("480") -> Qualities.P480.value
         else -> Qualities.Unknown.value
     }
 }
