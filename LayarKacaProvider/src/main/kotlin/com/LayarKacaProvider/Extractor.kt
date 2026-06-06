@@ -18,39 +18,27 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketException
-import java.net.URLEncoder
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.security.interfaces.ECPublicKey
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
 val mapper: ObjectMapper = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
-// =========================================================================
-// DATA CLASSES UNTUK TYPE-SAFE JSON PARSING (ANTI-WARNING)
-// =========================================================================
 data class HydraxData(
     @JsonProperty("slug") val slug: String? = null,
     @JsonProperty("md5_id") val md5_id: String? = null,
     @JsonProperty("user_id") val user_id: String? = null,
     @JsonProperty("media") val media: String? = null
 )
-
-data class HydraxMedia(
-    @JsonProperty("mp4") val mp4: HydraxMp4? = null
-)
-
-data class HydraxMp4(
-    @JsonProperty("sources") val sources: List<HydraxSource>? = null
-)
-
+data class HydraxMedia(@JsonProperty("mp4") val mp4: HydraxMp4? = null)
+data class HydraxMp4(@JsonProperty("sources") val sources: List<HydraxSource>? = null)
 data class HydraxSource(
     @JsonProperty("label") val label: String? = null,
     @JsonProperty("codec") val codec: String? = null,
@@ -65,39 +53,25 @@ data class HowNetworkResponse(
     @JsonProperty("title") val title: String?
 )
 
-data class CastChalResp(
-    @JsonProperty("nonce") val nonce: String?, 
-    @JsonProperty("challenge_id") val challenge_id: String?
-)
-data class CastAttestResp(
-    @JsonProperty("token") val token: String?
-)
-data class CastPbResp(
-    @JsonProperty("playback") val playback: CastPlaybackInfo?
-)
+data class CastChalResp(@JsonProperty("nonce") val nonce: String?, @JsonProperty("challenge_id") val challenge_id: String?)
+data class CastAttestResp(@JsonProperty("token") val token: String?)
+data class CastPbResp(@JsonProperty("playback") val playback: CastPlaybackInfo?)
 data class CastPlaybackInfo(
     @JsonProperty("iv") val iv: String?, 
     @JsonProperty("payload") val payload: String?, 
     @JsonProperty("key_parts") val key_parts: List<String>?
 )
-data class CastDecrypted(
-    @JsonProperty("sources") val sources: List<CastSource>?
-)
-data class CastSource(
-    @JsonProperty("url") val url: String?, 
-    @JsonProperty("label") val label: String?, 
-    @JsonProperty("type") val type: String?
-)
+data class CastDecrypted(@JsonProperty("sources") val sources: List<CastSource>?)
+data class CastSource(@JsonProperty("url") val url: String?, @JsonProperty("label") val label: String?, @JsonProperty("type") val type: String?)
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF)
+// MESIN SERVER PROXY LOKAL ANTI-EMPTY-RESPONSE
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
-    // 1. Buat HTTP Client khusus tanpa auto-redirect (Sangat penting untuk streaming)
     private val noRedirectClient by lazy {
         app.baseClient.newBuilder()
             .followRedirects(false)
@@ -150,6 +124,7 @@ object HydraxProxy {
             val realUrl = String(android.util.Base64.decode(encodedUrl, android.util.Base64.URL_SAFE))
 
             var rangeHeader: String? = null
+            // Baca header Range dari request ExoPlayer
             while (true) {
                 val line = reader.readLine()
                 if (line.isNullOrEmpty()) break
@@ -160,17 +135,18 @@ object HydraxProxy {
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
-            // 2. MANUAL REDIRECT LOOP: Memaksa Range header tetap terbawa meski berpindah server CDN
             var currentUrl = realUrl
             var redirectCount = 0
 
             while (redirectCount < 10) {
                 val reqBuilder = Request.Builder()
                     .url(currentUrl)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    // FIX: U-A harus SAMA PERSIS dengan Extractor agar tidak 403 Forbidden
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
                     .header("Referer", "https://abyssplayer.com/")
                     .header("Origin", "https://abyssplayer.com")
-                    .header("Accept-Encoding", "identity") // Menghindari kompresi gzip transparan
+                    .header("Accept", "*/*")
+                    .header("Accept-Encoding", "identity") 
                 
                 if (rangeHeader != null) {
                     reqBuilder.header("Range", rangeHeader)
@@ -180,7 +156,7 @@ object HydraxProxy {
 
                 if (response?.isRedirect == true) {
                     val location = response?.header("Location")
-                    response?.close() // Bebaskan memori setiap kali redirect
+                    response?.close() 
                     if (location != null) {
                         currentUrl = location
                         redirectCount++
@@ -192,13 +168,17 @@ object HydraxProxy {
                 }
             }
 
-            if (response == null || !response!!.isSuccessful) return
+            // FIX: Cegah ERR_EMPTY_RESPONSE dengan memberitahu error ke ExoPlayer
+            if (response == null) {
+                output.write("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n".toByteArray())
+                return
+            }
 
-            // 3. SAFETY CHECK: Pastikan server tidak menolak Range request
             val code = response!!.code
             val isPartial = code == 206
             val actualStart = if (isPartial) reqStart else 0L
 
+            // 1. Tulis Header. Meskipun error (403), player akan tahu dan tidak Empty Response.
             output.write("HTTP/1.1 $code ${response!!.message}\r\n".toByteArray())
             for ((key, value) in response!!.headers) {
                 if (key.equals("transfer-encoding", true) || 
@@ -207,6 +187,9 @@ object HydraxProxy {
                 output.write("$key: $value\r\n".toByteArray())
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
+
+            // 2. Jika Cloudflare memblokir, kita berhenti di sini (header sudah terkirim)
+            if (!response!!.isSuccessful) return
 
             val body = response?.body ?: return
             val inputStream = body.byteStream()
@@ -217,7 +200,6 @@ object HydraxProxy {
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
 
-            // Hanya sinkronisasi cipher state jika kita benar-benar melanjutkan dari potongan tengah (Partial)
             if (actualStart > 0 && actualStart < 65536) {
                 cipher.update(ByteArray(actualStart.toInt()))
             }
@@ -243,7 +225,7 @@ object HydraxProxy {
                 output.flush() 
             }
         } catch (e: Exception) {
-            // Abaikan error putus wajar saat user menekan posisi baru di slider video
+            // Abaikan putus koneksi saat user lompat
         } finally {
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
@@ -252,7 +234,7 @@ object HydraxProxy {
 }
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY)
+// EXTRACTOR 1: ABYSS / HYDRAX
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -275,7 +257,6 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            // Perbaikan Warning 2-5: Parsing menggunakan Type-Safe Data Classes
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, HydraxData::class.java)
 
@@ -303,7 +284,6 @@ open class AbyssExtractor : ExtractorApi() {
 
             mp4Sources?.forEach { src ->
                 val label = src.label ?: "Unknown"
-                val codec = src.codec ?: "h264"
                 val path = src.path ?: ""
                 val baseUrl = src.url ?: ""
 
@@ -328,6 +308,10 @@ open class AbyssExtractor : ExtractorApi() {
                         ) {
                             this.referer = pageRef
                             this.quality = labelToQuality(label)
+                            // FIX: Kita WAJIB injeksi User-Agent agar ExoPlayer mengirim U-A Android ke Proxy lokal
+                            this.headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                            )
                         }
                     )
                 }
@@ -474,13 +458,10 @@ open class CastExtractor : ExtractorApi() {
     private fun b64urlDecode(s: String): ByteArray {
         var standardized = s.replace("-", "+").replace("_", "/")
         val padding = 4 - (standardized.length % 4)
-        if (padding != 4) {
-            standardized += "=".repeat(padding)
-        }
+        if (padding != 4) standardized += "=".repeat(padding)
         return android.util.Base64.decode(standardized, android.util.Base64.DEFAULT)
     }
     private fun getRandomBytes(size: Int): ByteArray = ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
-
     private fun derToRaw(der: ByteArray): ByteArray {
         var offset = 2
         val rLength = der[offset + 1].toInt()
@@ -488,23 +469,18 @@ open class CastExtractor : ExtractorApi() {
         offset += 2 + rLength
         val sLength = der[offset + 1].toInt()
         val sOffset = offset + 2
-        
         val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
         val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
-        
         val rPadded = ByteArray(32) { 0 }
         val sPadded = ByteArray(32) { 0 }
-    
         System.arraycopy(rStr, 0, rPadded, 32 - rStr.size, rStr.size)
         System.arraycopy(sStr, 0, sPadded, 32 - sStr.size, sStr.size)
-        
         return rPadded + sPadded
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val sources = mutableListOf<ExtractorLink>()
         val videoId = url.substringAfterLast("/")
-        
         val commonHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
             "Origin" to mainUrl,
@@ -517,14 +493,12 @@ open class CastExtractor : ExtractorApi() {
         try {
             val chalRes = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
             val chalJson = try { mapper.readValue(chalRes.text, CastChalResp::class.java) } catch(e:Exception){ null } ?: return null
-    
             val nonce = chalJson.nonce ?: return null
             val cid = chalJson.challenge_id ?: return null
 
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
-            
             val sig = Signature.getInstance("SHA256withECDSA")
             sig.initSign(kp.private)
             sig.update(nonce.toByteArray(Charsets.UTF_8))
@@ -533,7 +507,6 @@ open class CastExtractor : ExtractorApi() {
             val pub = kp.public as ECPublicKey
             var xBytes = pub.w.affineX.toByteArray()
             var yBytes = pub.w.affineY.toByteArray()
-            
             if (xBytes.size > 32) xBytes = xBytes.copyOfRange(xBytes.size - 32, xBytes.size)
             if (yBytes.size > 32) yBytes = yBytes.copyOfRange(yBytes.size - 32, yBytes.size)
             if (xBytes.size < 32) xBytes = ByteArray(32 - xBytes.size) { 0 } + xBytes
@@ -545,10 +518,7 @@ open class CastExtractor : ExtractorApi() {
                 "challenge_id" to cid,
                 "nonce" to nonce,
                 "signature" to b64url(rawSignature),
-                "public_key" to mapOf(
-                    "crv" to "P-256", "ext" to true, "key_ops" to listOf("verify"), "kty" to "EC",
-                    "x" to b64url(xBytes), "y" to b64url(yBytes)
-                ),
+                "public_key" to mapOf("crv" to "P-256", "ext" to true, "key_ops" to listOf("verify"), "kty" to "EC", "x" to b64url(xBytes), "y" to b64url(yBytes)),
                 "client" to mapOf("user_agent" to commonHeaders["User-Agent"]!!),
                 "attributes" to mapOf("entropy" to "high")
             )
@@ -576,7 +546,6 @@ open class CastExtractor : ExtractorApi() {
                     else if (dec.size == 16) chunks16.add(dec)
                 } catch (e: Exception) {}
             }
-
             for (i in chunks16.indices) {
                 for (j in chunks16.indices) {
                     if (i != j) keysToTest.add(chunks16[i] + chunks16[j])
