@@ -1,6 +1,7 @@
 package com.LayarKacaProvider
 
 import android.util.Base64
+import android.util.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -19,7 +20,6 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
-import java.net.URLEncoder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -90,21 +90,21 @@ data class CastSource(
 )
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF)
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & ANTI-EOF) DENGAN RADAR
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
-    // 1. Buat custom OkHttpClient khusus Proxy untuk membypass limit 5 koneksi
+    // Dispatcher khusus untuk membongkar limit koneksi OkHttp (Anti-antre saat seek)
     private val proxyClient by lazy {
         app.baseClient.newBuilder()
-            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .dispatcher(okhttp3.Dispatcher().apply { 
                 maxRequests = 100
-                maxRequestsPerHost = 100 // Buka limit agar ExoPlayer bebas melakukan seek brutal
+                maxRequestsPerHost = 100 
             })
             .build()
     }
@@ -124,15 +124,16 @@ object HydraxProxy {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("HydraxProxy", "Gagal start server proxy: ${e.message}")
         }
     }
 
     private fun handleClient(client: Socket) {
         var response: Response? = null
+        val clientId = System.currentTimeMillis().toString().takeLast(5)
+        
         try {
             client.soTimeout = 15000 
-            
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -163,24 +164,32 @@ object HydraxProxy {
             }
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : $rangeHeader")
 
             val request = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
-                .header("Accept-Encoding", "identity")
+                .header("Accept-Encoding", "identity") // Wajib identity agar tidak di-gzip
                 .apply {
                     if (rangeHeader != null) header("Range", rangeHeader)
                 }
                 .build()
 
-            // 2. Eksekusi menggunakan custom proxyClient, bukan app.baseClient
+            val startTime = System.currentTimeMillis()
+            Log.d("HydraxProxy", "[$clientId] [*] Meneruskan request ke Hydrax...")
+            
             response = proxyClient.newCall(request).execute()
-
-            if (!response.isSuccessful) return
-
+            val timeTaken = System.currentTimeMillis() - startTime
+            
             val code = response.code
+            val contentRange = response.header("Content-Range", "Kosong")
+            val contentLength = response.header("Content-Length", "Kosong")
+            
+            Log.i("HydraxProxy", "[$clientId] [<-] RESPON HYDRAX   : HTTP $code | Waktu: ${timeTaken}ms | C-Range: $contentRange | C-Length: $contentLength")
+
+            // FIX BUG UTAMA: Selalu tulis header HTTP balasan ke Player, MESKIPUN error!
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
                 if (key.equals("transfer-encoding", true) || 
@@ -190,7 +199,18 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            val body = response.body ?: return
+            // Jika statusnya error (misal 416 atau 429), stop sampai di sini.
+            // Player sudah mendapat header dan akan menangani error secara elegan.
+            if (!response.isSuccessful) {
+                Log.w("HydraxProxy", "[$clientId] [!] Hydrax Error $code. Header berhasil diteruskan ke ExoPlayer. Memutus body stream.")
+                return
+            }
+
+            val body = response.body
+            if (body == null) {
+                Log.w("HydraxProxy", "[$clientId] [!] Body response dari Hydrax null!")
+                return
+            }
             val inputStream = body.byteStream()
 
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
@@ -201,9 +221,13 @@ object HydraxProxy {
 
             if (reqStart > 0 && reqStart < 65536) {
                 cipher.update(ByteArray(reqStart.toInt()))
+                Log.d("HydraxProxy", "[$clientId] [+] Cipher dimajukan sebanyak $reqStart byte")
+            } else if (reqStart >= 65536) {
+                Log.d("HydraxProxy", "[$clientId] [+] Bypass dekripsi karena offset >= 64KB ($reqStart)")
             }
 
             var offset = reqStart
+            var totalSent = 0L
             val buffer = ByteArray(32768)
             var bytesRead: Int
 
@@ -221,16 +245,21 @@ object HydraxProxy {
                     output.write(buffer, 0, bytesRead)
                 }
                 offset += bytesRead
+                totalSent += bytesRead
                 output.flush() 
             }
+            val finalTime = (System.currentTimeMillis() - startTime - timeTaken) / 1000.0
+            val kbps = if (finalTime > 0) (totalSent / 1024.0) / finalTime else 0.0
+            Log.i("HydraxProxy", "[$clientId] [OK] Streaming Selesai. Total: $totalSent bytes | Speed: ${String.format("%.2f", kbps)} KB/s")
+
         } catch (e: SocketException) {
-            // Wajar saat user melakukan seek brutal
+            Log.w("HydraxProxy", "[$clientId] [X] ExoPlayer memutus koneksi/Seek/Cancel: ${e.message}")
         } catch (e: Exception) {
-            // Abaikan error streaming putus
+            Log.e("HydraxProxy", "[$clientId] [!] Error Stream putus di tengah jalan: ${e.message}", e)
         } finally {
-            // 3. Pastikan memori langsung bersih saat ExoPlayer memutus koneksi
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
+            Log.d("HydraxProxy", "[$clientId] [-] Socket ditutup & Memori dibersihkan.")
         }
     }
 }
@@ -259,7 +288,6 @@ open class AbyssExtractor : ExtractorApi() {
             val html = app.get("$mainUrl/?v=$slug", headers = hdrs).text
             val datas = Regex("""datas\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: return
 
-            // Perbaikan Warning 2-5: Parsing menggunakan Type-Safe Data Classes
             val decodedDatas = String(android.util.Base64.decode(datas, android.util.Base64.DEFAULT), Charsets.ISO_8859_1)
             val dataJson = mapper.readValue(decodedDatas, HydraxData::class.java)
 
