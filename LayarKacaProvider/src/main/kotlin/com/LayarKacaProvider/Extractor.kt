@@ -12,8 +12,6 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
-import okhttp3.ConnectionPool
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.BufferedReader
@@ -22,7 +20,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
@@ -100,22 +97,6 @@ object HydraxProxy {
     private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
-    // [FIX 1] OkHttpClient DEDICATED untuk proxy — terpisah dari app.baseClient.
-    // Tujuan: connection pool proxy tidak saling berebut dengan request lain di
-    // CloudStream, dan konfigurasi timeout bisa dikontrol secara mandiri.
-    private val proxyClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)   // [FIX 3] dinaikkan dari soTimeout 15s
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .connectionPool(
-            ConnectionPool(
-                maxIdleConnections = 10,
-                keepAliveDuration  = 30,
-                timeUnit           = TimeUnit.SECONDS
-            )
-        )
-        .build()
-
     fun start() {
         if (isRunning) return
         try {
@@ -138,8 +119,8 @@ object HydraxProxy {
     private fun handleClient(client: Socket) {
         var response: Response? = null
         try {
-            client.soTimeout = 60000  // [FIX 3] dinaikkan dari 15000 → 60000 ms
-
+            client.soTimeout = 15000 
+            
             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
@@ -149,16 +130,16 @@ object HydraxProxy {
             val path = parts[1]
 
             if (!path.contains("?url=")) return
-
+            
             val query = path.substringAfter("?")
-            val params = query.split("&").associate {
+            val params = query.split("&").associate { 
                 val kv = it.split("=")
                 kv[0] to (if (kv.size > 1) kv[1] else "")
             }
-
+            
             val encodedUrl = params["url"] ?: return
-            val keyHex    = params["key"] ?: return
-            val realUrl   = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+            val keyHex = params["key"] ?: return
+            val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
 
             var rangeHeader: String? = null
             while (true) {
@@ -169,92 +150,80 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart = rangeHeader
-                ?.replace("bytes=", "")
-                ?.split("-")
-                ?.get(0)
-                ?.toLongOrNull() ?: 0L
+            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
 
-            // [FIX 2] Tambah header "Connection: close" pada setiap request upstream.
-            // Ini memaksa server Hydrax menutup TCP setelah response selesai sehingga
-            // OkHttp tidak perlu men-drain sisa body sebelum bisa recycle koneksi.
-            // Tanpa ini, setiap seek yang memotong stream di tengah menyebabkan OkHttp
-            // membuang koneksi sambil drain ratusan MB → connection pool exhausted →
-            // request berikutnya lambat → buffering forever.
             val request = Request.Builder()
                 .url(realUrl)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://abyssplayer.com/")
                 .header("Origin", "https://abyssplayer.com")
                 .header("Accept-Encoding", "identity")
-                .header("Connection", "close")  // [FIX 2] kunci utama anti-pool-exhaustion
                 .apply {
                     if (rangeHeader != null) header("Range", rangeHeader)
                 }
                 .build()
 
-            // [FIX 1] Gunakan proxyClient (dedicated), bukan app.baseClient (shared)
-            response = proxyClient.newCall(request).execute()
+            response = app.baseClient.newCall(request).execute()
 
             if (!response.isSuccessful) return
 
             val code = response.code
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
-                if (key.equals("transfer-encoding", true) ||
-                    key.equals("content-encoding", true)  ||
+                if (key.equals("transfer-encoding", true) || 
+                    key.equals("content-encoding", true) || 
                     key.equals("connection", true)) continue
                 output.write("$key: $value\r\n".toByteArray())
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // Perbaikan Warning 1: body diproses tanpa elvis operator (?:)
-            val body        = response.body
+            val body = response.body
             val inputStream = body.byteStream()
 
-            val keyBytes  = keyHex.toByteArray(Charsets.UTF_8)
+            val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val secretKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec    = IvParameterSpec(keyBytes.copyOfRange(0, 16))
-            val cipher    = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            val ivSpec = IvParameterSpec(keyBytes.copyOfRange(0, 16))
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            
+            // Mode ENCRYPT untuk generate keystream murni dari array kosong
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec)
 
-            if (reqStart > 0 && reqStart < 65536) {
-                cipher.update(ByteArray(reqStart.toInt()))
-            }
+            // 1. PRA-GENERATE KEYSTREAM 64KB
+            val rawZeroes = ByteArray(65536)
+            val keystream = cipher.doFinal(rawZeroes)
 
             var offset = reqStart
             val buffer = ByteArray(32768)
             var bytesRead: Int
 
+            // 2. LOOP PEMBACAAN & MANUAL XOR
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (offset < 65536) {
-                    val n        = minOf(bytesRead.toLong(), 65536L - offset).toInt()
-                    val decrypted = cipher.update(buffer, 0, n)
-                    if (decrypted != null) {
-                        output.write(decrypted)
+                    val n = minOf(bytesRead.toLong(), 65536L - offset).toInt()
+                    
+                    // Operasi XOR manual: Sangat aman dari bug internal JCA dan presisi
+                    for (i in 0 until n) {
+                        val currentOffset = (offset + i).toInt()
+                        if (currentOffset < keystream.size) {
+                            buffer[i] = (buffer[i].toInt() xor keystream[currentOffset].toInt()).toByte()
+                        }
                     }
-                    if (n < bytesRead) {
-                        output.write(buffer, n, bytesRead - n)
-                    }
-                } else {
-                    output.write(buffer, 0, bytesRead)
                 }
-                offset += bytesRead
-                output.flush()
+                
+                try {
+                    output.write(buffer, 0, bytesRead)
+                    offset += bytesRead
+                    output.flush() 
+                } catch (e: Exception) {
+                    break // Socket putus/ditutup ExoPlayer
+                }
             }
         } catch (e: SocketException) {
             // Wajar saat user melakukan seek brutal
         } catch (e: Exception) {
             // Abaikan error streaming putus
         } finally {
-            // [FIX 4] Tutup body via source() langsung — skip drain OkHttp.
-            // response.close() biasa memicu OkHttp drain sisa body sebelum recycle
-            // koneksi. Jika sisa body ratusan MB (seek awal → potong di tengah),
-            // drain ini bisa memakan waktu lama dan memblokir connection pool.
-            // Menutup source() langsung memutus stream tanpa drain.
-            // (Dengan FIX 2 Connection:close, koneksi TCP ini memang akan dibuang
-            // oleh server, jadi tidak ada ruginya skip drain di sisi client.)
-            try { response?.body?.source()?.close() } catch (e: Exception) {}
+            try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
         }
     }
