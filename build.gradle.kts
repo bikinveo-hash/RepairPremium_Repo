@@ -85,6 +85,9 @@ subprojects {
         val cloudstream by configurations
         cloudstream("com.lagradost:cloudstream3:pre-release")
 
+        // Fix for Kotlin 2.4.0 strict type annotation checking
+        implementation("org.jspecify:jspecify:1.0.0")
+
         // Other dependencies
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.18")
