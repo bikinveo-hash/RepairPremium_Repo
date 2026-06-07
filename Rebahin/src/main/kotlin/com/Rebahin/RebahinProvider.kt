@@ -282,7 +282,7 @@ class RebahinProvider : MainAPI() {
                     val response = app.get(targetUrl, referer = mainUrl)
                     val responseHtml = response.text
                     val setCookies = response.headers.values("Set-Cookie")
-                    val cookieHeader = setCookies.joinToString("; ") { it.substringBefore(";") }
+                    val cookieHeader = setCookies.joinToString(";") { it.substringBefore(";") }
 
                     // Step 2: Tangkap Payload (Gunakan (?s) untuk membaca string multiline)
                     val rawPayloadMatch = Regex("""(?s)_juicycodes\((.*?)\)""").find(responseHtml)
@@ -348,7 +348,8 @@ class RebahinProvider : MainAPI() {
                                             this.headers = mapOf(
                                                 "User-Agent" to USER_AGENT,
                                                 "Origin" to domain,
-                                                "Accept" to "*/*"
+                                                "Accept" to "*/*",
+                                                "Cookie" to cookieHeader // <--- PERBAIKAN DI SINI, MENAMBAHKAN COOKIE HEADER
                                             )
                                         }
                                     )
