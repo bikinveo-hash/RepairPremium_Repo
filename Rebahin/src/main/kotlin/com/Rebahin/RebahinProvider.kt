@@ -3,6 +3,7 @@ package com.Rebahin
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.mvvm.logError
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
