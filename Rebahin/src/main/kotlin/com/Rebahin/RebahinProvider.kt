@@ -4,10 +4,9 @@ import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URLDecoder
 
 class RebahinProvider : MainAPI() {
-    override var mainUrl = "https://rebahinxxi3.boats" // Menggunakan domain mirror yang aktif dan normal
+    override var mainUrl = "https://rebahinxxi3.boats"
     override var name = "Rebahin"
     override val hasMainPage = true
     override var lang = "id"
@@ -18,7 +17,7 @@ class RebahinProvider : MainAPI() {
     override var sequentialMainPageDelay: Long = 800L
     override var sequentialMainPageScrollDelay: Long = 200L
 
-    // Header penyamaran browser lengkap untuk menembus paket drop / blokir firewall Cloudflare (Anti-Timeout)
+    // Header penyamaran browser lengkap untuk menembus paket drop / blokir firewall
     private val browserHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -55,7 +54,6 @@ class RebahinProvider : MainAPI() {
             request.data + page
         }
 
-        // Menyuntikkan browserHeaders agar Cloudflare memproses koneksi (Bypass Timeout)
         val document = app.get(url, headers = browserHeaders, referer = mainUrl).document
         val home = document.select("div.ml-item").mapNotNull {
             it.toSearchResult()
@@ -69,7 +67,6 @@ class RebahinProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // Menyuntikkan browserHeaders pada sistem pencarian global
         val document = app.get("$mainUrl/?s=$query", headers = browserHeaders, referer = mainUrl).document
         return document.select("div.ml-item").mapNotNull {
             it.toSearchResult()
@@ -126,7 +123,7 @@ class RebahinProvider : MainAPI() {
         val plot = document.selectFirst("div.sinopsis-indo, div.desc, div.rt-Text")?.text()?.replace("Nonton Film.*Sub Indo \\| REBAHIN".toRegex(RegexOption.IGNORE_CASE), "")?.trim()
         
         val ratingText = document.selectFirst("span.irank-voters, span.rating, div.btn-danger.averagerate")?.text()?.replace(",", ".")?.trim()
-        val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) } // Sesuai standarisasi Score baru MainAPI
+        val parsedScore = ratingText?.toFloatOrNull()?.let { Score.from10(it) }
 
         var year: Int? = null
         var duration: Int? = null
@@ -185,28 +182,24 @@ class RebahinProvider : MainAPI() {
     }
 
     /**
-     * Otak Dekripsi Native Pembalik Algoritma JuicyCodes (Tanpa Engine JS / WebView)
+     * Otak Dekripsi Native Pembalik Algoritma JuicyCodes
      */
     private fun decryptJuicyCodes(payload: String): String {
         if (payload.length < 3) return ""
         
-        // 1. Ambil 3 karakter terakhir sebagai Salt, dan sisanya sebagai Ciphertext
         val salt = payload.takeLast(3)
         val ciphertext = payload.dropLast(3)
 
-        // 2. Ekstrak Nilai Salt Utama (decodeSalt)
         var saltDigits = ""
         for (ch in salt) {
             saltDigits += (ch.code - 100).toString()
         }
         val saltValue = saltDigits.toIntOrNull() ?: return ""
 
-        // 3. Decode Base64 URL-Safe Ciphertext
         val cleanCiphertext = ciphertext.replace("_", "+").replace("-", "/")
         val decodedBytes = Base64.decode(cleanCiphertext, Base64.DEFAULT)
         val decodedString = String(decodedBytes, Charsets.UTF_8)
 
-        // 4. Petakan string simbol ke deretan angka berbasis index symbolMap
         val symbolMap = listOf("`", "%", "-", "+", "*", "$", "!", "_", "^", "=")
         var digitString = ""
         for (ch in decodedString) {
@@ -216,7 +209,6 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // 5. Potong tiap 4 digit angka dan kalkulasi charCode teks aslinya (Chunk Parsing)
         val sb = java.lang.StringBuilder()
         val chunks = digitString.chunked(4)
         for (chunk in chunks) {
@@ -238,7 +230,6 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
-        // Mengurai alamat URL target awal
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
@@ -272,7 +263,6 @@ class RebahinProvider : MainAPI() {
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             
-            // Bypass halaman gateway iembed secara instan murni via Base64 lokal
             if (rawUrl.contains("/iembed/?source=")) {
                 val base64 = rawUrl.substringAfter("source=")
                 try {
@@ -284,74 +274,110 @@ class RebahinProvider : MainAPI() {
                 targetUrl = targetUrl.replace("abyssplayer.com/", "abysscdn.com/?v=")
             }
 
-            // Jalankan loadExtractor Cloudstream standar terlebih dahulu
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
-            // JIKA TIDAK TERSEDIA DI EXTRACTOR BAWAAN, JALANKAN PROSES NATIVE JUICYCODES BYPASS
             if (!isExtractorLoaded) {
                 try {
-                    // Step 1: Hit HTTP GET ke server embed & panen tiket kuki sesi utama
+                    // Step 1: Hit HTTP GET ke server embed
                     val response = app.get(targetUrl, referer = mainUrl)
                     val responseHtml = response.text
                     val setCookies = response.headers.values("Set-Cookie")
-                    val cookieHeader = setCookies.map { it.substringBefore(";") }.joinToString("; ")
+                    val cookieHeader = setCookies.joinToString("; ") { it.substringBefore(";") }
 
-                    // Step 2: Ambil payload acak _juicycodes dan variabel metadata jwData
+                    // Step 2: Ambil payload acak _juicycodes dan variabel jwData
                     val payload = Regex("""_juicycodes\("([^"]+)"\)""").find(responseHtml)?.groupValues?.get(1) ?: ""
                     val juicyDataStr = Regex("""window\.juicyData\s*=\s*(\{.*?\});""").find(responseHtml)?.groupValues?.get(1) ?: ""
 
                     val token = Regex(""""token"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1) ?: ""
                     val pingRoute = Regex(""""ping"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1)?.replace("\\/", "/") ?: ""
 
-                    // Step 3: Luluskan Validasi Sesi API Handshake via POST /ping (Membuka gembok CDN video)
+                    // Step 3: API Handshake POST /ping
                     if (pingRoute.isNotBlank() && token.isNotBlank()) {
                         val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
                         val pingUrl = domain.removeSuffix("/") + pingRoute
                         val randomPingId = java.util.UUID.randomUUID().toString().replace("-", "")
 
-                        app.post(
-                            pingUrl,
-                            headers = mapOf(
-                                "Cookie"     to cookieHeader,
-                                "Referer"    to targetUrl,
-                                "User-Agent" to USER_AGENT
-                            ),
-                            json = mapOf(
-                                "_token" to token,
-                                "__type" to "dawn",
-                                "pingID" to randomPingId
-                            )
-                        )
-                    }
-
-                    // Step 4: Jalankan dekripsi native dan saring tautan video final (.m3u8 / .mp4)
-                    if (payload.isNotBlank()) {
-                        val decryptedConfig = decryptJuicyCodes(payload)
-                        val videoLinks = Regex("""(https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)""").findAll(decryptedConfig)
-
-                        videoLinks.forEach { match ->
-                            val finalVideoUrl = match.groupValues[1]
-                            val isM3u8 = finalVideoUrl.contains(".m3u8") || finalVideoUrl.contains("m3u8")
-                            val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
-
-                            callback.invoke(
-                                ExtractorLink(
-                                    source = "Rebahin VIP",
-                                    name = "Rebahin VIP " + if (isM3u8) "(HLS)" else "(MP4)",
-                                    url = finalVideoUrl,
-                                    referer = "$domain/",
-                                    quality = Qualities.Unknown.value,
-                                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO, // Mengikuti aturan main tipe ExtractorApi baru
-                                    headers = mapOf(
-                                        "User-Agent" to USER_AGENT,
-                                        "Cookie"     to cookieHeader,
-                                        "Referer"    to targetUrl
-                                    )
+                        try {
+                            app.post(
+                                pingUrl,
+                                headers = mapOf(
+                                    "Accept"       to "*/*",
+                                    "Content-Type" to "application/json",
+                                    "Origin"       to domain,
+                                    "Referer"      to targetUrl,
+                                    "User-Agent"   to USER_AGENT,
+                                    "Cookie"       to cookieHeader
+                                ),
+                                json = mapOf(
+                                    "_token" to token,
+                                    "__type" to "dawn",
+                                    "pingID" to randomPingId
                                 )
                             )
+                        } catch (e: Exception) {
+                            // Abaikan jika ping invalid signature, kadang tetap bisa jalan
+                            logError(e)
                         }
                     }
-                } catch (e: Exception) {}
+
+                    // Step 4: Dekripsi native
+                    if (payload.isNotBlank()) {
+                        val decryptedConfig = decryptJuicyCodes(payload)
+                        
+                        // Step 5: Ekstrak JSON Config
+                        val jsonString = Regex("""var\s+config\s*=\s*(\{.*\})""").find(decryptedConfig)?.groupValues?.get(1)
+                        
+                        if (jsonString != null) {
+                            try {
+                                val jsonNode = mapper.readTree(jsonString)
+                                
+                                val fileUrl = jsonNode.at("/sources/file").asText()
+                                if (fileUrl.isNotBlank()) {
+                                    val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
+                                    
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "Rebahin VIP",
+                                            name = "Rebahin VIP HLS",
+                                            url = fileUrl,
+                                            type = ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = "$domain/"
+                                            this.quality = Qualities.Unknown.value
+                                            this.headers = mapOf(
+                                                "User-Agent" to USER_AGENT,
+                                                "Origin" to domain
+                                            )
+                                        }
+                                    )
+                                }
+
+                                val tracks = jsonNode.at("/tracks")
+                                if (tracks.isArray) {
+                                    tracks.forEach { track ->
+                                        if (track.at("/kind").asText() == "captions") {
+                                            val subFile = track.at("/file").asText()
+                                            val label = track.at("/label").asText()
+                                            
+                                            if (subFile.isNotBlank()) {
+                                                subtitleCallback.invoke(
+                                                    newSubtitleFile(
+                                                        lang = label,
+                                                        url = subFile
+                                                    ) {}
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                logError(e)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    logError(e)
+                }
             }
         }
 
