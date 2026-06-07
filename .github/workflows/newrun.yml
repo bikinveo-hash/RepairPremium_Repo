@@ -12,99 +12,63 @@ on:
     paths-ignore:
       - '*.md'
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. Checkout Source Code ke folder "src"
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           path: "src"
 
-      # 2. Checkout Branch "builds" ke folder "builds"
-      # INI KUNCINYA: Kita download branch yang sudah ada, jadi repo.json ikut terdownload
-      - name: Checkout Builds Branch
+      - name: Checkout builds
         uses: actions/checkout@v4
         with:
           ref: "builds"
           path: "builds"
 
-      # 3. Bersihkan plugin lama TAPI JANGAN HAPUS repo.json
       - name: Clean old builds
         run: |
-          # Hanya hapus file plugin dan jar lama agar tidak menumpuk
-          rm -f $GITHUB_WORKSPACE/builds/*.cs3
-          rm -f $GITHUB_WORKSPACE/builds/*.jar
-          # File repo.json TIDAK DIHAPUS di sini, jadi dia aman.
+          rm $GITHUB_WORKSPACE/builds/*.cs3 || true
+          rm $GITHUB_WORKSPACE/builds/*.jar || true
 
-      - name: Setup JDK 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: 17
-          distribution: adopt
-          cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Create local.properties
         run: |
           cd $GITHUB_WORKSPACE/src
           touch local.properties
-          # Masukkan logic secret kamu disini jika perlu (seperti di kode sebelumnya)
-
-      # FIX: Hapus cache JitPack yang corrupt agar Gradle fetch ulang dengan bersih
-      - name: Clear JitPack Gradle Cache
-        run: |
-          rm -rf ~/.gradle/caches/modules-2/files-2.1/com.github.recloudstream
-          rm -rf ~/.gradle/caches/modules-2/metadata-2.1/https/jitpack.io/com/github/recloudstream
-          echo "JitPack cache cleared successfully"
 
       - name: Build Plugins
         run: |
           cd $GITHUB_WORKSPACE/src
           chmod +x gradlew
-
-          # FIX: Tambah --refresh-dependencies agar dependency JitPack selalu di-fetch ulang
-          ./gradlew make makePluginsJson --refresh-dependencies
-          ./gradlew ensureJarCompatibility
-
-          # Validasi build
-          if [ ! -f "build/plugins.json" ]; then
-            echo "ERROR: Gagal build!"
-            exit 1
-          fi
-
-          # Copy hasil build ke folder "builds"
-          # Aktifkan globstar agar tanda ** berfungsi dengan baik
-          shopt -s globstar
-
-          # Tambahkan '|| true' dan '2>/dev/null' agar proses tetap aman walau file tidak ditemukan
-          cp **/build/*.cs3 $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
-          cp **/build/*.jar $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
-          cp build/plugins.json $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
+          ./gradlew makePluginsJson
+          cp **/build/*.cs3 $GITHUB_WORKSPACE/builds || true
+          cp **/build/*.jar $GITHUB_WORKSPACE/builds || true
+          cp build/plugins.json $GITHUB_WORKSPACE/builds
 
       - name: Push builds
         run: |
           cd $GITHUB_WORKSPACE/builds
 
-          # Cek apakah repo.json masih ada (Safety Check)
+          # Safety check repo.json
           if [ ! -f "repo.json" ]; then
-             echo "BAHAYA: repo.json hilang! Membatalkan proses."
-             exit 1
+            echo "BAHAYA: repo.json hilang! Membatalkan proses."
+            exit 1
           fi
 
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-
-          # Tambahkan semua perubahan (plugin baru)
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
           git add .
-
-          # Commit dan Push
-          # Kita pakai --amend agar history git tidak membengkak (opsional, tapi bagus)
-          git commit --amend -m "Build update: $GITHUB_SHA" || git commit -m "Build update: $GITHUB_SHA"
+          git commit --amend -m "Build $GITHUB_SHA" || exit 0
           git push --force
