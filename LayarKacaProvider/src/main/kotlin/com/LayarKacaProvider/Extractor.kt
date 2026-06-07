@@ -200,8 +200,9 @@ object HydraxProxy {
             // ====================================================================
             // MANIPULASI HEADER BALASAN UNTUK MEMBOHONGI EXOPLAYER (SPOOFING)
             // ====================================================================
-            var contentRange = response.header("Content-Range", "Kosong")
-            var contentLength = response.header("Content-Length", "Kosong")
+            // FIX: Menggunakan Elvis Operator (?:) agar tipe terdeteksi tegas sebagai String Non-null
+            var contentRange = response.header("Content-Range") ?: "Kosong"
+            var contentLength = response.header("Content-Length") ?: "Kosong"
             var spoofedContentRange = contentRange
 
             if (code == 206 && contentRange != "Kosong") {
