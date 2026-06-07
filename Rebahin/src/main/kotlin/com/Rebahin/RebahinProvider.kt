@@ -181,9 +181,6 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    /**
-     * Otak Dekripsi Native Pembalik Algoritma JuicyCodes
-     */
     private fun decryptJuicyCodes(payload: String): String {
         if (payload.length < 3) return ""
         
@@ -278,54 +275,24 @@ class RebahinProvider : MainAPI() {
 
             if (!isExtractorLoaded) {
                 try {
-                    // Step 1: Hit HTTP GET ke server embed
-                    val response = app.get(targetUrl, referer = mainUrl)
+                    // Step 1: Hit HTTP GET ke server embed dengan browserHeaders yang sama dengan ExoPlayer
+                    val response = app.get(targetUrl, headers = browserHeaders, referer = mainUrl)
                     val responseHtml = response.text
+                    
+                    // Ambil raw cookie dari headers (CloudStream app.get mengembalikan List<String>)
                     val setCookies = response.headers.values("Set-Cookie")
-                    val cookieHeader = setCookies.joinToString(";") { it.substringBefore(";") }
+                    // PERBAIKAN: Format cookie dengan benar menggunakan spasi setelah titik koma
+                    val cookieHeader = setCookies.joinToString("; ") { it.substringBefore(";") }
 
                     // Step 2: Tangkap Payload (Gunakan (?s) untuk membaca string multiline)
                     val rawPayloadMatch = Regex("""(?s)_juicycodes\((.*?)\)""").find(responseHtml)
-                    val juicyDataMatch = Regex("""window\.juicyData\s*=\s*(\{.*?\});""").find(responseHtml)
 
                     if (rawPayloadMatch != null) {
                         // Bersihkan spasi, enter, kutip, dan plus
                         val payload = rawPayloadMatch.groupValues[1].replace(Regex("""["'+\s\n\r]"""), "")
-                        
-                        val juicyDataStr = juicyDataMatch?.groupValues?.get(1) ?: ""
-                        val token = Regex(""""token"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1) ?: ""
-                        val pingRoute = Regex(""""ping"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1)?.replace("\\/", "/") ?: ""
-
                         val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
 
-                        // Step 3: API Handshake POST /ping
-                        if (pingRoute.isNotBlank() && token.isNotBlank()) {
-                            val pingUrl = domain.removeSuffix("/") + pingRoute
-                            val randomPingId = java.util.UUID.randomUUID().toString().replace("-", "")
-
-                            try {
-                                app.post(
-                                    pingUrl,
-                                    headers = mapOf(
-                                        "Accept"       to "*/*",
-                                        "Content-Type" to "application/json",
-                                        "Origin"       to domain,
-                                        "Referer"      to "$domain/",
-                                        "User-Agent"   to USER_AGENT,
-                                        "Cookie"       to cookieHeader
-                                    ),
-                                    json = mapOf(
-                                        "_token" to token,
-                                        "__type" to "dawn",
-                                        "pingID" to randomPingId
-                                    )
-                                )
-                            } catch (e: Exception) {
-                                // Abaikan jika ping invalid signature
-                            }
-                        }
-
-                        // Step 4 & 5: Dekripsi dan Ekstrak dari JSON
+                        // Step 3 & 4: Dekripsi dan Ekstrak dari JSON (Fungsi /ping dihapus untuk menghindari blokir)
                         val decryptedConfig = decryptJuicyCodes(payload)
                         val jsonString = Regex("""var\s+config\s*=\s*(\{.*\});?""").find(decryptedConfig)?.groupValues?.get(1)
                         
@@ -346,10 +313,10 @@ class RebahinProvider : MainAPI() {
                                             this.referer = "$domain/"
                                             this.quality = Qualities.Unknown.value
                                             this.headers = mapOf(
-                                                "User-Agent" to USER_AGENT,
+                                                "User-Agent" to USER_AGENT, // Match dengan browserHeaders
                                                 "Origin" to domain,
                                                 "Accept" to "*/*",
-                                                "Cookie" to cookieHeader // <--- PERBAIKAN DI SINI, MENAMBAHKAN COOKIE HEADER
+                                                "Cookie" to cookieHeader // <--- COOKIE DIKIRIM KE EXOPLAYER
                                             )
                                         }
                                     )
