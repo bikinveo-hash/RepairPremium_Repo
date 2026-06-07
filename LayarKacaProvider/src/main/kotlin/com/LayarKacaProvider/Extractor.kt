@@ -164,7 +164,7 @@ object HydraxProxy {
             }
 
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
-            Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : $rangeHeader")
+            Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : ${rangeHeader ?: "FULL (bytes=0-)"}")
 
             val request = Request.Builder()
                 .url(realUrl)
@@ -199,8 +199,9 @@ object HydraxProxy {
             }
             output.write("Connection: close\r\n\r\n".toByteArray())
 
-            // Jika statusnya error (misal 416 atau 429), stop sampai di sini.
-            // Player sudah mendapat header dan akan menangani error secara elegan.
+            // Wajib memanggil flush() di sini agar error code (cth: 416) benar-benar terkirim ke player!
+            output.flush()
+
             if (!response.isSuccessful) {
                 Log.w("HydraxProxy", "[$clientId] [!] Hydrax Error $code. Header berhasil diteruskan ke ExoPlayer. Memutus body stream.")
                 return
@@ -253,9 +254,9 @@ object HydraxProxy {
             Log.i("HydraxProxy", "[$clientId] [OK] Streaming Selesai. Total: $totalSent bytes | Speed: ${String.format("%.2f", kbps)} KB/s")
 
         } catch (e: SocketException) {
-            Log.w("HydraxProxy", "[$clientId] [X] ExoPlayer memutus koneksi/Seek/Cancel: ${e.message}")
+            Log.w("HydraxProxy", "[$clientId] [X] ExoPlayer memutus koneksi/Seek/Cancel: ${e.message ?: "Broken Pipe/Connection Reset"}")
         } catch (e: Exception) {
-            Log.e("HydraxProxy", "[$clientId] [!] Error Stream putus di tengah jalan: ${e.message}", e)
+            Log.e("HydraxProxy", "[$clientId] [!] Error Stream putus di tengah jalan: ${e.message}")
         } finally {
             try { response?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
