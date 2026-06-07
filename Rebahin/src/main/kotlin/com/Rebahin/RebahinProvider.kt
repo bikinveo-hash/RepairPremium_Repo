@@ -7,7 +7,7 @@ import org.jsoup.nodes.Element
 import java.net.URLDecoder
 
 class RebahinProvider : MainAPI() {
-    override var mainUrl = "https://rebahinxxi3.autos"
+    override var mainUrl = "https://rebahinxxi3.boats" // FIX: Menggunakan domain mirror yang aktif dan normal
     override var name = "Rebahin"
     override val hasMainPage = true
     override var lang = "id"
