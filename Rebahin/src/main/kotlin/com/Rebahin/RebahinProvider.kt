@@ -1,10 +1,8 @@
 package com.Rebahin
 
 import android.util.Base64
-import android.webkit.CookieManager
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 
@@ -170,6 +168,51 @@ class RebahinProvider : MainAPI() {
         }
     }
 
+    /**
+     * Otak Dekripsi Native Pembalik Algoritma JuicyCodes (Bypass Obfuscation)
+     */
+    private fun decryptJuicyCodes(payload: String): String {
+        if (payload.length < 3) return ""
+        
+        // 1. Ambil 3 karakter terakhir sebagai Salt, dan sisanya sebagai Ciphertext
+        val salt = payload.takeLast(3)
+        val ciphertext = payload.dropLast(3)
+
+        // 2. Ekstrak Nilai Salt Utama (decodeSalt)
+        var saltDigits = ""
+        for (ch in salt) {
+            saltDigits += (ch.code - 100).toString()
+        }
+        val saltValue = saltDigits.toIntOrNull() ?: return ""
+
+        // 3. Decode Base64 URL-Safe Ciphertext
+        val cleanCiphertext = ciphertext.replace("_", "+").replace("-", "/")
+        val decodedBytes = Base64.decode(cleanCiphertext, Base64.DEFAULT)
+        val decodedString = String(decodedBytes, Charsets.UTF_8)
+
+        // 4. Petakan string simbol ke deretan angka berbasis index symbolMap
+        val symbolMap = listOf("`", "%", "-", "+", "*", "$", "!", "_", "^", "=")
+        var digitString = ""
+        for (ch in decodedString) {
+            val idx = symbolMap.indexOf(ch.toString())
+            if (idx != -1) {
+                digitString += idx.toString()
+            }
+        }
+
+        // 5. Potong tiap 4 digit angka dan kalkulasi charCode teks aslinya
+        val sb = java.lang.StringBuilder()
+        val chunks = digitString.chunked(4)
+        for (chunk in chunks) {
+            if (chunk.length == 4) {
+                val chunkInt = chunk.toIntOrNull() ?: continue
+                val charCode = (chunkInt % 1000) - saltValue
+                sb.append(charCode.toChar())
+            }
+        }
+        return sb.toString()
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -179,11 +222,12 @@ class RebahinProvider : MainAPI() {
         
         val urlToExtract = mutableListOf<String>()
 
+        // Mengurai alamat URL target awal
         if (!data.startsWith("http")) {
             try {
                 val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
                 if (decodedUrl.startsWith("http")) {
-                     urlToExtract.add(decodedUrl)
+                    urlToExtract.add(decodedUrl)
                 }
             } catch (e: Exception) {}
         } else {
@@ -212,6 +256,7 @@ class RebahinProvider : MainAPI() {
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             
+            // Bypass halaman gateway iembed secara instan murni via Base64 lokal
             if (rawUrl.contains("/iembed/?source=")) {
                 val base64 = rawUrl.substringAfter("source=")
                 try {
@@ -223,160 +268,74 @@ class RebahinProvider : MainAPI() {
                 targetUrl = targetUrl.replace("abyssplayer.com/", "abysscdn.com/?v=")
             }
 
+            // Jalankan loadExtractor Cloudstream standar terlebih dahulu
             val isExtractorLoaded = loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
 
+            // JIKA TIDAK TERSEDIA DI EXTRACTOR BAWAAN, JALANKAN PROSES NATIVE JUICYCODES BYPASS
             if (!isExtractorLoaded) {
-                val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
-                val fixedReferer = if (targetUrl.contains("abyss")) "https://abysscdn.com/" else "$domain/"
-
-                var linkFound = false
-
-                // =========================================================================
-                // AUTO-CLICKER & SW BYPASS
-                // =========================================================================
-                val safeHijackScript = """
-                    (function() {
-                        if (window.cs_hook_active) return;
-                        window.cs_hook_active = true;
-                        
-                        window.fuckAdBlock = { onDetected: function(){}, onNotDetected: function(){}, setOption: function(){} };
-                        window.FuckAdBlock = window.fuckAdBlock;
-
-                        setInterval(function() {
-                            try {
-                                if (window.jwplayer && typeof window.jwplayer === 'function') {
-                                    var player = window.jwplayer();
-                                    var config = player.getConfig && player.getConfig();
-                                    var sources = config && config.sources;
-                                    
-                                    // Tangkap dari config JWPlayer
-                                    if (sources && sources.length > 0) {
-                                        var src = sources[0].file;
-                                        if (src && src.indexOf('blob:') === -1 && !window.cs_sent) {
-                                            window.cs_sent = true;
-                                            window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(src);
-                                            return;
-                                        }
-                                    }
-                                    
-                                    // Tangkap dari Playlist JWPlayer
-                                    var pl = player.getPlaylist && player.getPlaylist();
-                                    if (pl && pl.length > 0 && pl[0].file) {
-                                        var url = pl[0].file;
-                                        if (url.indexOf('blob:') === -1 && !window.cs_sent) {
-                                            window.cs_sent = true;
-                                            window.location.href = 'https://cloudstream.video.extracted/?url=' + encodeURIComponent(url);
-                                            return;
-                                        }
-                                    }
-                                }
-                            } catch(e) {}
-                            
-                            // Auto-click tombol untuk memicu dekripsi
-                            try {
-                                var overlay = document.getElementById('overlay');
-                                if (overlay) overlay.click();
-                                
-                                var btns = document.querySelectorAll('.jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid');
-                                for (var i=0; i<btns.length; i++) {
-                                    btns[i].click();
-                                }
-                            } catch(e) {}
-                        }, 500);
-                    })();
-                """.trimIndent()
-
                 try {
-                    val webViewResolver = WebViewResolver(
-                        interceptUrl = Regex("""(cloudstream\.video\.extracted/\?url=.*|\.(m3u8|mp4)(?:[?#]|$))"""),
-                        script = safeHijackScript 
-                    )
-                    
-                    val (request, _) = webViewResolver.resolveUsingWebView(
-                        url = targetUrl,
-                        referer = mainUrl
-                    )
-                    
-                    request?.url?.toString()?.let { resolvedUrl ->
-                        var finalUrl = resolvedUrl
-                        
-                        if (resolvedUrl.contains("cloudstream.video.extracted")) {
-                            val encodedUrl = Regex("""\?url=(.*)""").find(resolvedUrl)?.groupValues?.get(1)
-                            if (encodedUrl != null) {
-                                val decoded = URLDecoder.decode(encodedUrl, "UTF-8")
-                                // KUNCI 1: Buang instruksi Service Worker setelah tanda '#'
-                                finalUrl = decoded.substringBefore("#")
-                            }
-                        } else {
-                            finalUrl = resolvedUrl.substringBefore("#")
-                        }
+                    // Step 1: Hit HTTP GET ke server embed & panen tiket kuki sesi utama
+                    val response = app.get(targetUrl, referer = mainUrl)
+                    val responseHtml = response.text
+                    val setCookies = response.headers.values("Set-Cookie")
+                    val cookieHeader = setCookies.map { it.substringBefore(";") }.joinToString("; ")
 
-                        // KUNCI 2: Ambil semua tiket VIP (Cookies) dari WebView
-                        val cookieManager = CookieManager.getInstance()
-                        cookieManager.flush()
-                        
-                        val abyssCookies  = cookieManager.getCookie("https://abysscdn.com") ?: ""
-                        val iamCookies    = cookieManager.getCookie("https://iamcdn.net") ?: ""
-                        val videoCookies  = cookieManager.getCookie(finalUrl) ?: ""
+                    // Step 2: Ambil payload acak _juicycodes dan variabel metadata jwData
+                    val payload = Regex("""_juicycodes\("([^"]+)"\)""").find(responseHtml)?.groupValues?.get(1) ?: ""
+                    val juicyDataStr = Regex("""window\.juicyData\s*=\s*(\{.*?\});""").find(responseHtml)?.groupValues?.get(1) ?: ""
 
-                        val finalCookies = listOf(abyssCookies, iamCookies, videoCookies)
-                            .filter { it.isNotBlank() }
-                            .joinToString("; ")
+                    val token = Regex(""""token"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1) ?: ""
+                    val pingRoute = Regex(""""ping"\s*:\s*"([^"]+)"""").find(juicyDataStr)?.groupValues?.get(1)?.replace("\\/", "/") ?: ""
 
-                        // KUNCI 3: Bangun reqHeaders yang disukai Cloudflare
-                        val reqHeaders = mapOf(
-                            "Origin"          to fixedReferer.removeSuffix("/"),
-                            "Referer"         to fixedReferer,
-                            "Cookie"          to finalCookies,
-                            "User-Agent"      to USER_AGENT, // Sesuaikan dengan standar Cloudstream
-                            "Accept"          to "*/*",
-                            "Accept-Encoding" to "identity;q=1, *;q=0",
-                            "Range"           to "bytes=0-", // Kunci untuk putar MP4/Chunks
-                            "Sec-Fetch-Site"  to "cross-site",
-                            "Sec-Fetch-Mode"  to "cors",
-                            "Sec-Fetch-Dest"  to "empty"
-                        )
+                    // Step 3: Luluskan Validasi Sesi API Handshake via POST /ping (Membuka gembok CDN)
+                    if (pingRoute.isNotBlank() && token.isNotBlank()) {
+                        val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
+                        val pingUrl = domain.removeSuffix("/") + pingRoute
+                        val randomPingId = java.util.UUID.randomUUID().toString().replace("-", "")
 
-                        val isM3u8 = finalUrl.contains(".m3u8") || finalUrl.contains("m3u8")
-                        
-                        callback.invoke(
-                            ExtractorLink(
-                                source = this.name + " (Web)",
-                                name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                url = finalUrl,
-                                referer = fixedReferer,
-                                quality = Qualities.Unknown.value,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                                headers = reqHeaders
+                        app.post(
+                            pingUrl,
+                            headers = mapOf(
+                                "Cookie"     to cookieHeader,
+                                "Referer"    to targetUrl,
+                                "User-Agent" to USER_AGENT
+                            ),
+                            json = mapOf(
+                                "_token" to token,
+                                "__type" to "dawn",
+                                "pingID" to randomPingId
                             )
                         )
-                        linkFound = true
                     }
-                } catch (e: Exception) {}
-                
-                if (!linkFound) {
-                    try {
-                        val playerHtml = app.get(targetUrl, referer = mainUrl).text
-                        val unpackedHtml = getAndUnpack(playerHtml)
-                        val videoLinks = Regex("""(?:file|source|src)\s*[:=]\s*["'](https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""").findAll(unpackedHtml)
-                        
+
+                    // Step 4: Jalankan dekripsi native dan saring tautan video final (.m3u8 / .mp4)
+                    if (payload.isNotBlank()) {
+                        val decryptedConfig = decryptJuicyCodes(payload)
+                        val videoLinks = Regex("""(https?://[^"']+(?:\.m3u8|\.mp4)[^"']*)""").findAll(decryptedConfig)
+
                         videoLinks.forEach { match ->
-                            val link = match.groupValues[1]
-                            val isM3u8 = link.contains(".m3u8")
+                            val finalVideoUrl = match.groupValues[1]
+                            val isM3u8 = finalVideoUrl.contains(".m3u8") || finalVideoUrl.contains("m3u8")
+                            val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
+
                             callback.invoke(
                                 ExtractorLink(
-                                    source = this.name + " (Auto)",
-                                    name = this.name + if (isM3u8) " (HLS)" else " (MP4)",
-                                    url = link,
-                                    referer = fixedReferer,
+                                    source = "Rebahin VIP",
+                                    name = "Rebahin VIP " + if (isM3u8) "(HLS)" else "(MP4)",
+                                    url = finalVideoUrl,
+                                    referer = "$domain/",
                                     quality = Qualities.Unknown.value,
                                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                                    headers = mapOf("User-Agent" to USER_AGENT)
+                                    headers = mapOf(
+                                        "User-Agent" to USER_AGENT,
+                                        "Cookie"     to cookieHeader,
+                                        "Referer"    to targetUrl
+                                    )
                                 )
                             )
                         }
-                    } catch (e: Exception) {}
-                }
+                    }
+                } catch (e: Exception) {}
             }
         }
 
