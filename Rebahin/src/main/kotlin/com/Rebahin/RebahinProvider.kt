@@ -235,7 +235,7 @@ class RebahinProvider : MainAPI() {
                 }
             } catch (e: Exception) {}
         } else {
-            val document = app.get(data, referer = mainUrl).document
+            val document = app.get(data, headers = browserHeaders, referer = mainUrl).document
             
             document.select("[data-iframe]").forEach { element ->
                 val encodedUrl = element.attr("data-iframe")
@@ -275,33 +275,32 @@ class RebahinProvider : MainAPI() {
 
             if (!isExtractorLoaded) {
                 try {
-                    // Step 1: Hit HTTP GET ke server embed dengan browserHeaders yang sama dengan ExoPlayer
+                    // Ambil HTML embed asli menggunakan browserHeaders otentik
                     val response = app.get(targetUrl, headers = browserHeaders, referer = mainUrl)
                     val responseHtml = response.text
-                    
-                    // Ambil raw cookie dari headers (CloudStream app.get mengembalikan List<String>)
-                    val setCookies = response.headers.values("Set-Cookie")
-                    // PERBAIKAN: Format cookie dengan benar menggunakan spasi setelah titik koma
-                    val cookieHeader = setCookies.joinToString("; ") { it.substringBefore(";") }
 
-                    // Step 2: Tangkap Payload (Gunakan (?s) untuk membaca string multiline)
                     val rawPayloadMatch = Regex("""(?s)_juicycodes\((.*?)\)""").find(responseHtml)
 
                     if (rawPayloadMatch != null) {
-                        // Bersihkan spasi, enter, kutip, dan plus
                         val payload = rawPayloadMatch.groupValues[1].replace(Regex("""["'+\s\n\r]"""), "")
                         val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
 
-                        // Step 3 & 4: Dekripsi dan Ekstrak dari JSON (Fungsi /ping dihapus untuk menghindari blokir)
+                        // Jalani proses dekripsi teks JuicyCodes
                         val decryptedConfig = decryptJuicyCodes(payload)
-                        val jsonString = Regex("""var\s+config\s*=\s*(\{.*\});?""").find(decryptedConfig)?.groupValues?.get(1)
+                        val jsonString = Regex("""(?s)var\s+config\s*=\s*(\{.*\});?""").find(decryptedConfig)?.groupValues?.get(1)
                         
                         if (jsonString != null) {
                             try {
                                 val jsonNode = mapper.readTree(jsonString)
                                 
-                                val fileUrl = jsonNode.at("/sources/file").asText()
+                                // Toleransi struktur JSON object maupun array indeks-0
+                                var fileUrl = jsonNode.at("/sources/file").asText()
+                                if (fileUrl.isBlank()) {
+                                    fileUrl = jsonNode.at("/sources/0/file").asText()
+                                }
+                                
                                 if (fileUrl.isNotBlank()) {
+                                    // Sesuai standarisasi aturan main baru ExtractorApi.kt (Enum & Builder)
                                     callback.invoke(
                                         newExtractorLink(
                                             source = "Rebahin VIP",
@@ -309,14 +308,13 @@ class RebahinProvider : MainAPI() {
                                             url = fileUrl,
                                             type = ExtractorLinkType.M3U8
                                         ) {
-                                            // Header sangat spesifik agar tidak 403 Forbidden di CDN
                                             this.referer = "$domain/"
                                             this.quality = Qualities.Unknown.value
                                             this.headers = mapOf(
-                                                "User-Agent" to USER_AGENT, // Match dengan browserHeaders
-                                                "Origin" to domain,
-                                                "Accept" to "*/*",
-                                                "Cookie" to cookieHeader // <--- COOKIE DIKIRIM KE EXOPLAYER
+                                                "User-Agent"      to USER_AGENT,
+                                                "Origin"          to domain,
+                                                "Accept"          to "*/*",
+                                                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7" // Senjata pelolos anti-bot CDN
                                             )
                                         }
                                     )
