@@ -370,7 +370,6 @@ open class CastExtractor : ExtractorApi() {
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    // Operasi Pergeseran Bitwise 32-bit Unsigned murni via Long Mask
     private fun re(t: Long, e: Int): Long = ((t shl e) or (t ushr (32 - e))) and 0xFFFFFFFFL
     private fun ht(t: Long, e: Long): Long = (t * e) and 0xFFFFFFFFL
 
@@ -437,7 +436,7 @@ open class CastExtractor : ExtractorApi() {
 
     private fun solvePow(powToken: String?, powNonce: String?, difficulty: Int): String? {
         if (difficulty <= 0) return "0"
-        // Evaluasi pow_nonce terlebih dahulu sesuai spesifikasi prioritas server
+        // FIX BARU: Taruh powNonce sebagai prioritas loop pertama agar tidak pow_failed
         val keys = listOfNotNull(powNonce, powToken)
         for (baseKey in keys) {
             val prefix = "$baseKey:"
@@ -499,17 +498,17 @@ open class CastExtractor : ExtractorApi() {
         )
 
         try {
-            // 1. Pemicu Sesi Pemanasan (Details & Settings)
+            // Pemicu Sesi Pemanasan (Details & Settings)
             app.get("$mainUrl/api/videos/$videoId/embed/details", headers = commonHeaders)
             app.get("$mainUrl/api/videos/$videoId/embed/settings", headers = commonHeaders)
 
-            // 2. Ambil Tantangan Sesi
+            // Ambil Tantangan Sesi
             val chalRes  = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
             val chalJson = jsonMapper.readValue(chalRes.text, CastChalResp::class.java)
             val nonce    = chalJson.nonce ?: return
             val cid      = chalJson.challenge_id ?: return
 
-            // 3. Penandatanganan Kriptografi ECDSA
+            // Penandatanganan Kriptografi ECDSA
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
@@ -527,7 +526,7 @@ open class CastExtractor : ExtractorApi() {
             if (xB.size < 32) xB = ByteArray(32 - xB.size) { 0 } + xB
             if (yB.size < 32) yB = ByteArray(32 - yB.size) { 0 } + yB
 
-            // Minta ID Resmi Sesi dari Server
+            // Minta ID Resmi Sesi dari Server (Kirim String Kosong)
             val attestPayload = mapOf(
                 "viewer_id"   to "",
                 "device_id"   to "",
@@ -557,7 +556,7 @@ open class CastExtractor : ExtractorApi() {
                 "confidence" to 0.9
             )
 
-            // 4. Minta Token Tantangan PoW
+            // Minta Token Tantangan PoW
             val captchaPayload = mapOf("fingerprint" to fingerprintObj)
             val captchaRes     = app.post("$mainUrl/api/videos/$videoId/embed/captcha", headers = commonHeaders, json = captchaPayload)
             val captchaJson    = jsonMapper.readValue(captchaRes.text, CastCaptchaResp::class.java)
@@ -566,10 +565,10 @@ open class CastExtractor : ExtractorApi() {
             val powNonce   = captchaJson.pow_nonce
             val difficulty = captchaJson.pow_difficulty ?: 8
 
-            // 5. Eksekusi Pencarian Solusi PoW Matematika
+            // Eksekusi Pencarian Solusi PoW Matematika
             val solution = solvePow(powToken, powNonce, difficulty) ?: return
 
-            // 6. Klaim x-captcha-token via /verify
+            // Klaim x-captcha-token via /verify
             val verifyPayload = mapOf(
                 "pow_token"   to powToken,
                 "solution"    to solution,
@@ -579,11 +578,11 @@ open class CastExtractor : ExtractorApi() {
             val verifyJson = jsonMapper.readValue(verifyRes.text, CastVerifyResp::class.java)
             val finalCaptchaToken = verifyJson.captcha_token ?: verifyJson.token ?: return
 
-            // 7. Unduh Link Playback Menggunakan Tiket Bypass & Sesi Utuh
+            // Unduh Link Playback Menggunakan Tiket Bypass & Sesi Utuh
             val pbPayload = mapOf("fingerprint" to fingerprintObj)
             val playbackHeaders = commonHeaders.toMutableMap().apply {
                 put("x-captcha-token", finalCaptchaToken)
-                // Set Cookie Sesi Manual agar klop dengan OkHttpClient backend Cloudstream
+                // FIX BARU: Set Cookie Sesi Manual agar klop dengan validasi IP di backend server
                 put("Cookie", "byse_viewer_id=$sViewerId; byse_device_id=$sDeviceId")
             }
             
@@ -628,7 +627,7 @@ open class CastExtractor : ExtractorApi() {
                 } catch (e: Exception) {}
             }
 
-            // 8. Kirim Post-Validasi View Sesi (Garansi anti-mati tengah jalan)
+            // Kirim Post-Validasi View Sesi (Anti-Mati Tengah Jalan)
             try {
                 app.post("$mainUrl/api/videos/$videoId/embed/view", headers = playbackHeaders, json = pbPayload)
             } catch (e: Exception) {}
