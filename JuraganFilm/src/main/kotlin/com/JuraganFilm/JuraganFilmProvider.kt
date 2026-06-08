@@ -17,7 +17,7 @@ class JuraganFilmProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/kategori-film/box-office/" to "Box Office",
-        "$mainUrl/kategori-film/ongoing/" to "Ongoing",
+        "$mainUrl/kategori-film/ongoing/\" to \"Ongoing",
         "$mainUrl/kategori-film/drama-serial-mandarin/" to "Drama Serial Mandarin",
         "$mainUrl/kategori-film/drama-serial-korea/" to "Drama Serial Korea"
     )
@@ -213,10 +213,7 @@ class JuraganFilmProvider : MainAPI() {
             "Origin"     to mainUrl
         )
 
-        // 1. Ambil source HTML Player Iframe untuk membaca array SOURCES global
         val html = app.get(playerUrl, headers = playerHeaders).text
-
-        // 2. Gunakan Regex untuk menangkap data JSON mentah di dalam array SOURCES
         val sourceRegex = Regex("""\{\"type\":\"(?<type>[^\"]+)\",\"label\":\"(?<label>[^\"]+)\",\"link\":\"(?<link>[^\"]+)\"\}""")
         val matches = sourceRegex.findAll(html)
 
@@ -224,7 +221,6 @@ class JuraganFilmProvider : MainAPI() {
 
         var linksFound = false
 
-        // 3. Iterasi dan kirim data link ke Extractor
         matches.forEach { match ->
             val type = match.groups["type"]?.value ?: ""
             val label = match.groups["label"]?.value ?: ""
@@ -232,7 +228,12 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                val isHls = type == "hls" || cleanLink.contains(".m3u8")
+                // =================================================================
+                // ATURAN 1: ELIMINASI JFEBAKAN SERVER TIMEOUT & ROUTE 404
+                // =================================================================
+                if (cleanLink.contains("scroll.web.id/?id=")) return@forEach // Lewati server jebakan p2p loader
+                if (cleanLink.contains("640x268")) return@forEach          // Lewati resolusi 404 yang rusak
+
                 val quality = when {
                     label.contains("1080") || label.contains("Original") -> Qualities.P1080.value
                     label.contains("804") || label.contains("720") -> Qualities.P720.value
@@ -240,24 +241,45 @@ class JuraganFilmProvider : MainAPI() {
                     else -> Qualities.P360.value
                 }
 
-                // Eksekusi callback Extractor Link dengan Header Spoofing Terbimbing
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name   = "JuraganFilm - $label",
-                        url    = cleanLink,
-                        type   = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = quality
-                        this.headers = mapOf(
-                            "Origin"     to mainUrl,
-                            "Referer"    to "$mainUrl/",
-                            "User-Agent" to mobileUserAgent
-                        )
-                    }
+                val requestHeaders = mapOf(
+                    "Origin"     to "https://tv44.juragan.film",
+                    "Referer"    to "https://tv44.juragan.film/",
+                    "User-Agent" to mobileUserAgent
                 )
-                linksFound = true
+
+                try {
+                    // =================================================================
+                    // ATURAN 2: INTEGRASI SMART ROUTER RESOLVER (PROBING & FOLLOW REDIRECT)
+                    // =================================================================
+                    // Gunakan header Range parsial agar tidak mengunduh file 1GB saat validasi MP4
+                    val probeHeaders = requestHeaders.plus("Range" to "bytes=0-1024")
+                    val res = app.get(cleanLink, headers = probeHeaders, timeout = 5)
+                    
+                    if (res.code != 200) return@forEach // Jika hulu bermasalah (bukan 200 OK), abaikan rute ini
+                    
+                    // Ambil URL final setelah otomatis mengikuti 307 Redirect (OkHttp handle native)
+                    val finalPlayableUrl = res.url
+                    val finalContentType = res.headers["Content-Type"] ?: ""
+                    
+                    // Identifikasi format media akhir secara dinamis berdasarkan respons server
+                    val isM3u8 = finalContentType.contains("mpegurl", ignoreCase = true) || finalPlayableUrl.contains(".m3u8")
+
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name   = "JuraganFilm - $label",
+                            url    = finalPlayableUrl,
+                            type   = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://tv44.juragan.film/"
+                            this.quality = quality
+                            this.headers = requestHeaders
+                        }
+                    )
+                    linksFound = true
+                } catch (e: Exception) {
+                    // Berhasil menghindari rute crash/timeout secara elegan
+                }
             }
         }
 
@@ -268,11 +290,11 @@ class JuraganFilmProvider : MainAPI() {
         return Interceptor { chain ->
             val req = chain.request()
             val urlString = req.url.toString()
-            if (urlString.contains("scroll.web.id") || urlString.contains("wth.my.id")) {
+            if (urlString.contains("scroll.web.id")) {
                 chain.proceed(
                     req.newBuilder()
-                        .header("Origin",     mainUrl)
-                        .header("Referer",    "$mainUrl/")
+                        .header("Origin",     "https://tv44.juragan.film")
+                        .header("Referer",    "https://tv44.juragan.film/")
                         .header("User-Agent", mobileUserAgent)
                         .build()
                 )
@@ -313,7 +335,7 @@ class JuraganFilmProvider : MainAPI() {
         val year    = el.selectFirst("time[itemprop=dateCreated]")
             ?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
         val eps     = el.selectFirst(".strokeepisode")?.text()
-        val type    = if (url.contains("/film-seri/") || eps?.contains("EPS", ignoreCase = true) == true)
+        val type = if (url.contains("/film-seri/") || eps?.contains("EPS", ignoreCase = true) == true)
             TvType.TvSeries else TvType.Movie
 
         return when (type) {
