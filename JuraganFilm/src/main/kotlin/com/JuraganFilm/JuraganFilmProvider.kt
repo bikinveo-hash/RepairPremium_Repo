@@ -228,7 +228,7 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                // Saring rute zonk p2p-loader & folder kosong lokal tanpa menyentuh jaringan
+                // Skrin rute lokal statis yang tidak perlu diakses
                 if (cleanLink.contains("scroll.web.id/?id=")) return@forEach
                 if (cleanLink.contains("640x268")) return@forEach
 
@@ -239,7 +239,7 @@ class JuraganFilmProvider : MainAPI() {
                     else -> Qualities.P360.value
                 }
 
-                // Struktur Sidik Jari Browser Teruji Termux (Anti-Tarpit Shield)
+                // Header Sidik Jari Kompleks Terbukti Lolos Sensor Tarpit
                 val requestHeaders = mapOf(
                     "Origin"             to "https://tv44.juragan.film",
                     "Referer"            to "https://tv44.juragan.film/",
@@ -253,9 +253,8 @@ class JuraganFilmProvider : MainAPI() {
                     "Accept-Language"    to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
 
-                // 🌟 TAKTIK STRATEGIS BINGO: ZERO-PROBING BERSANGKUTAN
-                // Jangan lakukan ping/app.get() sama sekali. Langsung kirim token segar ke player 
-                // agar ExoPlayer memakan "Hak Jabat Tangan Pertama (First-Handshake)" tanpa hang.
+                // IMPLEMENTASI ZERO-PROBING: Hilangkan total app.get probing lama.
+                // Deklarasikan /original/ sebagai M3U8 karena server melempar redirect 307 ke stream m3u8 sekuensial.
                 val isHls = type == "hls" || cleanLink.contains(".m3u8") || cleanLink.contains("/original/")
 
                 callback(
