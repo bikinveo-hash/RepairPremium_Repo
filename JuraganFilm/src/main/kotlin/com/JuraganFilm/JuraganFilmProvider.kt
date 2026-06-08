@@ -15,7 +15,6 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
-    // ✅ FIX: Tanda backslash pada baris ongoing di bawah ini sudah dibersihkan secara total
     override val mainPage = mainPageOf(
         "$mainUrl/kategori-film/box-office/" to "Box Office",
         "$mainUrl/kategori-film/ongoing/" to "Ongoing",
@@ -229,7 +228,7 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                // Saring rute mati dan rute jebakan p2p-loader sesuai hasil evaluasi empiris CDN
+                // Saring rute jebakan p2p-loader & resolusi 640x268 secara lokal
                 if (cleanLink.contains("scroll.web.id/?id=")) return@forEach
                 if (cleanLink.contains("640x268")) return@forEach
 
@@ -247,11 +246,12 @@ class JuraganFilmProvider : MainAPI() {
                 )
 
                 try {
-                    // Penembakan parsial menggunakan Range bytes untuk mendeteksi status pengalihan 307
+                    // Penembakan parsial menggunakan Range bytes untuk memicu respons kilat 200/206 sekaligus membaca tujuan akhir redirect 307
                     val probeHeaders = requestHeaders.plus("Range" to "bytes=0-1024")
-                    val res = app.get(cleanLink, headers = probeHeaders, timeout = 5)
+                    val res = app.get(cleanLink, headers = probeHeaders, timeout = 15)
                     
-                    if (res.code != 200) return@forEach
+                    // Izinkan jika mengembalikan kode sukses 200 OK atau 206 Partial Content akibat pemakaian Range header
+                    if (res.code != 200 && res.code != 206) return@forEach
                     
                     val finalPlayableUrl = res.url
                     val finalContentType = res.headers["Content-Type"] ?: ""
@@ -271,7 +271,7 @@ class JuraganFilmProvider : MainAPI() {
                     )
                     linksFound = true
                 } catch (e: Exception) {
-                    // Skip silently jika rute bermasalah
+                    // Lewati secara aman jika rute mati / timeout
                 }
             }
         }
