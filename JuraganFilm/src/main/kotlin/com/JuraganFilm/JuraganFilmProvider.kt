@@ -15,9 +15,10 @@ class JuraganFilmProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
     override val usesWebView = false
 
+    // ✅ FIX: Tanda backslash pada baris ongoing di bawah ini sudah dibersihkan secara total
     override val mainPage = mainPageOf(
         "$mainUrl/kategori-film/box-office/" to "Box Office",
-        "$mainUrl/kategori-film/ongoing/\" to \"Ongoing",
+        "$mainUrl/kategori-film/ongoing/" to "Ongoing",
         "$mainUrl/kategori-film/drama-serial-mandarin/" to "Drama Serial Mandarin",
         "$mainUrl/kategori-film/drama-serial-korea/" to "Drama Serial Korea"
     )
@@ -228,11 +229,9 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                // =================================================================
-                // ATURAN 1: ELIMINASI JFEBAKAN SERVER TIMEOUT & ROUTE 404
-                // =================================================================
-                if (cleanLink.contains("scroll.web.id/?id=")) return@forEach // Lewati server jebakan p2p loader
-                if (cleanLink.contains("640x268")) return@forEach          // Lewati resolusi 404 yang rusak
+                // Saring rute mati dan rute jebakan p2p-loader sesuai hasil evaluasi empiris CDN
+                if (cleanLink.contains("scroll.web.id/?id=")) return@forEach
+                if (cleanLink.contains("640x268")) return@forEach
 
                 val quality = when {
                     label.contains("1080") || label.contains("Original") -> Qualities.P1080.value
@@ -248,20 +247,14 @@ class JuraganFilmProvider : MainAPI() {
                 )
 
                 try {
-                    // =================================================================
-                    // ATURAN 2: INTEGRASI SMART ROUTER RESOLVER (PROBING & FOLLOW REDIRECT)
-                    // =================================================================
-                    // Gunakan header Range parsial agar tidak mengunduh file 1GB saat validasi MP4
+                    // Penembakan parsial menggunakan Range bytes untuk mendeteksi status pengalihan 307
                     val probeHeaders = requestHeaders.plus("Range" to "bytes=0-1024")
                     val res = app.get(cleanLink, headers = probeHeaders, timeout = 5)
                     
-                    if (res.code != 200) return@forEach // Jika hulu bermasalah (bukan 200 OK), abaikan rute ini
+                    if (res.code != 200) return@forEach
                     
-                    // Ambil URL final setelah otomatis mengikuti 307 Redirect (OkHttp handle native)
                     val finalPlayableUrl = res.url
                     val finalContentType = res.headers["Content-Type"] ?: ""
-                    
-                    // Identifikasi format media akhir secara dinamis berdasarkan respons server
                     val isM3u8 = finalContentType.contains("mpegurl", ignoreCase = true) || finalPlayableUrl.contains(".m3u8")
 
                     callback(
@@ -278,7 +271,7 @@ class JuraganFilmProvider : MainAPI() {
                     )
                     linksFound = true
                 } catch (e: Exception) {
-                    // Berhasil menghindari rute crash/timeout secara elegan
+                    // Skip silently jika rute bermasalah
                 }
             }
         }
