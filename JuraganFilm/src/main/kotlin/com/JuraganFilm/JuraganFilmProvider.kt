@@ -228,7 +228,6 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                // Skrin rute lokal statis yang tidak perlu diakses
                 if (cleanLink.contains("scroll.web.id/?id=")) return@forEach
                 if (cleanLink.contains("640x268")) return@forEach
 
@@ -239,7 +238,6 @@ class JuraganFilmProvider : MainAPI() {
                     else -> Qualities.P360.value
                 }
 
-                // Header Sidik Jari Kompleks Terbukti Lolos Sensor Tarpit
                 val requestHeaders = mapOf(
                     "Origin"             to "https://tv44.juragan.film",
                     "Referer"            to "https://tv44.juragan.film/",
@@ -253,9 +251,9 @@ class JuraganFilmProvider : MainAPI() {
                     "Accept-Language"    to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
 
-                // IMPLEMENTASI ZERO-PROBING: Hilangkan total app.get probing lama.
-                // Deklarasikan /original/ sebagai M3U8 karena server melempar redirect 307 ke stream m3u8 sekuensial.
-                val isHls = type == "hls" || cleanLink.contains(".m3u8") || cleanLink.contains("/original/")
+                // ✅ FIX: Kembalikan deteksi tipe media secara akurat. 
+                // Jangan paksa /original/ menjadi M3U8 agar player memutarnya sebagai progressive video stream langsung.
+                val isHls = type == "hls" || cleanLink.contains(".m3u8")
 
                 callback(
                     newExtractorLink(
