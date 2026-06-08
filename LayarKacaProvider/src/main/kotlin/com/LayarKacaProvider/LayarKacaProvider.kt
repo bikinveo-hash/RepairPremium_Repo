@@ -410,18 +410,8 @@ class LayarKacaProvider : MainAPI() {
         // FIX #2: semua extractor sekarang konsisten pakai new-style callback
         allSources.forEach { url ->
             when {
-                url.contains("/cast/") -> {
-                    val id = url.substringAfter("/cast/").substringBefore("/")
-                    try {
-                        CastExtractor().getUrl(
-                            "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, callback
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-                url.contains("/turbovip/") -> {
-                    val id = url.substringAfter("/turbovip/").substringBefore("/")
+                url.contains("/iframe/turbovip/") -> {
+                    val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
                     try {
                         Lk21TurboExtractor().getUrl(
                             "https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, callback
@@ -430,8 +420,8 @@ class LayarKacaProvider : MainAPI() {
                         e.printStackTrace()
                     }
                 }
-                url.contains("/p2p/") -> {
-                    val id = url.substringAfter("/p2p/").substringBefore("/")
+                url.contains("/iframe/p2p/") -> {
+                    val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
                     try {
                         HowNetworkExtractor().getUrl(
                             "https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl, subtitleCallback, callback
@@ -440,8 +430,18 @@ class LayarKacaProvider : MainAPI() {
                         e.printStackTrace()
                     }
                 }
-                url.contains("/hydrax/") -> {
-                    val id = url.substringAfter("/hydrax/").substringBefore("/")
+                url.contains("/iframe/cast/") -> {
+                    val id = url.substringAfter("/iframe/cast/").substringBefore("/")
+                    try {
+                        CastExtractor().getUrl(
+                            "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, callback
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                url.contains("/iframe/hydrax/") -> {
+                    val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
                     try {
                         AbyssExtractor().getUrl(
                             "https://abyssplayer.com/?v=$id", currentUrl, subtitleCallback, callback
