@@ -15,9 +15,15 @@ class JuraganFilmExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer"    to (referer ?: "$mainUrl/"),
-            "Origin"     to mainUrl
+            "User-Agent"              to USER_AGENT,
+            "Referer"                 to (referer ?: "$mainUrl/"),
+            "Origin"                  to mainUrl,
+            "sec-ch-ua"               to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+            "sec-ch-ua-mobile"        to "?1",
+            "sec-ch-ua-platform"      to "\"Android\"",
+            "sec-fetch-dest"          to "empty",
+            "sec-fetch-mode"          to "cors",
+            "sec-fetch-site"          to "cross-site"
         )
 
         callback(
