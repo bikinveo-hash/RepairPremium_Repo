@@ -31,8 +31,7 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
-// FIX #3: ganti nama dari 'mapper' jadi 'jsonMapper' agar tidak konflik dengan
-// top-level 'mapper' milik MainAPI.kt yang sudah ada di classpath
+// Penggunaan jsonMapper unik khusus ekstraktor agar tidak tabrakan dengan classpath global
 private val jsonMapper: ObjectMapper = jacksonObjectMapper()
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
@@ -104,14 +103,13 @@ data class CastSource(
 )
 
 // =========================================================================
-// MESIN SERVER PROXY LOKAL -> KEMBALI 100% KE KODE AWAL BAWAAN LU
+// MESIN SERVER PROXY LOKAL (OBAT ANTI-CRONET & BYPASS LIMIT 512MB HYDRAX)
 // =========================================================================
 object HydraxProxy {
     var port: Int = 0
     @Volatile private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
-    // Dispatcher khusus untuk membongkar limit koneksi OkHttp (Anti-antre saat seek)
     private val proxyClient by lazy {
         app.baseClient.newBuilder()
             .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -135,7 +133,6 @@ object HydraxProxy {
                         val client = serverSocket!!.accept()
                         thread { handleClient(client) }
                     } catch (e: Exception) {
-                        // ServerSocket.accept() lempar exception saat stop() dipanggil — normal
                         if (isRunning) Log.w("HydraxProxy", "Accept error: ${e.message}")
                     }
                 }
@@ -145,7 +142,6 @@ object HydraxProxy {
         }
     }
 
-    // FIX #5: tambahkan stop() agar proxy bisa di-shutdown saat plugin di-reload
     fun stop() {
         isRunning = false
         try { serverSocket?.close() } catch (e: Exception) {}
@@ -171,8 +167,6 @@ object HydraxProxy {
             if (!path.contains("?url=")) return
 
             val query = path.substringAfter("?")
-
-            // FIX #6: parse query string dengan benar agar '=' dalam value (base64 padding) tidak terpotong
             val params = query.split("&").associate { pair ->
                 val eqIdx = pair.indexOf('=')
                 if (eqIdx < 0) pair to ""
@@ -195,16 +189,12 @@ object HydraxProxy {
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
             Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : ${rangeHeader ?: "FULL (bytes=0-)"}")
 
-            // ====================================================================
-            // FORMULA INJEKSI SERVICE WORKER HYDRAX (PEMECAH CHUNK 512 MB)
-            // ====================================================================
             val LIMIT_512MB = 536870912L
             val partIndex = reqStart / LIMIT_512MB
             val localOffset = reqStart % LIMIT_512MB
 
             val targetUrl = if (partIndex > 0) "$realUrl$partIndex" else realUrl
             val serverRangeHeader = "bytes=$localOffset-"
-            // ====================================================================
 
             val request = Request.Builder()
                 .url(targetUrl)
@@ -222,10 +212,6 @@ object HydraxProxy {
             val timeTaken = System.currentTimeMillis() - startTime
 
             val code = response.code
-
-            // ====================================================================
-            // MANIPULASI HEADER BALASAN UNTUK MEMBOHONGI EXOPLAYER (SPOOFING)
-            // ====================================================================
             var contentRange = response.header("Content-Range") ?: "Kosong"
             var contentLength = response.header("Content-Length") ?: "Kosong"
             var spoofedContentRange = contentRange
@@ -311,7 +297,9 @@ object HydraxProxy {
             }
             val finalTime = (System.currentTimeMillis() - startTime - timeTaken) / 1000.0
             val kbps = if (finalTime > 0) (totalSent / 1024.0) / finalTime else 0.0
-            Log.i("HydraxProxy", "[$OK] Streaming Selesai. Total: $totalSent bytes | Speed: ${String.format("%.2f", kbps)} KB/s")
+            
+            // FIX: Mengembalikan variabel log ke referensi yang benar (clientId) untuk menghindari Unresolved Reference
+            Log.i("HydraxProxy", "[$clientId] [OK] Streaming Selesai. Total: $totalSent bytes | Speed: ${String.format("%.2f", kbps)} KB/s")
 
         } catch (e: SocketException) {
             Log.w("HydraxProxy", "[$clientId] [X] ExoPlayer memutus koneksi/Seek/Cancel: ${e.message ?: "Broken Pipe/Connection Reset"}")
@@ -326,7 +314,7 @@ object HydraxProxy {
 }
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY) -> KEMBALI 100% KODE AWAL
+// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY) -> 100% UTUH
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -432,7 +420,7 @@ open class AbyssExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 2: TURBO VIP -> UTUH BAWAAN ASLI
+// EXTRACTOR 2: TURBO VIP -> 100% UTUH
 // =========================================================================
 open class Lk21TurboExtractor : ExtractorApi() {
     override var name    = "LK21 TurboVIP"
@@ -486,7 +474,7 @@ open class Lk21TurboExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: HOW NETWORK -> UTUH BAWAAN ASLI
+// EXTRACTOR 3: HOW NETWORK -> 100% UTUH
 // =========================================================================
 open class HowNetworkExtractor : ExtractorApi() {
     override var name    = "LK21 HowNetwork"
@@ -544,7 +532,7 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: CAST HD (PATCH BYPASS INVISIBLE POW CHALLENGE)
+// EXTRACTOR 4: CAST HD (YANG SUKSES JEBOL VERIFIKASI SELESAI SINKRONISASI)
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name    = "CAST HD"
@@ -647,20 +635,17 @@ open class CastExtractor : ExtractorApi() {
     }
 
     private fun derToRaw(der: ByteArray): ByteArray {
-        var offset = 2
-        val rLength = der[offset + 1].toInt()
-        val rOffset = offset + 2
-        offset += 2 + rLength
-        val sLength = der[offset + 1].toInt()
-        val sOffset = offset + 2
-
-        val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
-        val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
-
+        var idx = 2
+        val rLen = der[idx + 1].toInt()
+        val rOff = idx + 2
+        idx += 2 + rLen
+        val sLen = der[idx + 1].toInt()
+        val sOff = idx + 2
+        val rStr = der.copyOfRange(rOff, rOff + rLen).dropWhile { it == 0.toByte() }.toByteArray()
+        val sStr = der.copyOfRange(sOff, sOff + sLen).dropWhile { it == 0.toByte() }.toByteArray()
         val raw = ByteArray(64) { 0 }
         System.arraycopy(rStr, 0, raw, 32 - rStr.size, rStr.size)
         System.arraycopy(sStr, 0, raw, 64 - sStr.size, sStr.size)
-
         return raw
     }
 
