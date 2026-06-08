@@ -133,7 +133,7 @@ class JuraganFilmProvider : MainAPI() {
                     val epNum = el.text().trim().toIntOrNull()
         
                     newEpisode(epUrl) {
-                        this.name    = "Episode ${el.text().trim()}"
+                        this.name = "Episode ${el.text().trim()}"
                         this.episode = epNum
                     }
                 }.distinctBy { it.episode }
@@ -228,7 +228,7 @@ class JuraganFilmProvider : MainAPI() {
             val cleanLink = rawLink.replace("\\/", "/")
 
             if (cleanLink.isNotBlank()) {
-                // Saring rute jebakan p2p-loader & resolusi 640x268 secara lokal
+                // Saring rute zonk p2p-loader & folder kosong lokal tanpa menyentuh jaringan
                 if (cleanLink.contains("scroll.web.id/?id=")) return@forEach
                 if (cleanLink.contains("640x268")) return@forEach
 
@@ -239,40 +239,38 @@ class JuraganFilmProvider : MainAPI() {
                     else -> Qualities.P360.value
                 }
 
+                // Struktur Sidik Jari Browser Teruji Termux (Anti-Tarpit Shield)
                 val requestHeaders = mapOf(
-                    "Origin"     to "https://tv44.juragan.film",
-                    "Referer"    to "https://tv44.juragan.film/",
-                    "User-Agent" to mobileUserAgent
+                    "Origin"             to "https://tv44.juragan.film",
+                    "Referer"            to "https://tv44.juragan.film/",
+                    "User-Agent"         to mobileUserAgent,
+                    "sec-ch-ua"          to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+                    "sec-ch-ua-mobile"   to "?1",
+                    "sec-ch-ua-platform" to "\"Android\"",
+                    "sec-fetch-dest"     to "empty",
+                    "sec-fetch-mode"     to "cors",
+                    "sec-fetch-site"     to "cross-site",
+                    "Accept-Language"    to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
 
-                try {
-                    // Penembakan parsial menggunakan Range bytes untuk memicu respons kilat 200/206 sekaligus membaca tujuan akhir redirect 307
-                    val probeHeaders = requestHeaders.plus("Range" to "bytes=0-1024")
-                    val res = app.get(cleanLink, headers = probeHeaders, timeout = 15)
-                    
-                    // Izinkan jika mengembalikan kode sukses 200 OK atau 206 Partial Content akibat pemakaian Range header
-                    if (res.code != 200 && res.code != 206) return@forEach
-                    
-                    val finalPlayableUrl = res.url
-                    val finalContentType = res.headers["Content-Type"] ?: ""
-                    val isM3u8 = finalContentType.contains("mpegurl", ignoreCase = true) || finalPlayableUrl.contains(".m3u8")
+                // 🌟 TAKTIK STRATEGIS BINGO: ZERO-PROBING BERSANGKUTAN
+                // Jangan lakukan ping/app.get() sama sekali. Langsung kirim token segar ke player 
+                // agar ExoPlayer memakan "Hak Jabat Tangan Pertama (First-Handshake)" tanpa hang.
+                val isHls = type == "hls" || cleanLink.contains(".m3u8") || cleanLink.contains("/original/")
 
-                    callback(
-                        newExtractorLink(
-                            source = name,
-                            name   = "JuraganFilm - $label",
-                            url    = finalPlayableUrl,
-                            type   = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = "https://tv44.juragan.film/"
-                            this.quality = quality
-                            this.headers = requestHeaders
-                        }
-                    )
-                    linksFound = true
-                } catch (e: Exception) {
-                    // Lewati secara aman jika rute mati / timeout
-                }
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name   = "JuraganFilm - $label",
+                        url    = cleanLink,
+                        type   = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://tv44.juragan.film/"
+                        this.quality = quality
+                        this.headers = requestHeaders
+                    }
+                )
+                linksFound = true
             }
         }
 
@@ -286,9 +284,15 @@ class JuraganFilmProvider : MainAPI() {
             if (urlString.contains("scroll.web.id")) {
                 chain.proceed(
                     req.newBuilder()
-                        .header("Origin",     "https://tv44.juragan.film")
-                        .header("Referer",    "https://tv44.juragan.film/")
-                        .header("User-Agent", mobileUserAgent)
+                        .header("Origin",             "https://tv44.juragan.film")
+                        .header("Referer",            "https://tv44.juragan.film/")
+                        .header("User-Agent",         mobileUserAgent)
+                        .header("sec-ch-ua",          "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"")
+                        .header("sec-ch-ua-mobile",   "?1")
+                        .header("sec-ch-ua-platform", "\"Android\"")
+                        .header("sec-fetch-dest",     "empty")
+                        .header("sec-fetch-mode",     "cors")
+                        .header("sec-fetch-site",     "cross-site")
                         .build()
                 )
             } else {
