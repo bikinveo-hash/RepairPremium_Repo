@@ -154,7 +154,9 @@ class RebahinProvider : MainAPI() {
                 val epNum = Regex("""\d+""").find(epName)?.value?.toIntOrNull()
 
                 if (base64Iframe.isNotBlank()) {
-                    episodes.add(newEpisode(base64Iframe) {
+                    // Satukan playUrl episodenya bersama data iframe
+                    val combinedData = "$playUrl##$base64Iframe"
+                    episodes.add(newEpisode(combinedData) {
                         this.name = epName
                         this.episode = epNum
                     })
@@ -226,44 +228,69 @@ class RebahinProvider : MainAPI() {
     ): Boolean {
         
         val urlToExtract = mutableListOf<String>()
+        val parts = data.split("##")
 
-        if (!data.startsWith("http")) {
+        // --- INTELLIGENT INPUT ROUTER (MOVIE & SERIES SEPARATION) ---
+        if (parts.size == 2) {
+            // Alur Khusus TV Series / Episode
+            val episodeUrl = parts[0]
+            val rawData = parts[1]
+
             try {
-                val decodedUrl = String(Base64.decode(data, Base64.DEFAULT))
-                if (decodedUrl.startsWith("http")) {
-                    urlToExtract.add(decodedUrl)
-                }
+                // Pre-heat halaman asal episode biar CookieJar internal terisi otomatis
+                app.get(episodeUrl, headers = browserHeaders, referer = mainUrl)
             } catch (e: Exception) {}
-        } else {
-            val document = app.get(data, headers = browserHeaders, referer = mainUrl).document
-            
-            document.select("[data-iframe]").forEach { element ->
-                val encodedUrl = element.attr("data-iframe")
-                if (encodedUrl.isNotBlank()) {
-                    try {
-                        val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT))
-                        if (decodedUrl.startsWith("http")) {
-                            urlToExtract.add(decodedUrl)
-                        }
-                    } catch (e: Exception) {}
-                }
+
+            var resolvedUrl = ""
+            if (rawData.startsWith("http") || rawData.contains("/iembed/")) {
+                resolvedUrl = fixUrl(rawData)
+            } else {
+                try {
+                    val decoded = String(Base64.decode(rawData, Base64.DEFAULT)).trim()
+                    resolvedUrl = fixUrl(decoded)
+                } catch (e: Exception) {}
             }
-            
-            document.select("iframe").forEach { iframe ->
-                val src = fixUrlNull(iframe.attr("src")) ?: fixUrlNull(iframe.attr("data-src"))
-                if (src != null && !src.contains("googleusercontent.com") && src.isNotBlank()) {
-                    urlToExtract.add(src)
+
+            if (resolvedUrl.isNotBlank()) {
+                urlToExtract.add(resolvedUrl)
+            }
+        } else {
+            // Alur Khusus Movie Tunggal
+            try {
+                val document = app.get(data, headers = browserHeaders, referer = mainUrl).document
+                
+                document.select("[data-iframe]").forEach { element ->
+                    val encodedUrl = element.attr("data-iframe")
+                    if (encodedUrl.isNotBlank()) {
+                        try {
+                            val decodedUrl = String(Base64.decode(encodedUrl, Base64.DEFAULT)).trim()
+                            if (decodedUrl.startsWith("http") || decodedUrl.contains("/iembed/")) {
+                                urlToExtract.add(fixUrl(decodedUrl))
+                            }
+                        } catch (e: Exception) {}
+                    }
                 }
+                
+                document.select("iframe").forEach { iframe ->
+                    val src = fixUrlNull(iframe.attr("src")) ?: fixUrlNull(iframe.attr("data-src"))
+                    if (src != null && !src.contains("googleusercontent.com") && src.isNotBlank()) {
+                        urlToExtract.add(fixUrl(src))
+                    }
+                }
+            } catch (e: Exception) {
+                logError(e)
             }
         }
 
+        // --- CORE EXTRACTOR LOOP ---
         urlToExtract.distinct().forEach { rawUrl ->
             var targetUrl = rawUrl
             
-            if (rawUrl.contains("/iembed/?source=")) {
-                val base64 = rawUrl.substringAfter("source=")
+            // Bongkar paksa rute pengalih jika mengarah ke /iembed/
+            if (targetUrl.contains("/iembed/?source=")) {
+                val base64Token = targetUrl.substringAfter("source=")
                 try {
-                    targetUrl = String(Base64.decode(base64, Base64.DEFAULT))
+                    targetUrl = String(Base64.decode(base64Token, Base64.DEFAULT)).trim()
                 } catch(e: Exception) {}
             }
 
@@ -275,8 +302,9 @@ class RebahinProvider : MainAPI() {
 
             if (!isExtractorLoaded) {
                 try {
-                    // Ambil HTML embed asli menggunakan browserHeaders otentik
-                    val response = app.get(targetUrl, headers = browserHeaders, referer = mainUrl)
+                    // PERBAIKAN FATAL REFERER: Selalu gunakan stripped origin domain ("$mainUrl/")
+                    // Agar sistem firewall IP target tidak mencurigai anomali header bot.
+                    val response = app.get(targetUrl, headers = browserHeaders, referer = "$mainUrl/")
                     val responseHtml = response.text
 
                     val rawPayloadMatch = Regex("""(?s)_juicycodes\((.*?)\)""").find(responseHtml)
@@ -285,7 +313,6 @@ class RebahinProvider : MainAPI() {
                         val payload = rawPayloadMatch.groupValues[1].replace(Regex("""["'+\s\n\r]"""), "")
                         val domain = Regex("""https?://[^/]+""").find(targetUrl)?.value ?: targetUrl
 
-                        // Jalani proses dekripsi teks JuicyCodes
                         val decryptedConfig = decryptJuicyCodes(payload)
                         val jsonString = Regex("""(?s)var\s+config\s*=\s*(\{.*\});?""").find(decryptedConfig)?.groupValues?.get(1)
                         
@@ -293,14 +320,12 @@ class RebahinProvider : MainAPI() {
                             try {
                                 val jsonNode = mapper.readTree(jsonString)
                                 
-                                // Toleransi struktur JSON object maupun array indeks-0
                                 var fileUrl = jsonNode.at("/sources/file").asText()
                                 if (fileUrl.isBlank()) {
                                     fileUrl = jsonNode.at("/sources/0/file").asText()
                                 }
                                 
                                 if (fileUrl.isNotBlank()) {
-                                    // Sesuai standarisasi aturan main baru ExtractorApi.kt (Enum & Builder)
                                     callback.invoke(
                                         newExtractorLink(
                                             source = "Rebahin VIP",
@@ -314,7 +339,7 @@ class RebahinProvider : MainAPI() {
                                                 "User-Agent"      to USER_AGENT,
                                                 "Origin"          to domain,
                                                 "Accept"          to "*/*",
-                                                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7" // Senjata pelolos anti-bot CDN
+                                                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                                             )
                                         }
                                     )
