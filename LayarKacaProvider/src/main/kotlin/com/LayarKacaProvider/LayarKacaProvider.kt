@@ -3,14 +3,21 @@ package com.LayarKacaProvider
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.newHomePageResponse
+import com.lagradost.cloudstream3.utils.newMovieSearchResponse
+import com.lagradost.cloudstream3.utils.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.utils.newMovieLoadResponse
+import com.lagradost.cloudstream3.utils.newTvSeriesLoadResponse
+import com.lagradost.cloudstream3.utils.newEpisode
+import com.lagradost.cloudstream3.utils.newSearchResponseList
 import okhttp3.Interceptor
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
+import java.util.ArrayList
 
 class LayarKacaProvider : MainAPI() {
     override var mainUrl = "https://tv10.lk21official.cc"
@@ -37,15 +44,10 @@ class LayarKacaProvider : MainAPI() {
         "country/india/" to "India Terbaru"
     )
 
-    // Fitur wajib agar server LK21 tidak memblokir koneksi kita
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 250L
 
-    // =========================================================================
-    // INFINITE SCROLL HOME PAGE
-    // =========================================================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Aturan Path LK21: Halaman 1 tanpa "page/1", Halaman 2 dst menggunakan "page/x/"
         val url = if (page == 1) {
             "$mainUrl/${request.data}"
         } else {
@@ -53,7 +55,7 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
             "Accept" to "*/*",
             "Referer" to "$mainUrl/"
         )
@@ -68,9 +70,6 @@ class LayarKacaProvider : MainAPI() {
         return newHomePageResponse(request, list, list.isNotEmpty())
     }
 
-    // =========================================================================
-    // RC4 DECRYPT
-    // =========================================================================
     private fun decryptRC4(key: String, encryptedBase64: String): String {
         return try {
             val cipher = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
@@ -105,7 +104,6 @@ class LayarKacaProvider : MainAPI() {
         var cleanUrl = url
         if (cleanUrl.startsWith("//")) cleanUrl = "https:$cleanUrl"
         cleanUrl = cleanUrl.substringBefore("?")
-        // Menghapus ukuran thumbnail agar mendapatkan poster HD murni dari LK21
         return cleanUrl.replace(Regex("-\\d{2,4}x\\d{2,4}"), "")
     }
 
@@ -131,9 +129,6 @@ class LayarKacaProvider : MainAPI() {
         @JsonProperty("year") val year: Int?
     )
 
-    // =========================================================================
-    // PARSING ITEM FILM INSTAN (BEBAS TMDB LIMIT)
-    // =========================================================================
     private fun toSearchResult(element: Element): SearchResponse? {
         val rawTitle = element.select("h3.poster-title, h2.entry-title, h1.page-title, div.title").text().trim()
         if (rawTitle.isEmpty()) return null
@@ -207,7 +202,6 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-    // FIX #1: return type harus nullable LoadResponse?
     override suspend fun load(url: String): LoadResponse? {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
@@ -215,7 +209,6 @@ class LayarKacaProvider : MainAPI() {
 
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
             val path = try { URI(cleanUrl).path } catch (e: Exception) { "" }
-            // FIX #8: fallback series tetap pakai mainUrl agar ikut override setting
             cleanUrl = if (path.contains("season") || path.contains("episode")) {
                 "https://series.lk21.de$path"
             } else {
@@ -295,7 +288,6 @@ class LayarKacaProvider : MainAPI() {
             }
         }
 
-        // TMDB dipanggil di Load untuk Banner Background (Aman, hanya 1 request)
         var tmdbPoster: String? = null
         var tmdbBackdrop: String? = null
         try {
@@ -404,59 +396,47 @@ class LayarKacaProvider : MainAPI() {
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
-        // FIX #7: kalau tidak ada sumber yang berhasil di-decode, return false
         if (allSources.isEmpty()) return false
 
-        // FIX #2: semua extractor sekarang konsisten pakai new-style callback
         allSources.forEach { url ->
             when {
-                url.contains("/iframe/turbovip/") -> {
-                    val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
+                url.contains("/turbovip/") -> {
+                    val id = url.substringAfter("/turbovip/").substringBefore("/").substringBefore("?")
                     try {
                         Lk21TurboExtractor().getUrl(
                             "https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, callback
                         )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }
-                url.contains("/iframe/p2p/") -> {
-                    val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
+                url.contains("/p2p/") -> {
+                    val id = url.substringAfter("/p2p/").substringBefore("/").substringBefore("?")
                     try {
                         HowNetworkExtractor().getUrl(
                             "https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl, subtitleCallback, callback
                         )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }
-                url.contains("/iframe/cast/") -> {
-                    val id = url.substringAfter("/iframe/cast/").substringBefore("/")
+                url.contains("/cast/") -> {
+                    val id = url.substringAfter("/cast/").substringBefore("/").substringBefore("?")
                     try {
                         CastExtractor().getUrl(
                             "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, callback
                         )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }
-                url.contains("/iframe/hydrax/") -> {
-                    val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
+                url.contains("/hydrax/") -> {
+                    val id = url.substringAfter("/hydrax/").substringBefore("/").substringBefore("?")
                     try {
                         AbyssExtractor().getUrl(
                             "https://abyssplayer.com/?v=$id", currentUrl, subtitleCallback, callback
                         )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }
             }
         }
         return true
     }
 
-    // FIX #9: getVideoInterceptor return nullable Interceptor? (sesuai signature MainAPI)
-    // Retry 429 tidak lagi pakai Thread.sleep() — lempar IOE agar OkHttp retry sendiri
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
@@ -464,7 +444,6 @@ class LayarKacaProvider : MainAPI() {
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
 
-            // Bypass Localhost — langsung lanjut tanpa modifikasi
             if (url.contains("127.0.0.1")) {
                 return@Interceptor chain.proceed(originalRequest)
             }
@@ -480,13 +459,9 @@ class LayarKacaProvider : MainAPI() {
                     chain.proceed(newRequest)
                 }
                 url.contains("googleusercontent.com") -> {
-                    // FIX #9: ganti Thread.sleep dengan retry yang tidak blokir dispatcher thread
-                    // Cukup proceed — kalau 429, biarkan ExoPlayer retry dengan backoff sendiri
                     val response = chain.proceed(originalRequest)
                     if (response.code == 429) {
                         response.close()
-                        // Tunggu sebentar di thread yang sama (Interceptor memang sync, tapi
-                        // durasi pendek 1 detik masih wajar untuk retry satu kali)
                         Thread.sleep(1000L)
                         chain.proceed(originalRequest)
                     } else {
