@@ -27,7 +27,7 @@ class JuraganFilmExtractor : ExtractorApi() {
                 url    = url,
                 type   = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = "https://tv44.juragan.film/"
                 this.quality = Qualities.P1080.value
                 this.headers = headers
             }
