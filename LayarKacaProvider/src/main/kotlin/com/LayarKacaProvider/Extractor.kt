@@ -31,7 +31,8 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
-// Penggunaan jsonMapper unik khusus ekstraktor agar tidak tabrakan dengan classpath global
+// FIX #3: ganti nama dari 'mapper' jadi 'jsonMapper' agar tidak konflik dengan
+// top-level 'mapper' milik MainAPI.kt yang sudah ada di classpath
 private val jsonMapper: ObjectMapper = jacksonObjectMapper()
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
@@ -72,18 +73,7 @@ data class CastChalResp(
     @JsonProperty("challenge_id") val challenge_id: String?
 )
 data class CastAttestResp(
-    @JsonProperty("viewer_id") val viewer_id: String?,
-    @JsonProperty("device_id") val device_id: String?,
     @JsonProperty("token") val token: String?
-)
-data class CastCaptchaResp(
-    @JsonProperty("pow_token") val pow_token: String?,
-    @JsonProperty("pow_nonce") val pow_nonce: String?,
-    @JsonProperty("pow_difficulty") val pow_difficulty: Int?
-)
-data class CastVerifyResp(
-    @JsonProperty("token") val token: String?,
-    @JsonProperty("captcha_token") val captcha_token: String?
 )
 data class CastPbResp(
     @JsonProperty("playback") val playback: CastPlaybackInfo?
@@ -110,6 +100,7 @@ object HydraxProxy {
     @Volatile private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
+    // Dispatcher khusus untuk membongkar limit koneksi OkHttp (Anti-antre saat seek)
     private val proxyClient by lazy {
         app.baseClient.newBuilder()
             .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -133,6 +124,7 @@ object HydraxProxy {
                         val client = serverSocket!!.accept()
                         thread { handleClient(client) }
                     } catch (e: Exception) {
+                        // ServerSocket.accept() lempar exception saat stop() dipanggil — normal
                         if (isRunning) Log.w("HydraxProxy", "Accept error: ${e.message}")
                     }
                 }
@@ -142,6 +134,7 @@ object HydraxProxy {
         }
     }
 
+    // FIX #5: tambahkan stop() agar proxy bisa di-shutdown saat plugin di-reload
     fun stop() {
         isRunning = false
         try { serverSocket?.close() } catch (e: Exception) {}
@@ -167,6 +160,8 @@ object HydraxProxy {
             if (!path.contains("?url=")) return
 
             val query = path.substringAfter("?")
+
+            // FIX #6: parse query string dengan benar agar '=' dalam value (base64 padding) tidak terpotong
             val params = query.split("&").associate { pair ->
                 val eqIdx = pair.indexOf('=')
                 if (eqIdx < 0) pair to ""
@@ -189,12 +184,16 @@ object HydraxProxy {
             val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
             Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : ${rangeHeader ?: "FULL (bytes=0-)"}")
 
+            // ====================================================================
+            // FORMULA INJEKSI SERVICE WORKER HYDRAX (PEMECAH CHUNK 512 MB)
+            // ====================================================================
             val LIMIT_512MB = 536870912L
             val partIndex = reqStart / LIMIT_512MB
             val localOffset = reqStart % LIMIT_512MB
 
             val targetUrl = if (partIndex > 0) "$realUrl$partIndex" else realUrl
             val serverRangeHeader = "bytes=$localOffset-"
+            // ====================================================================
 
             val request = Request.Builder()
                 .url(targetUrl)
@@ -212,6 +211,10 @@ object HydraxProxy {
             val timeTaken = System.currentTimeMillis() - startTime
 
             val code = response.code
+
+            // ====================================================================
+            // MANIPULASI HEADER BALASAN UNTUK MEMBOHONGI EXOPLAYER (SPOOFING)
+            // ====================================================================
             var contentRange = response.header("Content-Range") ?: "Kosong"
             var contentLength = response.header("Content-Length") ?: "Kosong"
             var spoofedContentRange = contentRange
@@ -297,8 +300,6 @@ object HydraxProxy {
             }
             val finalTime = (System.currentTimeMillis() - startTime - timeTaken) / 1000.0
             val kbps = if (finalTime > 0) (totalSent / 1024.0) / finalTime else 0.0
-            
-            // FIX: Mengembalikan variabel log ke referensi yang benar (clientId) untuk menghindari Unresolved Reference
             Log.i("HydraxProxy", "[$clientId] [OK] Streaming Selesai. Total: $totalSent bytes | Speed: ${String.format("%.2f", kbps)} KB/s")
 
         } catch (e: SocketException) {
@@ -314,7 +315,7 @@ object HydraxProxy {
 }
 
 // =========================================================================
-// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY) -> 100% UTUH
+// EXTRACTOR 1: ABYSS / HYDRAX (TRANSPARENT LOCAL PROXY)
 // =========================================================================
 open class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -328,6 +329,7 @@ open class AbyssExtractor : ExtractorApi() {
         "Accept"     to "*/*"
     )
 
+    // FIX #2 / #4: override new-style callback langsung (konsisten dengan semua extractor lain)
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -420,13 +422,14 @@ open class AbyssExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 2: TURBO VIP -> 100% UTUH
+// EXTRACTOR 2: TURBO VIP
 // =========================================================================
 open class Lk21TurboExtractor : ExtractorApi() {
     override var name    = "LK21 TurboVIP"
     override var mainUrl = "https://turbovidhls.com"
     override val requiresReferer = false
 
+    // FIX #2 / #4: override new-style callback langsung
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -474,13 +477,14 @@ open class Lk21TurboExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 3: HOW NETWORK -> 100% UTUH
+// EXTRACTOR 3: HOW NETWORK (P2P)
 // =========================================================================
 open class HowNetworkExtractor : ExtractorApi() {
     override var name    = "LK21 HowNetwork"
     override var mainUrl = "https://cloud.hownetwork.xyz"
     override val requiresReferer = false
 
+    // FIX #2 / #4: override new-style callback langsung
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -514,7 +518,7 @@ open class HowNetworkExtractor : ExtractorApi() {
                         source = "LK21 HowNetwork",
                         name   = "HowNetwork HD",
                         url    = m3u8Url,
-                        type = ExtractorLinkType.M3U8
+                        type   = ExtractorLinkType.M3U8
                     ) {
                         this.referer = "$mainUrl/"
                         this.quality = Qualities.Unknown.value
@@ -532,130 +536,54 @@ open class HowNetworkExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// EXTRACTOR 4: CAST HD (YANG SUKSES JEBOL VERIFIKASI SELESAI SINKRONISASI)
+// EXTRACTOR 4: CAST HD
 // =========================================================================
 open class CastExtractor : ExtractorApi() {
     override var name    = "CAST HD"
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
 
-    private fun re(t: Long, e: Int): Long = ((t shl e) or (t ushr (32 - e))) and 0xFFFFFFFFL
-    private fun ht(t: Long, e: Long): Long = (t * e) and 0xFFFFFFFFL
-
-    private fun ye(t: LongArray) {
-        t[0] = (t[0] + t[1]) and 0xFFFFFFFFL
-        t[3] = re(t[3] xor t[0], 16)
-        t[2] = (t[2] + t[3]) and 0xFFFFFFFFL
-        t[1] = re(t[1] xor t[2], 12)
-        t[0] = (t[0] + t[1]) and 0xFFFFFFFFL
-        t[3] = re(t[3] xor t[0], 8)
-        t[2] = (t[2] + t[3]) and 0xFFFFFFFFL
-        t[1] = re(t[1] xor t[2], 7)
-    }
-
-    private fun gr(t: ByteArray): LongArray {
-        val e = longArrayOf(1779033703L, 3144134277L, 1013904242L, 2773480762L)
-        for (i in t.indices) {
-            e[0] = (e[0] + (t[i].toLong() and 0xFFL)) and 0xFFFFFFFFL
-            e[0] = re(e[0], 7)
-            ye(e)
-        }
-        for (i in 0 until 8) { ye(e) }
-        val r = LongArray(512)
-        for (i in 0 until 512) {
-            ye(e)
-            r[i] = (e[0] xor e[2]) and 0xFFFFFFFFL
-        }
-        for (i in 0 until 2) {
-            for (s in 0 until 512) {
-                val a = (r[s] and 511L).toInt()
-                var c = (r[s] + r[a]) and 0xFFFFFFFFL
-                c = re(c, 13)
-                c = (c xor ht(r[(s + 1) and 511], 2654435761L)) and 0xFFFFFFFFL
-                r[s] = c
-                e[0] = (e[0] xor c) and 0xFFFFFFFFL
-                ye(e)
-            }
-        }
-        val n = LongArray(8)
-        for (i in 0 until 8) {
-            ye(e)
-            var sVal = e[0]
-            val a = i * 64
-            for (c in 0 until 64) {
-                val d = r[a + c]
-                sVal = (sVal + d) and 0xFFFFFFFFL
-                sVal = re(sVal, 5)
-                sVal = (sVal xor ht(d, 2246822519L)) and 0xFFFFFFFFL
-            }
-            n[i] = (sVal xor e[2]) and 0xFFFFFFFFL
-        }
-        return n
-    }
-
-    private fun wr(t: LongArray): Int {
-        var e = 0
-        for (n in t) {
-            val nM = n and 0xFFFFFFFFL
-            if (nM == 0L) { e += 32; continue }
-            return e + java.lang.Integer.numberOfLeadingZeros(nM.toInt())
-        }
-        return e
-    }
-
-    private fun solvePow(powToken: String?, powNonce: String?, difficulty: Int): String? {
-        if (difficulty <= 0) return "0"
-        val keys = listOfNotNull(powNonce, powToken)
-        for (baseKey in keys) {
-            val prefix = "$baseKey:"
-            var solution = 0L
-            val startTime = System.currentTimeMillis()
-            while (true) {
-                val candidate = "$prefix$solution"
-                if (wr(gr(candidate.toByteArray(Charsets.UTF_8))) >= difficulty) {
-                    return solution.toString()
-                }
-                solution++
-                if (solution % 2048 == 0L && (System.currentTimeMillis() - startTime) > 15000L) {
-                    break
-                }
-            }
-        }
-        return null
-    }
-
     private fun b64url(b: ByteArray): String =
         Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
 
     private fun b64urlDecode(s: String): ByteArray {
-        var std = s.replace("-", "+").replace("_", "/")
-        val pad = 4 - (std.length % 4)
-        if (pad != 4) std += "=".repeat(pad)
-        return Base64.decode(std, Base64.DEFAULT)
+        var standardized = s.replace("-", "+").replace("_", "/")
+        val padding = 4 - (standardized.length % 4)
+        if (padding != 4) standardized += "=".repeat(padding)
+        return Base64.decode(standardized, Base64.DEFAULT)
     }
+
+    private fun getRandomBytes(size: Int): ByteArray =
+        ByteArray(size).apply { java.security.SecureRandom().nextBytes(this) }
 
     private fun derToRaw(der: ByteArray): ByteArray {
-        var idx = 2
-        val rLen = der[idx + 1].toInt()
-        val rOff = idx + 2
-        idx += 2 + rLen
-        val sLen = der[idx + 1].toInt()
-        val sOff = idx + 2
-        val rStr = der.copyOfRange(rOff, rOff + rLen).dropWhile { it == 0.toByte() }.toByteArray()
-        val sStr = der.copyOfRange(sOff, sOff + sLen).dropWhile { it == 0.toByte() }.toByteArray()
-        val raw = ByteArray(64) { 0 }
-        System.arraycopy(rStr, 0, raw, 32 - rStr.size, rStr.size)
-        System.arraycopy(sStr, 0, raw, 64 - sStr.size, sStr.size)
-        return raw
+        var offset = 2
+        val rLength = der[offset + 1].toInt()
+        val rOffset = offset + 2
+        offset += 2 + rLength
+        val sLength = der[offset + 1].toInt()
+        val sOffset = offset + 2
+
+        val rStr = der.copyOfRange(rOffset, rOffset + rLength).dropWhile { it == 0.toByte() }.toByteArray()
+        val sStr = der.copyOfRange(sOffset, sOffset + sLength).dropWhile { it == 0.toByte() }.toByteArray()
+
+        val rPadded = ByteArray(32) { 0 }
+        val sPadded = ByteArray(32) { 0 }
+
+        System.arraycopy(rStr, 0, rPadded, 32 - rStr.size, rStr.size)
+        System.arraycopy(sStr, 0, sPadded, 32 - sStr.size, sStr.size)
+
+        return rPadded + sPadded
     }
 
+    // FIX #2 / #4: override new-style callback langsung (konsisten)
     override suspend fun getUrl(
         url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val videoId = url.substringAfterLast("/").substringBefore("?")
+        val videoId = url.substringAfterLast("/")
 
         val commonHeaders = mapOf(
             "User-Agent"       to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
@@ -667,11 +595,8 @@ open class CastExtractor : ExtractorApi() {
         )
 
         try {
-            app.get("$mainUrl/api/videos/$videoId/embed/details", headers = commonHeaders)
-            app.get("$mainUrl/api/videos/$videoId/embed/settings", headers = commonHeaders)
-
             val chalRes  = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
-            val chalJson = jsonMapper.readValue(chalRes.text, CastChalResp::class.java)
+            val chalJson = try { jsonMapper.readValue(chalRes.text, CastChalResp::class.java) } catch (e: Exception) { null } ?: return
 
             val nonce = chalJson.nonce ?: return
             val cid   = chalJson.challenge_id ?: return
@@ -695,8 +620,8 @@ open class CastExtractor : ExtractorApi() {
             if (yBytes.size < 32) yBytes = ByteArray(32 - yBytes.size) { 0 } + yBytes
 
             val attestPayload = mapOf(
-                "viewer_id"   to "",
-                "device_id"   to "",
+                "viewer_id"   to b64url(getRandomBytes(16)),
+                "device_id"   to b64url(getRandomBytes(16)),
                 "challenge_id" to cid,
                 "nonce"       to nonce,
                 "signature"   to b64url(rawSignature),
@@ -709,45 +634,13 @@ open class CastExtractor : ExtractorApi() {
             )
 
             val attestRes  = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, json = attestPayload)
-            val attestJson = jsonMapper.readValue(attestRes.text, CastAttestResp::class.java)
-            val sViewerId  = attestJson.viewer_id ?: return
-            val sDeviceId  = attestJson.device_id ?: return
-            val token      = attestJson.token ?: return
+            val attestJson = try { jsonMapper.readValue(attestRes.text, CastAttestResp::class.java) } catch (e: Exception) { null } ?: return
+            val token = attestJson.token ?: return
 
-            val fingerprintObj = mapOf(
-                "token"      to token,
-                "viewer_id"  to sViewerId,
-                "device_id"  to sDeviceId,
-                "confidence" to 0.9
-            )
+            val pbPayload = mapOf("fingerprint" to mapOf("token" to token))
+            val pbRes     = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = commonHeaders, json = pbPayload)
 
-            val captchaPayload = mapOf("fingerprint" to fingerprintObj)
-            val captchaRes     = app.post("$mainUrl/api/videos/$videoId/embed/captcha", headers = commonHeaders, json = captchaPayload)
-            val captchaJson    = jsonMapper.readValue(captchaRes.text, CastCaptchaResp::class.java)
-
-            val powToken   = captchaJson.pow_token ?: return
-            val powNonce   = captchaJson.pow_nonce
-            val difficulty = captchaJson.pow_difficulty ?: 8
-
-            val solution = solvePow(powToken, powNonce, difficulty) ?: return
-
-            val verifyPayload = mapOf(
-                "pow_token"   to powToken,
-                "solution"    to solution,
-                "fingerprint" to fingerprintObj
-            )
-            val verifyRes = app.post("$mainUrl/api/videos/$videoId/embed/captcha/verify", headers = commonHeaders, json = verifyPayload)
-            val verifyJson = jsonMapper.readValue(verifyRes.text, CastVerifyResp::class.java)
-            val finalCaptchaToken = verifyJson.captcha_token ?: verifyJson.token ?: return
-
-            val pbPayload = mapOf("fingerprint" to fingerprintObj)
-            val playbackHeaders = commonHeaders.toMutableMap().apply {
-                put("x-captcha-token", finalCaptchaToken)
-                put("Cookie", "byse_viewer_id=$sViewerId; byse_device_id=$sDeviceId")
-            }
-
-            val pbRes     = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = playbackHeaders, json = pbPayload)
-            val pbResp   = jsonMapper.readValue(pbRes.text, CastPbResp::class.java)?.playback ?: return
+            val pbResp   = try { jsonMapper.readValue(pbRes.text, CastPbResp::class.java)?.playback } catch (e: Exception) { null } ?: return
             val iv       = b64urlDecode(pbResp.iv ?: return)
             val payload  = b64urlDecode(pbResp.payload ?: return)
             val keyParts = pbResp.key_parts ?: return
@@ -789,10 +682,6 @@ open class CastExtractor : ExtractorApi() {
                     if (realUrl != null) break
                 } catch (e: Exception) {}
             }
-
-            try {
-                app.post("$mainUrl/api/videos/$videoId/embed/view", headers = playbackHeaders, json = pbPayload)
-            } catch (e: Exception) {}
 
             if (realUrl != null) {
                 callback(

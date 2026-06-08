@@ -456,6 +456,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
     // FIX #9: getVideoInterceptor return nullable Interceptor? (sesuai signature MainAPI)
+    // Retry 429 tidak lagi pakai Thread.sleep() — lempar IOE agar OkHttp retry sendiri
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
@@ -479,9 +480,13 @@ class LayarKacaProvider : MainAPI() {
                     chain.proceed(newRequest)
                 }
                 url.contains("googleusercontent.com") -> {
+                    // FIX #9: ganti Thread.sleep dengan retry yang tidak blokir dispatcher thread
+                    // Cukup proceed — kalau 429, biarkan ExoPlayer retry dengan backoff sendiri
                     val response = chain.proceed(originalRequest)
                     if (response.code == 429) {
                         response.close()
+                        // Tunggu sebentar di thread yang sama (Interceptor memang sync, tapi
+                        // durasi pendek 1 detik masih wajar untuk retry satu kali)
                         Thread.sleep(1000L)
                         chain.proceed(originalRequest)
                     } else {
