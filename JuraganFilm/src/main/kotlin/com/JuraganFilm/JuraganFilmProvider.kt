@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 
 class JuraganFilmProvider : MainAPI() {
     override var name = "JuraganFilm"
-    override var mainUrl = "https://tv41.juragan.film"
+    override var mainUrl = "https://tv44.juragan.film"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = false
@@ -26,13 +26,10 @@ class JuraganFilmProvider : MainAPI() {
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
     private val baseHeaders get() = mapOf(
-        "User-Agent" to USER_AGENT,
+        "User-Agent" to mobileUserAgent,
         "Referer"    to mainUrl
     )
 
-    // =====================================================================
-    // HOMEPAGE / KATEGORI
-    // =====================================================================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -46,15 +43,12 @@ class JuraganFilmProvider : MainAPI() {
 
         val doc = app.get(url, headers = baseHeaders).document
         val items = parseLatestMovieItems(doc)
-        
+         
         return if (items.isNotEmpty()) {
             newHomePageResponse(request.name, items, hasNext = hasNextPage(doc))
         } else null
     }
 
-    // =====================================================================
-    // SEARCH
-    // =====================================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = if (page > 1)
             "$mainUrl/page/$page/?s=$query&post_type[]=post&post_type[]=tv"
@@ -70,11 +64,7 @@ class JuraganFilmProvider : MainAPI() {
         return newSearchResponseList(results, hasNextPage(doc))
     }
 
-    // =====================================================================
-    // LOAD (DETAIL PAGE)
-    // =====================================================================
     override suspend fun load(url: String): LoadResponse? {
-        // Ekstrak URL asli dan Link Trailer yang sudah kita selundupkan dari halaman depan
         val realUrl = url.substringBefore(TRAILER_SEPARATOR)
         val trailerFromUrl = url.substringAfter(TRAILER_SEPARATOR, "").takeIf { it.isNotBlank() }
 
@@ -92,15 +82,14 @@ class JuraganFilmProvider : MainAPI() {
 
         val plot = doc.selectFirst(
             ".gmr-moviedata:contains(Sinopsis:) .entry-content em, " +
-            ".gmr-moviedata em p, .entry-content p"
+            ".gmr-moviedata em p, " +
+            ".entry-content p"
         )?.text()?.trim()
 
         val actors = doc.select("span[itemprop=actors] span[itemprop=name] a")
             .map { ActorData(Actor(it.text().trim())) }
         val tags = doc.select("a[rel=category tag]").map { it.text().trim() }
         
-        // Memprioritaskan trailer dari detail web (jika ada suatu hari nanti), 
-        // kalau tidak ada, pakai trailer yang sudah dibawa dari parameter SearchResponse
         val trailerUrl = doc.selectFirst("a.gmr-trailer-popup")?.attr("href") ?: trailerFromUrl
 
         val iframeEl = doc.selectFirst("iframe[id^=jf-frame-]")
@@ -122,9 +111,9 @@ class JuraganFilmProvider : MainAPI() {
                 builder.trailers.add(
                     TrailerData(
                         extractorUrl = trailerUrl,
-                        referer      = realUrl, // Gunakan realUrl agar rapi
+                        referer      = realUrl,
                         raw          = false,
-                        headers      = mapOf("User-Agent" to USER_AGENT)
+                        headers      = mapOf("User-Agent" to mobileUserAgent)
                     )
                 )
             }
@@ -142,6 +131,7 @@ class JuraganFilmProvider : MainAPI() {
                 val episodes = epElements.map { el ->
                     val epUrl = if (el.tagName() == "span") realUrl else el.attr("href")
                     val epNum = el.text().trim().toIntOrNull()
+        
                     newEpisode(epUrl) {
                         this.name    = "Episode ${el.text().trim()}"
                         this.episode = epNum
@@ -155,7 +145,6 @@ class JuraganFilmProvider : MainAPI() {
                     }) + episodes
                 } else episodes
 
-                // Pastikan realUrl yang disimpan ke riwayat, bukan url yang ketempelan variabel trailer
                 newTvSeriesLoadResponse(title, realUrl, type, finalEpisodes).apply {
                     this.posterUrl = posterUrl
                     this.year      = year
@@ -172,7 +161,6 @@ class JuraganFilmProvider : MainAPI() {
                 else
                     realUrl
 
-                // Pastikan realUrl yang disimpan ke riwayat
                 newMovieLoadResponse(title, realUrl, type, dataUrl).apply {
                     this.posterUrl = posterUrl
                     this.year      = year
@@ -185,9 +173,6 @@ class JuraganFilmProvider : MainAPI() {
         }
     }
 
-    // =====================================================================
-    // LOAD LINKS
-    // =====================================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -216,59 +201,78 @@ class JuraganFilmProvider : MainAPI() {
                             else                 -> src
                         }
                     } ?: ""
-
-                if (extracted.isBlank()) {
-                    return loadExtractor(data, referer = mainUrl, subtitleCallback, callback)
-                }
                 Pair(extracted, data)
             }
         }
 
+        if (playerUrl.isBlank()) return false
+
         val playerHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
+            "User-Agent" to mobileUserAgent,
             "Referer"    to pageUrl,
             "Origin"     to mainUrl
         )
 
+        // 1. Ambil source HTML Player Iframe untuk membaca array SOURCES global
         val html = app.get(playerUrl, headers = playerHeaders).text
 
-        val m3u8Regex = Regex("""https://cloud\.wth\.my\.id/\?id=[^"'\s]+\.m3u8""")
-        val match = m3u8Regex.find(html)
+        // 2. Gunakan Regex untuk menangkap data JSON mentah di dalam array SOURCES
+        val sourceRegex = Regex("""\{\"type\":\"(?<type>[^\"]+)\",\"label\":\"(?<label>[^\"]+)\",\"link\":\"(?<link>[^\"]+)\"\}""")
+        val matches = sourceRegex.findAll(html)
 
-        if (match != null) {
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name   = "JuraganFilm - HLS",
-                    url    = match.value,
-                    type   = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = playerUrl
-                    this.quality = Qualities.P1080.value
-                    this.headers = mapOf(
-                        "Origin"     to mainUrl,
-                        "Referer"    to playerUrl,
-                        "User-Agent" to mobileUserAgent
-                    )
+        if (matches.none()) return false
+
+        var linksFound = false
+
+        // 3. Iterasi dan kirim data link ke Extractor
+        matches.forEach { match ->
+            val type = match.groups["type"]?.value ?: ""
+            val label = match.groups["label"]?.value ?: ""
+            val rawLink = match.groups["link"]?.value ?: ""
+            val cleanLink = rawLink.replace("\\/", "/")
+
+            if (cleanLink.isNotBlank()) {
+                val isHls = type == "hls" || cleanLink.contains(".m3u8")
+                val quality = when {
+                    label.contains("1080") || label.contains("Original") -> Qualities.P1080.value
+                    label.contains("804") || label.contains("720") -> Qualities.P720.value
+                    label.contains("536") || label.contains("480") -> Qualities.P480.value
+                    else -> Qualities.P360.value
                 }
-            )
-            return true
+
+                // Eksekusi callback Extractor Link dengan Header Spoofing Terbimbing
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name   = "JuraganFilm - $label",
+                        url    = cleanLink,
+                        type   = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = quality
+                        this.headers = mapOf(
+                            "Origin"     to mainUrl,
+                            "Referer"    to "$mainUrl/",
+                            "User-Agent" to mobileUserAgent
+                        )
+                    }
+                )
+                linksFound = true
+            }
         }
 
-        return loadExtractor(playerUrl, referer = pageUrl, subtitleCallback, callback)
+        return linksFound
     }
 
-    // =====================================================================
-    // VIDEO INTERCEPTOR
-    // =====================================================================
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         return Interceptor { chain ->
             val req = chain.request()
-            if (req.url.toString().contains("cloud.wth.my.id")) {
+            val urlString = req.url.toString()
+            if (urlString.contains("scroll.web.id") || urlString.contains("wth.my.id")) {
                 chain.proceed(
                     req.newBuilder()
                         .header("Origin",     mainUrl)
-                        .header("Referer",    extractorLink.referer ?: mainUrl)
+                        .header("Referer",    "$mainUrl/")
                         .header("User-Agent", mobileUserAgent)
                         .build()
                 )
@@ -278,10 +282,6 @@ class JuraganFilmProvider : MainAPI() {
         }
     }
 
-    // =====================================================================
-    // HELPERS
-    // =====================================================================
-    
     private fun cleanTitle(title: String): String {
         return title
             .replace(Regex("(?i)^Nonton\\s*(Film\\s*)?"), "")
@@ -296,38 +296,11 @@ class JuraganFilmProvider : MainAPI() {
     private fun fixPosterUrl(url: String?): String? =
         url?.replace(Regex("-\\d+x\\d+(?=\\.(jpg|jpeg|png|webp)$)"), "")
 
-    private fun parseSliderItems(doc: Document): List<SearchResponse> =
-        doc.select(".gmr-slider-content").mapNotNull { el ->
-            val linkEl = el.selectFirst("a.gmr-slide-titlelink") ?: return@mapNotNull null
-            val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
-            val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-            
-            // Tangkap dan sematkan URL trailer ke dalam url asli
-            val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
-            val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
-
-            val poster = fixPosterUrl(
-                el.selectFirst("img.tns-lazy-img")
-                    ?.attr("data-src")?.ifBlank { null }
-                    ?: el.selectFirst("img.tns-lazy-img")?.attr("src")
-            )
-            val eps = el.selectFirst(".strokeepisode")?.text()
-            val type = if (url.contains("/film-seri/") ||
-                eps?.contains("EPS", ignoreCase = true) == true)
-                TvType.TvSeries else TvType.Movie
-
-            when (type) {
-                TvType.TvSeries -> newTvSeriesSearchResponse(title, finalUrl, type) { posterUrl = poster }
-                else            -> newMovieSearchResponse(title, finalUrl, type) { posterUrl = poster }
-            }
-        }
-
     private fun parseWidgetItem(el: Element): SearchResponse? {
         val linkEl = el.selectFirst(".entry-title a") ?: return null
         val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return null
         val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return null
         
-        // Tangkap dan sematkan URL trailer ke dalam url asli
         val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
         val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
 
@@ -340,8 +313,7 @@ class JuraganFilmProvider : MainAPI() {
         val year    = el.selectFirst("time[itemprop=dateCreated]")
             ?.attr("datetime")?.substringBefore("-")?.toIntOrNull()
         val eps     = el.selectFirst(".strokeepisode")?.text()
-        val type    = if (url.contains("/film-seri/") ||
-            eps?.contains("EPS", ignoreCase = true) == true)
+        val type    = if (url.contains("/film-seri/") || eps?.contains("EPS", ignoreCase = true) == true)
             TvType.TvSeries else TvType.Movie
 
         return when (type) {
@@ -364,7 +336,6 @@ class JuraganFilmProvider : MainAPI() {
                 val title  = linkEl.text().trim().takeIf { it.isNotEmpty() }?.let { cleanTitle(it) } ?: return@mapNotNull null
                 val url    = linkEl.attr("href").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                 
-                // Tangkap dan sematkan URL trailer ke dalam url asli
                 val trailer = el.selectFirst("a.gmr-trailer-popup")?.attr("href")
                 val finalUrl = if (!trailer.isNullOrBlank()) "$url$TRAILER_SEPARATOR$trailer" else url
 
