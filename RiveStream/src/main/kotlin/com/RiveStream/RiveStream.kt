@@ -31,13 +31,9 @@ class RiveStreamProvider : MainAPI() {
         return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val path = "${request.data}?page=$page"
         val url = buildUrl(path)
-        
         val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
         val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
         
@@ -48,13 +44,9 @@ class RiveStreamProvider : MainAPI() {
             val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
             if (isMovie) {
-                newMovieSearchResponse(title, idAndType, TvType.Movie) {
-                    this.posterUrl = poster
-                }
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
             } else {
-                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) {
-                    this.posterUrl = poster
-                }
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
             }
         } ?: emptyList()
 
@@ -64,7 +56,6 @@ class RiveStreamProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse>? {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val url = buildUrl("search/multi?query=$encodedQuery")
-        
         val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
         val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
@@ -75,13 +66,9 @@ class RiveStreamProvider : MainAPI() {
             val idAndType = "$mediaType/${item.id}"
 
             if (mediaType == "movie") {
-                newMovieSearchResponse(title, idAndType, TvType.Movie) {
-                    this.posterUrl = poster
-                }
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
             } else if (mediaType == "tv") {
-                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) {
-                    this.posterUrl = poster
-                }
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
             } else null
         }
     }
@@ -90,7 +77,6 @@ class RiveStreamProvider : MainAPI() {
         val cleanPath = url.replace("$mainUrl/", "")
         val type = cleanPath.substringBefore("/")
         val id = cleanPath.substringAfter("/")
-        
         val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
         val response = app.get(detailsUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
         val item = tryParseJson<TmdbDetailResult>(response) ?: return null
@@ -110,11 +96,9 @@ class RiveStreamProvider : MainAPI() {
             }
         } else {
             val episodes = Coroutines.threadSafeListOf<Episode>()
-            
             item.seasons?.amap { season ->
                 val seasonNum = season.seasonNumber ?: return@amap
                 if (seasonNum == 0) return@amap
-                
                 try {
                     val seasonUrl = buildUrl("$type/$id/season/$seasonNum")
                     val seasonResponse = app.get(seasonUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
@@ -128,13 +112,10 @@ class RiveStreamProvider : MainAPI() {
                             this.data = "$url?s=$seasonNum&e=${ep.episodeNumber}"
                         })
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
 
             val sortedEpisodes = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
-
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = poster
                 this.plot = overview
@@ -155,8 +136,7 @@ class RiveStreamProvider : MainAPI() {
         val isMovie = !cleanData.contains("?s=")
         val cleanId = cleanData.substringAfter("/").substringBefore("?")
 
-        // 1. Set parameter URL otomatis sesuai jenis medianya
-        val apiUrl = if (isMovie) {
+        val serversUrl = if (isMovie) {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
         } else {
             val season = cleanData.substringAfter("?s=").substringBefore("&")
@@ -164,8 +144,7 @@ class RiveStreamProvider : MainAPI() {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // 2. Tembak headers tiruan persis dari Reqable tanpa menyisipkan kuki statis
-        val headersMap = mapOf(
+        val baseHeaders = mapOf(
             "Host" to "primesrc.me",
             "Pragma" to "no-cache",
             "Cache-Control" to "no-cache",
@@ -177,47 +156,89 @@ class RiveStreamProvider : MainAPI() {
             "Referer" to if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId" else "https://primesrc.me/embed/tv?tmdb=$cleanId"
         )
 
+        var linksFound = 0
+
         try {
-            val response = app.get(apiUrl, headers = headersMap).text
+            // Langkah 1: Ambil daftar kuncian internal key
+            val response = app.get(serversUrl, headers = baseHeaders).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
 
             parsed.servers?.forEach { server ->
-                val key = server.key ?: return@forEach
-                val name = server.name?.lowercase() ?: return@forEach
+                val internalKey = server.key ?: return@forEach
+                val hostName = server.name?.lowercase() ?: return@forEach
 
-                // 3. Rekonstruksi otomatis token ke alamat embed pemutar hoster asli
-                val embedUrl = when {
-                    name.contains("streamtape") -> "https://streamtape.com/e/$key"
-                    name.contains("voe") -> "https://voe.sx/e/$key"
-                    name.contains("streamwish") -> "https://awish.pro/e/$key"
-                    name.contains("filemoon") -> "https://filemoon.sx/e/$key"
-                    name.contains("dood") -> "https://dood.to/e/$key"
-                    name.contains("mixdrop") -> "https://mixdrop.co/e/$key"
-                    name.contains("filelions") -> "https://filelions.live/v/$key"
-                    name.contains("luluvdoo") -> "https://luluvdoo.com/e/$key"
-                    name.contains("streamplay") -> "https://streamplay.to/e/$key"
-                    name.contains("vidmoly") -> "https://vidmoly.me/w/$key"
-                    name.contains("vidara") -> "https://vidara.xyz/e/$key"
-                    else -> null
-                }
+                try {
+                    // Langkah 2: Lakukan pemanggilan API Tahap Kedua untuk mendekripsi link tujuan asli
+                    val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
+                    val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
+                    val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: return@forEach
+                    val realEmbedUrl = linkData.link ?: return@forEach
 
-                // 4. Terbangkan url rakitan ke pembongkar core Extractor Cloudstream
-                embedUrl?.let { url ->
-                    loadExtractor(url, "https://primesrc.me/", subtitleCallback, callback)
-                }
+                    // Langkah 3: Ekstraksi teks murni berbasis Regex tanpa WebView
+                    when {
+                        hostName.contains("streamtape") -> {
+                            val html = app.get(realEmbedUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
+                            
+                            // Tangkap parameter rahasia dari fungsi modifikasi .substring() dinamis halaman asli
+                            val match = Regex("""'//[^']+/get_vi'\s*\+\s*\('([^']+)'\)\.substring\((\d+)\)""").find(html)
+                            val encryptedPart = match?.groupValues?.get(1)
+                            val skipCount = match?.groupValues?.get(2)?.toIntOrNull() ?: 4
+                            
+                            if (encryptedPart != null) {
+                                // Eksekusi kalkulasi substring bawaan di Kotlin
+                                val finalParam = encryptedPart.substring(skipCount)
+                                val directVideoUrl = "https://streamtape.com/get_vi$finalParam&stream=1"
+                                
+                                callback(newExtractorLink(
+                                    source = "Streamtape Rive",
+                                    name = "Streamtape Direct (MP4)",
+                                    url = directVideoUrl,
+                                    referer = realEmbedUrl,
+                                    quality = Qualities.P720.value,
+                                    isM3u8 = false
+                                ))
+                                linksFound++
+                            }
+                        }
+
+                        hostName.contains("voe") -> {
+                            val html = app.get(realEmbedUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
+                            val base64Regex = Regex("""window\.atob\s*\(\s*'([^']+)'\s*\)""")
+                            val base64Match = base64Regex.find(html)?.groupValues?.get(1)
+                            
+                            var videoUrl = ""
+                            if (base64Match != null) {
+                                val decoded = String(android.util.Base64.decode(base64Match, android.util.Base64.DEFAULT))
+                                if (decoded.contains(".m3u8")) videoUrl = decoded
+                            }
+                            if (videoUrl.isEmpty()) {
+                                videoUrl = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(html)?.groupValues?.get(1) ?: ""
+                            }
+                            
+                            if (videoUrl.isNotEmpty()) {
+                                callback(newExtractorLink(
+                                    source = "Voe Rive",
+                                    name = "Voe (HLS)",
+                                    url = videoUrl,
+                                    referer = realEmbedUrl,
+                                    quality = Qualities.Unknown.value,
+                                    isM3u8 = true
+                                ))
+                                linksFound++
+                            }
+                        }
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         } catch (e: Exception) {
             e.printStackTrace()
             return false
         }
 
-        return true
+        return linksFound > 0
     }
     
-    data class TmdbResultsResponse(
-        @JsonProperty("results") val results: List<TmdbItem>?
-    )
-
+    data class TmdbResultsResponse(@JsonProperty("results") val results: List<TmdbItem>?)
     data class TmdbItem(
         @JsonProperty("id") val id: Int,
         @JsonProperty("title") val title: String?,
@@ -225,7 +246,6 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("poster_path") val posterPath: String?,
         @JsonProperty("media_type") val mediaType: String?
     )
-
     data class TmdbDetailResult(
         @JsonProperty("title") val title: String?,
         @JsonProperty("name") val name: String?,
@@ -237,39 +257,19 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("seasons") val seasons: List<TmdbSeasonItem>?,
         @JsonProperty("genres") val genres: List<TmdbGenreItem>?
     )
-
-    data class TmdbGenreItem(
-        @JsonProperty("name") val name: String?
-    )
-
-    data class TmdbSeasonItem(
-        @JsonProperty("season_number") val seasonNumber: Int?
-    )
-
-    data class TmdbSeasonResponse(
-        @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?
-    )
-
+    data class TmdbGenreItem(@JsonProperty("name") val name: String?)
+    data class TmdbSeasonItem(@JsonProperty("season_number") val seasonNumber: Int?)
+    data class TmdbSeasonResponse(@JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?)
     data class TmdbEpisodeItem(
         @JsonProperty("name") val name: String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
 }
 
-// 5. Model data parsing terisolasi untuk primesrc JSON mapper
-data class PrimeSrcResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?,
-    @JsonProperty("info") val info: PrimeSrcInfo?
-)
+data class PrimeSrcResponse(@JsonProperty("servers") val servers: List<PrimeSrcServer>?)
+data class PrimeSrcServer(@JsonProperty("name") val name: String?, @JsonProperty("key") val key: String?)
 
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?,
-    @JsonProperty("file_size") val fileSize: String?,
-    @JsonProperty("file_name") val fileName: String?
-)
-
-data class PrimeSrcInfo(
-    @JsonProperty("type") val type: String?,
-    @JsonProperty("tmdb_id") val tmdbId: String?
+data class PrimeSrcLinkResponse(
+    @JsonProperty("link") val link: String?,
+    @JsonProperty("host") val host: String?
 )
