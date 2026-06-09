@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.Coroutines.apmap
 import java.net.URLEncoder
 
 class RiveStreamProvider : MainAPI() {
@@ -113,16 +112,16 @@ class RiveStreamProvider : MainAPI() {
                 this.plot = overview
                 this.year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
                 this.tags = genres
-                item.voteAverage?.let { this.score = Score.from10(it) } // Menggunakan Score API terbaru
+                [span_12](start_span)item.voteAverage?.let { this.score = Score.from10(it) } // Menggunakan Score API terbaru pengganti .rating[span_12](end_span)
             }
         } else {
-            // threadSafeListOf digunakan karena modifikasi array dilakukan serentak oleh apmap
+            [span_13](start_span)// threadSafeListOf digunakan karena modifikasi array dilakukan serentak oleh amap[span_13](end_span)
             val episodes = Coroutines.threadSafeListOf<Episode>()
             
-            // apmap mengeksekusi request data antar-season secara pararel di background thread
-            item.seasons?.apmap { season ->
-                val seasonNum = season.seasonNumber ?: return@apmap
-                if (seasonNum == 0) return@apmap
+            [span_14](start_span)// Menggunakan .amap (Async Map) murni non-blocking bawaan CloudStream Utilities[span_14](end_span)
+            item.seasons?.amap { season ->
+                val seasonNum = season.seasonNumber ?: return@amap
+                if (seasonNum == 0) return@amap
                 
                 try {
                     val seasonUrl = buildUrl("$type/$id/season/$seasonNum")
@@ -195,9 +194,7 @@ class RiveStreamProvider : MainAPI() {
             e.printStackTrace()
         }
 
-        // --- SISTEM PERTAHANAN FALLBACK ---
-        // Jika API Scrapper RiveStream zonk/gagal mengembalikan link video,
-        // alihkan pencarian ke Vidsrc Engine universal menggunakan basis data ID TMDB yang sama.
+        // --- FALLBACK SYSTEM ---
         if (linksFoundCount == 0) {
             val season = if (!isMovie) data.substringAfter("?s=").substringBefore("&") else ""
             val episode = if (!isMovie) data.substringAfter("&e=") else ""
