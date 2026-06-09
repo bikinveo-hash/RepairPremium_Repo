@@ -88,10 +88,12 @@ class RiveStreamProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val type = url.substringBefore("/")
-        val id = url.substringAfter("/")
+        // PENTING: Bersihkan domain RiveStream dari URL agar menyisakan "movie/id" atau "tv/id" murni
+        val cleanPath = url.replace("$mainUrl/", "")
+        val type = cleanPath.substringBefore("/")
+        val id = cleanPath.substringAfter("/")
         
-        val detailsUrl = buildUrl("$url?append_to_response=external_ids")
+        val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
         val response = app.get(detailsUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
         val item = tryParseJson<TmdbDetailResult>(response) ?: return null
         
@@ -151,9 +153,11 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val isMovie = !data.contains("?s=")
-        val type = data.substringBefore("/")
-        val cleanId = data.substringAfter("/").substringBefore("?")
+        // PENTING: Bersihkan domain RiveStream dari koordinat data agar ekstraksi ID berjalan mulus
+        val cleanData = data.replace("$mainUrl/", "")
+        val isMovie = !cleanData.contains("?s=")
+        val type = cleanData.substringBefore("/")
+        val cleanId = cleanData.substringAfter("/").substringBefore("?")
         val providersUrl = "$SCRAPPER_BASE/api/embeds" 
         
         var linksFoundCount = 0
@@ -166,8 +170,8 @@ class RiveStreamProvider : MainAPI() {
                 val finalScrapUrl = if (isMovie) {
                     "$SCRAPPER_BASE/api/embed?provider=$provider&id=$cleanId"
                 } else {
-                    val season = data.substringAfter("?s=").substringBefore("&")
-                    val episode = data.substringAfter("&e=")
+                    val season = cleanData.substringAfter("?s=").substringBefore("&")
+                    val episode = cleanData.substringAfter("&e=")
                     "$SCRAPPER_BASE/api/embed?provider=$provider&id=$cleanId&season=$season&episode=$episode"
                 }
 
@@ -186,8 +190,8 @@ class RiveStreamProvider : MainAPI() {
         }
 
         if (linksFoundCount == 0) {
-            val season = if (!isMovie) data.substringAfter("?s=").substringBefore("&") else ""
-            val episode = if (!isMovie) data.substringAfter("&e=") else ""
+            val season = if (!isMovie) cleanData.substringAfter("?s=").substringBefore("&") else ""
+            val episode = if (!isMovie) cleanData.substringAfter("&e=") else ""
             val fallbackUrl = if (isMovie) "https://vidsrc.to/embed/movie/$cleanId" else "https://vidsrc.to/embed/tv/$cleanId/$season/$episode"
             loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
         }
