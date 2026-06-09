@@ -1,5 +1,6 @@
 package com.RiveStream
 
+import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -159,7 +160,7 @@ class RiveStreamProvider : MainAPI() {
         var linksFound = 0
 
         try {
-            // Langkah 1: Ambil daftar kuncian internal key
+            // Langkah 1: Ambil daftar kuncian internal key penyamaran server luar
             val response = app.get(serversUrl, headers = baseHeaders).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
 
@@ -168,34 +169,34 @@ class RiveStreamProvider : MainAPI() {
                 val hostName = server.name?.lowercase() ?: return@forEach
 
                 try {
-                    // Langkah 2: Lakukan pemanggilan API Tahap Kedua untuk mendekripsi link tujuan asli
+                    // Langkah 2: Lakukan dekripsi tahap kedua untuk mendapatkan URL embed asli hoster
                     val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
                     val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
                     val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: return@forEach
                     val realEmbedUrl = linkData.link ?: return@forEach
 
-                    // Langkah 3: Ekstraksi teks murni berbasis Regex tanpa WebView
+                    // Langkah 3: Ekstraksi string dokumen HTML murni tanpa WebView background core
                     when {
                         hostName.contains("streamtape") -> {
                             val html = app.get(realEmbedUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
                             
-                            // Tangkap parameter rahasia dari fungsi modifikasi .substring() dinamis halaman asli
+                            // Ekstrak parameter enkripsi kancing ketukan tersembunyi
                             val match = Regex("""'//[^']+/get_vi'\s*\+\s*\('([^']+)'\)\.substring\((\d+)\)""").find(html)
                             val encryptedPart = match?.groupValues?.get(1)
                             val skipCount = match?.groupValues?.get(2)?.toIntOrNull() ?: 4
                             
                             if (encryptedPart != null) {
-                                // Eksekusi kalkulasi substring bawaan di Kotlin
                                 val finalParam = encryptedPart.substring(skipCount)
                                 val directVideoUrl = "https://streamtape.com/get_vi$finalParam&stream=1"
                                 
-                                callback(newExtractorLink(
-                                    source = "Streamtape Rive",
-                                    name = "Streamtape Direct (MP4)",
-                                    url = directVideoUrl,
-                                    referer = realEmbedUrl,
-                                    quality = Qualities.P720.value,
-                                    isM3u8 = false
+                                // Pemanggilan menggunakan urutan Positional Arguments murni agar kebal eror build
+                                callback(ExtractorLink(
+                                    "Streamtape Rive",
+                                    "Streamtape Direct (MP4)",
+                                    directVideoUrl,
+                                    realEmbedUrl,
+                                    Qualities.P720.value,
+                                    false
                                 ))
                                 linksFound++
                             }
@@ -208,7 +209,7 @@ class RiveStreamProvider : MainAPI() {
                             
                             var videoUrl = ""
                             if (base64Match != null) {
-                                val decoded = String(android.util.Base64.decode(base64Match, android.util.Base64.DEFAULT))
+                                val decoded = String(Base64.decode(base64Match, Base64.DEFAULT))
                                 if (decoded.contains(".m3u8")) videoUrl = decoded
                             }
                             if (videoUrl.isEmpty()) {
@@ -216,13 +217,13 @@ class RiveStreamProvider : MainAPI() {
                             }
                             
                             if (videoUrl.isNotEmpty()) {
-                                callback(newExtractorLink(
-                                    source = "Voe Rive",
-                                    name = "Voe (HLS)",
-                                    url = videoUrl,
-                                    referer = realEmbedUrl,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = true
+                                callback(ExtractorLink(
+                                    "Voe Rive",
+                                    "Voe (HLS)",
+                                    videoUrl,
+                                    realEmbedUrl,
+                                    Qualities.Unknown.value,
+                                    true
                                 ))
                                 linksFound++
                             }
