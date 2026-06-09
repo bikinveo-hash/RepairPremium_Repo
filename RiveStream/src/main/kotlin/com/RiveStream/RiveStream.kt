@@ -14,17 +14,11 @@ class RiveStreamProvider : MainAPI() {
     override val hasQuickSearch = true
 
     companion object {
-        // Kunci API TMDB asli milik RiveStream yang ditemukan di Webpack Chunk 2873
         private const val TMDB_API_KEY = "d64117f26031a428449f102ced3aba73"
         private const val TMDB_BASE = "https://api.themoviedb.org/3"
-        
-        // Server Reverse Proxy RiveStream untuk bypass geo-block/ISP blocking
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
-        
-        // API Server Scraper RiveStream untuk mengambil link stream/embed player
         private const val SCRAPPER_BASE = "https://scrapper.rivestream.app"
 
-        // Helper untuk membungkus request lewat proxy jika fetchMode server diaktifkan
         private fun buildUrl(path: String, useProxy: Boolean = true): String {
             val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
             return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
@@ -112,13 +106,11 @@ class RiveStreamProvider : MainAPI() {
                 this.plot = overview
                 this.year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
                 this.tags = genres
-                [span_12](start_span)item.voteAverage?.let { this.score = Score.from10(it) } // Menggunakan Score API terbaru pengganti .rating[span_12](end_span)
+                item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            [span_13](start_span)// threadSafeListOf digunakan karena modifikasi array dilakukan serentak oleh amap[span_13](end_span)
             val episodes = Coroutines.threadSafeListOf<Episode>()
             
-            [span_14](start_span)// Menggunakan .amap (Async Map) murni non-blocking bawaan CloudStream Utilities[span_14](end_span)
             item.seasons?.amap { season ->
                 val seasonNum = season.seasonNumber ?: return@amap
                 if (seasonNum == 0) return@amap
@@ -141,7 +133,6 @@ class RiveStreamProvider : MainAPI() {
                 }
             }
 
-            // Menyusun urutan episode agar rapi sesuai urutan season dan episodenya
             val sortedEpisodes = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
 
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
@@ -194,7 +185,6 @@ class RiveStreamProvider : MainAPI() {
             e.printStackTrace()
         }
 
-        // --- FALLBACK SYSTEM ---
         if (linksFoundCount == 0) {
             val season = if (!isMovie) data.substringAfter("?s=").substringBefore("&") else ""
             val episode = if (!isMovie) data.substringAfter("&e=") else ""
@@ -204,8 +194,6 @@ class RiveStreamProvider : MainAPI() {
 
         return true
     }
-
-    // --- JACKSON JSON MODEL BINDINGS ---
     
     data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
