@@ -17,12 +17,6 @@ class RiveStreamProvider : MainAPI() {
         private const val TMDB_API_KEY = "d64117f26031a428449f102ced3aba73"
         private const val TMDB_BASE = "https://api.themoviedb.org/3"
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
-        private const val SCRAPPER_BASE = "https://scrapper.rivestream.app"
-
-        private fun buildUrl(path: String, useProxy: Boolean = true): String {
-            val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
-            return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
-        }
     }
 
     override val mainPage = mainPageOf(
@@ -31,6 +25,11 @@ class RiveStreamProvider : MainAPI() {
         Pair("trending/movie/week", "Trending Movies"),
         Pair("trending/tv/week", "Trending TV Shows")
     )
+
+    private fun buildUrl(path: String, useProxy: Boolean = true): String {
+        val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
+        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
+    }
 
     override suspend fun getMainPage(
         page: Int,
@@ -88,7 +87,6 @@ class RiveStreamProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // PENTING: Bersihkan domain RiveStream dari URL agar menyisakan "movie/id" atau "tv/id" murni
         val cleanPath = url.replace("$mainUrl/", "")
         val type = cleanPath.substringBefore("/")
         val id = cleanPath.substringAfter("/")
@@ -153,47 +151,64 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // PENTING: Bersihkan domain RiveStream dari koordinat data agar ekstraksi ID berjalan mulus
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?s=")
-        val type = cleanData.substringBefore("/")
         val cleanId = cleanData.substringAfter("/").substringBefore("?")
-        val providersUrl = "$SCRAPPER_BASE/api/embeds" 
-        
-        var linksFoundCount = 0
+
+        // 1. Set parameter URL otomatis sesuai jenis medianya
+        val apiUrl = if (isMovie) {
+            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
+        } else {
+            val season = cleanData.substringAfter("?s=").substringBefore("&")
+            val episode = cleanData.substringAfter("&e=")
+            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
+        }
+
+        // 2. Tembak headers tiruan persis dari Reqable tanpa menyisipkan kuki statis
+        val headersMap = mapOf(
+            "Host" to "primesrc.me",
+            "Pragma" to "no-cache",
+            "Cache-Control" to "no-cache",
+            "Accept" to "*/*",
+            "Sec-Fetch-Site" to "same-origin",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Dest" to "empty",
+            "User-Agent" to USER_AGENT,
+            "Referer" to if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId" else "https://primesrc.me/embed/tv?tmdb=$cleanId"
+        )
 
         try {
-            val providersResponse = app.get(providersUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-            val providersList = tryParseJson<List<String>>(providersResponse) ?: listOf("vidsrc", "embedsu")
+            val response = app.get(apiUrl, headers = headersMap).text
+            val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
 
-            for (provider in providersList) {
-                val finalScrapUrl = if (isMovie) {
-                    "$SCRAPPER_BASE/api/embed?provider=$provider&id=$cleanId"
-                } else {
-                    val season = cleanData.substringAfter("?s=").substringBefore("&")
-                    val episode = cleanData.substringAfter("&e=")
-                    "$SCRAPPER_BASE/api/embed?provider=$provider&id=$cleanId&season=$season&episode=$episode"
+            parsed.servers?.forEach { server ->
+                val key = server.key ?: return@forEach
+                val name = server.name?.lowercase() ?: return@forEach
+
+                // 3. Rekonstruksi otomatis token ke alamat embed pemutar hoster asli
+                val embedUrl = when {
+                    name.contains("streamtape") -> "https://streamtape.com/e/$key"
+                    name.contains("voe") -> "https://voe.sx/e/$key"
+                    name.contains("streamwish") -> "https://awish.pro/e/$key"
+                    name.contains("filemoon") -> "https://filemoon.sx/e/$key"
+                    name.contains("dood") -> "https://dood.to/e/$key"
+                    name.contains("mixdrop") -> "https://mixdrop.co/e/$key"
+                    name.contains("filelions") -> "https://filelions.live/v/$key"
+                    name.contains("luluvdoo") -> "https://luluvdoo.com/e/$key"
+                    name.contains("streamplay") -> "https://streamplay.to/e/$key"
+                    name.contains("vidmoly") -> "https://vidmoly.me/w/$key"
+                    name.contains("vidara") -> "https://vidara.xyz/e/$key"
+                    else -> null
                 }
 
-                val embedResponse = app.get(finalScrapUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-                val embedData = tryParseJson<EmbedApiResponse>(embedResponse)
-
-                if (embedData?.success == true && embedData.url != null) {
-                    loadExtractor(embedData.url, "$mainUrl/", subtitleCallback) { link ->
-                        linksFoundCount++
-                        callback(link)
-                    }
+                // 4. Terbangkan url rakitan ke pembongkar core Extractor Cloudstream
+                embedUrl?.let { url ->
+                    loadExtractor(url, "https://primesrc.me/", subtitleCallback, callback)
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-
-        if (linksFoundCount == 0) {
-            val season = if (!isMovie) cleanData.substringAfter("?s=").substringBefore("&") else ""
-            val episode = if (!isMovie) cleanData.substringAfter("&e=") else ""
-            val fallbackUrl = if (isMovie) "https://vidsrc.to/embed/movie/$cleanId" else "https://vidsrc.to/embed/tv/$cleanId/$season/$episode"
-            loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
+            return false
         }
 
         return true
@@ -239,9 +254,22 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("name") val name: String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
-
-    data class EmbedApiResponse(
-        @JsonProperty("success") val success: Boolean?,
-        @JsonProperty("url") val url: String?
-    )
 }
+
+// 5. Model data parsing terisolasi untuk primesrc JSON mapper
+data class PrimeSrcResponse(
+    @JsonProperty("servers") val servers: List<PrimeSrcServer>?,
+    @JsonProperty("info") val info: PrimeSrcInfo?
+)
+
+data class PrimeSrcServer(
+    @JsonProperty("name") val name: String?,
+    @JsonProperty("key") val key: String?,
+    @JsonProperty("file_size") val fileSize: String?,
+    @JsonProperty("file_name") val fileName: String?
+)
+
+data class PrimeSrcInfo(
+    @JsonProperty("type") val type: String?,
+    @JsonProperty("tmdb_id") val tmdbId: String?
+)
