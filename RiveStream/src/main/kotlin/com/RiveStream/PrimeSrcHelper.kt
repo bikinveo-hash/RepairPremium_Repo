@@ -39,7 +39,7 @@ class PrimeSrcHelper {
         // Paksa User-Agent menjadi identitas Chrome Android tulen
         val browserUa = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
 
-        // STEP 1: Jalankan WebViewResolver untuk memicu lolosnya tantangan Cloudflare (cf_clearance)
+        // STEP 1: Jalankan WebViewResolver untuk memicu lolosnya tantangan awal Cloudflare
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
@@ -51,25 +51,12 @@ class PrimeSrcHelper {
             e.printStackTrace()
         }
 
-        // Pastikan sinkronisasi Cookie telah selesai
+        // Beri jeda statis 1.5 detik agar sistem Android selesai menulis cookie ke storage
+        delay(1500)
         android.webkit.CookieManager.getInstance().flush()
-        var primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
-        var attempt = 0
+        val primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
 
-        // Tunggu hingga cf_clearance masuk memori (Maksimal 5 detik)
-        while (!primeCookies.contains("cf_clearance") && attempt < 5) {
-            delay(1000)
-            android.webkit.CookieManager.getInstance().flush()
-            primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
-            attempt++
-        }
-
-        // Jika Bypass gagal (cookie tidak dapat), hentikan agar aplikasi tidak Timeout/Hang
-        if (!primeCookies.contains("cf_clearance")) {
-            return false 
-        }
-
-        // STEP 2: Headers — samakan User-Agent persis dengan sesi WebView tadi
+        // STEP 2: Headers — Ambil semua cookie yang dihasilkan WebView (apapun isinya, langsung gas)
         val headers = mapOf(
             "User-Agent" to browserUa,
             "Referer" to embedUrl,
@@ -130,11 +117,6 @@ class PrimeSrcHelper {
         return linksFound > 0
     }
 }
-
-// =========================================================================
-// DATA CLASSES KHUSUS PRIMESRC API
-// Pastikan bagian di bawah ini tidak terhapus saat melakukan copy-paste!
-// =========================================================================
 
 data class PrimeSrcResponse(
     @JsonProperty("servers") val servers: List<PrimeSrcServer>?
