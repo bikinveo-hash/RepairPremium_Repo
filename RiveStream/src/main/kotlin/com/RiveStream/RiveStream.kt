@@ -39,7 +39,11 @@ class RiveStreamProvider : MainAPI() {
 
         val homeItems = parsed.results?.mapNotNull { item ->
             val isMovie = item.title != null || request.data.contains("movie")
-            val idAndType = if (isMovie) "movie/${item.id}" else "tv/${item.id}"
+            val idAndType = if (isMovie) {
+                "$mainUrl/movie/${item.id}"
+            } else {
+                "$mainUrl/tv/${item.id}"
+            }
             val title = item.title ?: item.name ?: return@mapNotNull null
             val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
@@ -63,7 +67,7 @@ class RiveStreamProvider : MainAPI() {
             val title = item.title ?: item.name ?: return@mapNotNull null
             val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
             val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
-            val idAndType = "$mediaType/${item.id}"
+            val idAndType = "$mainUrl/$mediaType/${item.id}"
 
             if (mediaType == "movie") {
                 newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
@@ -109,7 +113,8 @@ class RiveStreamProvider : MainAPI() {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
-                            this.data = "$url?s=$seasonNum&e=${ep.episodeNumber}"
+                            // KUNCI PERBAIKAN: Format data dibuat rapi agar helper JSON bisa memilah parameter secara akurat
+                            this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
                         })
                     }
                 } catch (e: Exception) { e.printStackTrace() }
@@ -132,7 +137,6 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Panggil helper di file terpisah agar logika penarikan link terisolasi dengan rapi
         val primeSrcHelper = PrimeSrcHelper()
         return primeSrcHelper.invokePrimeSrc(
             data = data,
