@@ -36,14 +36,11 @@ class PrimeSrcHelper {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // Paksa User-Agent menjadi identitas Chrome Android tulen
-        val browserUa = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
-
-        // STEP 1: Jalankan WebViewResolver untuk memicu lolosnya tantangan awal Cloudflare
+        // STEP 1: Jalankan WebViewResolver dengan User-Agent ORGANIK (Biarkan null agar memakai bawaan sistem)
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                userAgent = browserUa,
+                userAgent = null, // KUNCI: Biarkan sistem menggunakan User-Agent asli perangkat agar lolos Cloudflare
                 useOkhttp = false
             )
             webViewResolver.resolveUsingWebView(url = embedUrl, referer = "$mainUrl/")
@@ -51,14 +48,17 @@ class PrimeSrcHelper {
             e.printStackTrace()
         }
 
-        // Beri jeda statis 1.5 detik agar sistem Android selesai menulis cookie ke storage
+        // Ambil User-Agent organik yang sukses digunakan oleh WebView tadi
+        val organicUa = com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent ?: USER_AGENT
+
+        // Ambil Cookies yang berhasil didapatkan oleh WebView
         delay(1500)
         android.webkit.CookieManager.getInstance().flush()
         val primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
 
-        // STEP 2: Headers — Ambil semua cookie yang dihasilkan WebView (apapun isinya, langsung gas)
+        // STEP 2: Headers — Satukan User-Agent Organik dan Cookie Emas dari WebView
         val headers = mapOf(
-            "User-Agent" to browserUa,
+            "User-Agent" to organicUa,
             "Referer" to embedUrl,
             "Accept" to "*/*",
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -70,9 +70,13 @@ class PrimeSrcHelper {
 
         var linksFound = 0
 
-        // STEP 3: Ambil daftar server & urai tautan menggunakan Extractor bawaan Cloudstream
+        // STEP 3: Ambil daftar server
         try {
             val response = app.get(serversUrl, headers = headers).text
+            
+            // LOG DEBUG: Untuk memantau isi asli respon server jika seandainya masih gagal
+            println("PrimeSrc API Response: $response")
+
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
             val servers = parsed.servers ?: return false
 
@@ -84,6 +88,10 @@ class PrimeSrcHelper {
 
                     val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
                     val decryptResponse = app.get(decryptUrl, headers = headers).text
+                    
+                    // LOG DEBUG: Memantau hasil enkripsi link embed asli
+                    println("PrimeSrc Decrypt Response: $decryptResponse")
+
                     val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
                     val realEmbedUrl = linkData.link ?: continue
                     val serverName = server.name ?: linkData.host ?: "Direct Link"
