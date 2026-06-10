@@ -132,7 +132,7 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Memanggil Helper di berkas terpisah agar loadLinks tetap bersih
+        // Panggil helper di file terpisah agar logika penarikan link terisolasi dengan rapi
         val primeSrcHelper = PrimeSrcHelper()
         return primeSrcHelper.invokePrimeSrc(
             data = data,
@@ -143,7 +143,7 @@ class RiveStreamProvider : MainAPI() {
         )
     }
 
-    // ===== DATA CLASSES =====
+    // ===== DATA CLASSES TMDB =====
 
     data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
