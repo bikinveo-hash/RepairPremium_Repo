@@ -159,15 +159,33 @@ class RiveStreamProvider : MainAPI() {
             "Referer" to embedUrl
         )
 
+        // === TIMED BREAKOUT INJECTION (MEMBERI WAKTU BAGI TURNSTILE UNTUK SETTLE) ===
+        // Memastikan WebView tidak langsung menutup diri, melainkan menunggu minimal 5.5 detik
+        // agar proses enkripsi telemetri /flow selesai dikirim sempurna ke server Cloudflare.
+        val timedBreakoutScript = """
+            var startTime = Date.now();
+            var checkExist = setInterval(function() {
+                var timeElapsed = Date.now() - startTime;
+                if ((window.hasInfo === true || window.sInfo) && timeElapsed > 5500) {
+                    clearInterval(checkExist);
+                    window.location.href = "https://stop-webview.com";
+                }
+            }, 200);
+            
+            // Pengaman darurat (fallback breakout) jika loading terlalu lama
+            setTimeout(function() {
+                window.location.href = "https://stop-webview.com";
+            }, 8000);
+        """.trimIndent()
+
         try {
-            // === WARING SESI COOKIE DENGAN WEBVIEW RESOLVER ===
-            // Cencegat api/v1/s karena request ini dipicu secara otomatis oleh halaman embed
             val interceptor = com.lagradost.cloudstream3.network.WebViewResolver(
-                interceptUrl = Regex("""primesrc\.me/api/v1/s\?.*"""),
-                useOkhttp = false
+                interceptUrl = Regex(".*stop-webview\\.com.*"),
+                useOkhttp = false,
+                script = timedBreakoutScript
             )
             
-            // Jalankan sekali saja untuk menanam Cookie clearance ke CookieJar internal CloudStream
+            // Eksekusi pemanasan cookie jar di dalam WebView headless
             interceptor.resolveUsingWebView(
                 url = embedUrl,
                 headers = mapOf("Referer" to "$mainUrl/")
@@ -179,7 +197,7 @@ class RiveStreamProvider : MainAPI() {
         var linksFound = 0
 
         try {
-            // Sisa alur dijalankan via OkHttp biasa menggunakan cookie yang sudah matang dari WebView
+            // Sisa request dieksekusi dengan OkHttp biasa menggunakan cookie clearance yang sudah matang
             val response = app.get(serversUrl, headers = baseHeaders).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
             val servers = parsed.servers
@@ -189,11 +207,11 @@ class RiveStreamProvider : MainAPI() {
                     val internalKey = server.key ?: continue
 
                     try {
-                        // === AKTIVASI SESI ===
+                        // === HANDSHAKE SPIDERMAN ===
                         val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
                         app.get(spidermanUrl, headers = baseHeaders)
 
-                        // === DEKRIPSI LINK LANGSUNG (TANPA PARAMETER TOKEN) ===
+                        // === DEKRIPSI LINK REVOLUSIONER (Bypass Tanpa Token Dinamis) ===
                         val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
 
                         val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
@@ -201,7 +219,6 @@ class RiveStreamProvider : MainAPI() {
                         val realEmbedUrl = linkData.link ?: continue
                         val serverName = server.name ?: linkData.host ?: "Direct Link"
 
-                        // Kirim link menggunakan arsitektur modern bebas deprecated
                         callback(newExtractorLink(
                             source = this.name,
                             name = serverName,
