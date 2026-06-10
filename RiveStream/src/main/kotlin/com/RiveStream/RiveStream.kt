@@ -147,10 +147,12 @@ class RiveStreamProvider : MainAPI() {
         val embedUrl = if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
                        else "https://primesrc.me/embed/tv?tmdb=$cleanId"
 
+        // REPLIKA HEADERS TOTAL (Disamakan penuh dengan struktur rapi dari pengetesan BINGO V4)
         val baseHeaders = mapOf(
             "Host" to "primesrc.me",
-            "Pragma" to "no-cache",
-            "Cache-Control" to "no-cache",
+            "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+            "sec-ch-ua-mobile" to "?1",
+            "sec-ch-ua-platform" to "\"Android\"",
             "Accept" to "*/*",
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
@@ -159,23 +161,22 @@ class RiveStreamProvider : MainAPI() {
             "Referer" to embedUrl
         )
 
-        // === TIMED BREAKOUT INJECTION (MEMBERI WAKTU BAGI TURNSTILE UNTUK SETTLE) ===
-        // Memastikan WebView tidak langsung menutup diri, melainkan menunggu minimal 5.5 detik
-        // agar proses enkripsi telemetri /flow selesai dikirim sempurna ke server Cloudflare.
+        // === TIMED BREAKOUT INJECTION (FORMULA BINGO) ===
+        // Memaksa WebView background menahan diri selama 6.2 detik agar Cloudflare 
+        // menyelesaikan kalkulasi /flow telemetri dan mematangkan kepingan cookie cf_clearance.
         val timedBreakoutScript = """
             var startTime = Date.now();
             var checkExist = setInterval(function() {
                 var timeElapsed = Date.now() - startTime;
-                if ((window.hasInfo === true || window.sInfo) && timeElapsed > 5500) {
+                if ((window.hasInfo === true || window.sInfo) && timeElapsed > 6200) {
                     clearInterval(checkExist);
                     window.location.href = "https://stop-webview.com";
                 }
             }, 200);
             
-            // Pengaman darurat (fallback breakout) jika loading terlalu lama
             setTimeout(function() {
                 window.location.href = "https://stop-webview.com";
-            }, 8000);
+            }, 9500);
         """.trimIndent()
 
         try {
@@ -185,7 +186,7 @@ class RiveStreamProvider : MainAPI() {
                 script = timedBreakoutScript
             )
             
-            // Eksekusi pemanasan cookie jar di dalam WebView headless
+            // Perintahkan WebView memproses jabat tangan keamanan
             interceptor.resolveUsingWebView(
                 url = embedUrl,
                 headers = mapOf("Referer" to "$mainUrl/")
@@ -197,7 +198,7 @@ class RiveStreamProvider : MainAPI() {
         var linksFound = 0
 
         try {
-            // Sisa request dieksekusi dengan OkHttp biasa menggunakan cookie clearance yang sudah matang
+            // Sisa penembakan dilanjutkan OkHttp menggunakan kepingan cookie matang dari WebView
             val response = app.get(serversUrl, headers = baseHeaders).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
             val servers = parsed.servers
@@ -207,11 +208,11 @@ class RiveStreamProvider : MainAPI() {
                     val internalKey = server.key ?: continue
 
                     try {
-                        // === HANDSHAKE SPIDERMAN ===
+                        // === AKTIVASI SESI ===
                         val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
                         app.get(spidermanUrl, headers = baseHeaders)
 
-                        // === DEKRIPSI LINK REVOLUSIONER (Bypass Tanpa Token Dinamis) ===
+                        // === DEKRIPSI GERBANG AKHIR (Formula Sukses Tanpa Token) ===
                         val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
 
                         val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
@@ -219,6 +220,7 @@ class RiveStreamProvider : MainAPI() {
                         val realEmbedUrl = linkData.link ?: continue
                         val serverName = server.name ?: linkData.host ?: "Direct Link"
 
+                        // Kirim link menggunakan extractor builder modern bebas dari constructor deprecated
                         callback(newExtractorLink(
                             source = this.name,
                             name = serverName,
