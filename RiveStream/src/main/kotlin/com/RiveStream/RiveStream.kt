@@ -144,6 +144,9 @@ class RiveStreamProvider : MainAPI() {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
+        val embedUrl = if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
+                       else "https://primesrc.me/embed/tv?tmdb=$cleanId"
+
         val baseHeaders = mapOf(
             "Host" to "primesrc.me",
             "Pragma" to "no-cache",
@@ -153,16 +156,29 @@ class RiveStreamProvider : MainAPI() {
             "Sec-Fetch-Mode" to "cors",
             "Sec-Fetch-Dest" to "empty",
             "User-Agent" to USER_AGENT,
-            "Referer" to if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
-                         else "https://primesrc.me/embed/tv?tmdb=$cleanId"
+            "Referer" to embedUrl
         )
 
-        // === AMBIL TOKEN DARI HALAMAN EMBED ===
-        val embedUrl = if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
-                       else "https://primesrc.me/embed/tv?tmdb=$cleanId"
-        val embedHtml = app.get(embedUrl, headers = baseHeaders).text
-        val tokenRegex = Regex("""token["']\s*:\s*["']([^"']+)["']""")
-        val token = tokenRegex.find(embedHtml)?.groupValues?.get(1) ?: ""
+        // === AMBIL TOKEN SECARA DINAMIS VIA WEBVIEW RESOLVER ===
+        val interceptor = com.lagradost.cloudstream3.network.WebViewResolver(
+            interceptUrl = Regex("""primesrc\.me/api/v1/l\?key=.*"""),
+            useOkhttp = false
+        )
+
+        var token = ""
+        try {
+            val (finalRequest, collectedRequests) = interceptor.resolveUsingWebView(
+                url = embedUrl,
+                headers = mapOf("Referer" to "$mainUrl/")
+            )
+            val interceptedRequest = finalRequest ?: collectedRequests.firstOrNull()
+            val validDecryptUrl = interceptedRequest?.url?.toString() ?: ""
+            if (validDecryptUrl.contains("token=")) {
+                token = validDecryptUrl.substringAfter("token=").substringBefore("&")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         var linksFound = 0
 
@@ -184,7 +200,7 @@ class RiveStreamProvider : MainAPI() {
                         val decryptUrl = if (token.isNotEmpty())
                             "https://primesrc.me/api/v1/l?key=$internalKey&token=$token"
                         else
-                            "https://primesrc.me/api/v1/l?key=$internalKey" // fallback (mungkin gagal)
+                            "https://primesrc.me/api/v1/l?key=$internalKey"
 
                         val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
                         val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
@@ -212,7 +228,6 @@ class RiveStreamProvider : MainAPI() {
         return linksFound > 0
     }
 
-    // Data classes tetap sama (Tmdb*, PrimeSrc*)
     data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
     )
