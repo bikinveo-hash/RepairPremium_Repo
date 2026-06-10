@@ -1,6 +1,5 @@
 package com.RiveStream
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
@@ -18,6 +17,7 @@ class PrimeSrcHelper {
         val isMovie = !cleanData.contains("?s=")
         val cleanId = cleanData.substringAfter("/").substringBefore("?")
 
+        // Amankan rute embed dapur hulu asli agar bebas dari error 404
         val embedUrl = if (isMovie) {
             "https://primesrc.me/embed/movie?tmdb=$cleanId"
         } else {
@@ -26,25 +26,30 @@ class PrimeSrcHelper {
             "https://primesrc.me/embed/tv?tmdb=$cleanId&season=$season&episode=$episode"
         }
 
-        // RADAR INTERCEPTION: Menangkap momen matang saat m3u8 dari cdn 1shows mulai dialirkan
+        // RADAR INTERCEPTION: Menangkap momen m3u8 matang dari cdn utama atau mirror alternatif
         val playerRegex = Regex(".*(1shows|cdn\\.1shows\\.app|streamtape|voe|streamwish|filemoon|dood|mixdrop).*")
 
-        // SKRIP PENYAMARAN: Menyabotase seluruh detektor internal milik library 'disable-devtool'
+        // =========================================================================
+        // JAVASCRIPT BYPASS & AUTOMATION SAKTI (GABUNGAN CORE ENGINE)
+        // =========================================================================
         val bypassScript = """
             (function() {
-                // 1. Jinakkan Sensor Ukuran (Detektor Size) dengan memalsukan dimensi viewport headless
-                Object.defineProperty(window, 'innerWidth', { get: function() { return window.outerWidth; } });
-                Object.defineProperty(window, 'innerHeight', { get: function() { return window.outerHeight; } });
-                
-                // 2. Kunci detektor devicePixelRatio agar perhitungan rasio selalu netral
-                if (window.screen) {
-                    Object.defineProperty(window.screen, 'deviceXDPI', { get: function() { return undefined; } });
+                // 1. Jinakkan Sensor Ukuran 'disable-devtool' dengan memalsukan dimensi viewport
+                Object.defineProperty(window, 'innerWidth', { get: function() { return 1920; } });
+                Object.defineProperty(window, 'innerHeight', { get: function() { return 1080; } });
+                Object.defineProperty(window, 'outerWidth', { get: function() { return 1920; } });
+                Object.defineProperty(window, 'outerHeight', { get: function() { return 1080; } });
+                if (document.documentElement) {
+                    Object.defineProperty(document.documentElement, 'clientWidth', { get: function() { return 1920; } });
+                    Object.defineProperty(document.documentElement, 'clientHeight', { get: function() { return 1080; } });
                 }
 
-                // 3. Kebalkan fungsi window.close agar WebView tidak bisa dimatikan paksa oleh skrip hulu
-                window.close = function() { console.log('Bypassed anti-devtool window.close()'); };
+                // 2. Samarkan identitas Headless Browser agar Cloudflare Turnstile Auto-Verify
+                Object.defineProperty(navigator, 'webdriver', { get: function() { return undefined; } });
+                Object.defineProperty(navigator, 'languages', { get: function() { return ['id-ID', 'id', 'en-US', 'en']; } });
 
-                // 4. Sabotase putaran interval deteksi (Memaksa loop bawaan 500ms miliknya melambat total)
+                // 3. Kebalkan window.close dan lambatkan interval pemblokiran sensor
+                window.close = function() { console.log('Bypassed anti-devtool window.close()'); };
                 var originalSetInterval = window.setInterval;
                 window.setInterval = function(fn, delay) {
                     if (delay === 500 || delay === 400 || delay === 600) {
@@ -52,21 +57,30 @@ class PrimeSrcHelper {
                     }
                     return originalSetInterval(fn, delay);
                 };
+
+                // 4. AUTOMATED CLICKER: Simulasikan klik pada poster splash screen secara instan
+                //    agar fungsi jabat tangan 'spiderman' dan 'getLink' terpicu otomatis!
+                var clickTracker = originalSetInterval(function() {
+                    var splashButton = document.querySelector('.splash') || document.querySelector('[class*="splash"]');
+                    if (splashButton) {
+                        splashButton.click();
+                        clearInterval(clickTracker); // Hentikan tracker jika sudah sukses diklik
+                    }
+                }, 150);
             })();
         """.trimIndent()
 
         var linksFound = 0
 
         try {
-            // Gunakan User-Agent asli bawaan Chromium HP agar Turnstile Cloudflare tidak curiga
+            // Gunakan User-Agent murni sistem agar TLS Fingerprint sinkron di gerbang Cloudflare
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = playerRegex,
                 userAgent = null, 
                 useOkhttp = false,
-                script = bypassScript
+                script = bypassScript // Eksekusi ramuan skrip bypass otomatis kita
             )
 
-            // KUNCI PERBAIKAN: Ubah target url dari 'data' menjadi 'embedUrl' agar bebas dari 404!
             val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
                 url = embedUrl, 
                 referer = "$mainUrl/"
@@ -75,7 +89,7 @@ class PrimeSrcHelper {
             val realEmbedUrl = interceptedRequest?.url?.toString()
 
             if (!realEmbedUrl.isNullOrBlank()) {
-                // Jika berkas m3u8 dari server utama cdn 1shows berhasil terjaring radar pencegatan
+                // Jika berkas m3u8 dari server utama cdn 1shows berhasil terjaring radar
                 if (realEmbedUrl.contains("1shows")) {
                     callback(newExtractorLink(
                         source = providerName,
@@ -91,7 +105,7 @@ class PrimeSrcHelper {
                     })
                     linksFound++
                 } else {
-                    // Eksekusi cadangan jika hulu mengalihkan player ke host alternatif (Voe, Filemoon, dll.)
+                    // Skenario cadangan jikalau dialirkan ke host konvensional (Filemoon, Voe, dll.)
                     val isExtractorFound = loadExtractor(
                         url = realEmbedUrl,
                         referer = embedUrl,
@@ -118,18 +132,3 @@ class PrimeSrcHelper {
         return linksFound > 0
     }
 }
-
-// Data Class pendukung parsing model data
-data class PrimeSrcResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
-)
-
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?
-)
-
-data class PrimeSrcLinkResponse(
-    @JsonProperty("link") val link: String?,
-    @JsonProperty("host") val host: String?
-)
