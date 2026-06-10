@@ -1,7 +1,10 @@
 package com.RiveStream
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import android.util.Base64
 
 class PrimeSrcHelper {
 
@@ -17,84 +20,52 @@ class PrimeSrcHelper {
         val isMovie = !cleanData.contains("?s=")
         val cleanId = cleanData.substringAfter("/").substringBefore("?")
 
-        // Amankan rute embed dapur hulu asli agar bebas dari error 404
-        val embedUrl = if (isMovie) {
-            "https://primesrc.me/embed/movie?tmdb=$cleanId"
-        } else {
+        // 1. Tentukan jenis requestID berdasarkan kategori konten
+        val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
+
+        // 2. Buat parameter secretKey dinamis: "0-" + ID lalu di-encode ke Base64
+        val rawSecret = "0-$cleanId"
+        val secretKey = Base64.encodeToString(rawSecret.toByteArray(), Base64.NO_WRAP)
+
+        // 3. Susun URL API BackendFetch internal
+        var apiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=primevids&secretKey=$secretKey&proxyMode=undefined"
+        
+        // Jikalau konten berupa Serial TV, tambahkan parameter season & episode bawaan
+        if (!isMovie) {
             val season = cleanData.substringAfter("?s=").substringBefore("&")
             val episode = cleanData.substringAfter("&e=")
-            "https://primesrc.me/embed/tv?tmdb=$cleanId&season=$season&episode=$episode"
+            apiUrl += "&season=$season&episode=$episode"
         }
 
-        // RADAR INTERCEPTION: Menangkap momen m3u8 matang dari cdn utama atau mirror alternatif
-        val playerRegex = Regex(".*(1shows|cdn\\.1shows\\.app|streamtape|voe|streamwish|filemoon|dood|mixdrop).*")
-
-        // =========================================================================
-        // JAVASCRIPT BYPASS & AUTOMATION SAKTI (GABUNGAN CORE ENGINE)
-        // =========================================================================
-        val bypassScript = """
-            (function() {
-                // 1. Jinakkan Sensor Ukuran 'disable-devtool' dengan memalsukan dimensi viewport
-                Object.defineProperty(window, 'innerWidth', { get: function() { return 1920; } });
-                Object.defineProperty(window, 'innerHeight', { get: function() { return 1080; } });
-                Object.defineProperty(window, 'outerWidth', { get: function() { return 1920; } });
-                Object.defineProperty(window, 'outerHeight', { get: function() { return 1080; } });
-                if (document.documentElement) {
-                    Object.defineProperty(document.documentElement, 'clientWidth', { get: function() { return 1920; } });
-                    Object.defineProperty(document.documentElement, 'clientHeight', { get: function() { return 1080; } });
-                }
-
-                // 2. Samarkan identitas Headless Browser agar Cloudflare Turnstile Auto-Verify
-                Object.defineProperty(navigator, 'webdriver', { get: function() { return undefined; } });
-                Object.defineProperty(navigator, 'languages', { get: function() { return ['id-ID', 'id', 'en-US', 'en']; } });
-
-                // 3. Kebalkan window.close dan lambatkan interval pemblokiran sensor
-                window.close = function() { console.log('Bypassed anti-devtool window.close()'); };
-                var originalSetInterval = window.setInterval;
-                window.setInterval = function(fn, delay) {
-                    if (delay === 500 || delay === 400 || delay === 600) {
-                        return originalSetInterval(fn, 9999999);
-                    }
-                    return originalSetInterval(fn, delay);
-                };
-
-                // 4. AUTOMATED CLICKER: Simulasikan klik pada poster splash screen secara instan
-                //    agar fungsi jabat tangan 'spiderman' dan 'getLink' terpicu otomatis!
-                var clickTracker = originalSetInterval(function() {
-                    var splashButton = document.querySelector('.splash') || document.querySelector('[class*="splash"]');
-                    if (splashButton) {
-                        splashButton.click();
-                        clearInterval(clickTracker); // Hentikan tracker jika sudah sukses diklik
-                    }
-                }, 150);
-            })();
-        """.trimIndent()
+        // 4. Pasang headers paspor agar server mengenali request berasal dari browser resmi
+        val headers = mapOf(
+            "Authority" to "www.rivestream.app",
+            "Accept" to "application/json",
+            "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        )
 
         var linksFound = 0
 
         try {
-            // Gunakan User-Agent murni sistem agar TLS Fingerprint sinkron di gerbang Cloudflare
-            val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                interceptUrl = playerRegex,
-                userAgent = null, 
-                useOkhttp = false,
-                script = bypassScript // Eksekusi ramuan skrip bypass otomatis kita
-            )
+            // Tembak API secara langsung tanpa ampun (0,2 detik selesai!)
+            val response = app.get(apiUrl, headers = headers).text
+            val parsedData = tryParseJson<BackendFetchResponse>(response)
+            val sources = parsedData?.data?.sources ?: return false
 
-            val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
-                url = embedUrl, 
-                referer = "$mainUrl/"
-            )
+            for (source in sources) {
+                val streamUrl = source.url ?: continue
+                val qualityName = source.quality ?: "Auto"
+                val sourceLabel = source.source ?: "RiveStream"
 
-            val realEmbedUrl = interceptedRequest?.url?.toString()
+                // Tentukan nama tampilan di dalam menu kualitas pemutar media
+                val displayName = "$sourceLabel - ${qualityName.uppercase()}"
 
-            if (!realEmbedUrl.isNullOrBlank()) {
-                // Jika berkas m3u8 dari server utama cdn 1shows berhasil terjaring radar
-                if (realEmbedUrl.contains("1shows")) {
+                if (streamUrl.contains(".m3u8") || source.format == "hls") {
                     callback(newExtractorLink(
                         source = providerName,
-                        name = "RiveStream CDN (HLS Multi-Quality)",
-                        url = realEmbedUrl,
+                        name = displayName,
+                        url = streamUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.referer = "https://www.rivestream.app/"
@@ -105,21 +76,20 @@ class PrimeSrcHelper {
                     })
                     linksFound++
                 } else {
-                    // Skenario cadangan jikalau dialirkan ke host konvensional (Filemoon, Voe, dll.)
+                    // Fallback jika kedepannya server memberikan direct MP4 link
                     val isExtractorFound = loadExtractor(
-                        url = realEmbedUrl,
-                        referer = embedUrl,
+                        url = streamUrl,
+                        referer = "$mainUrl/",
                         subtitleCallback = subtitleCallback,
                         callback = callback
                     )
-
                     if (!isExtractorFound) {
                         callback(newExtractorLink(
                             source = providerName,
-                            name = "Mirror Alternate",
-                            url = realEmbedUrl
+                            name = displayName,
+                            url = streamUrl
                         ) {
-                            this.referer = embedUrl
+                            this.referer = "$mainUrl/"
                         })
                     }
                     linksFound++
@@ -132,3 +102,22 @@ class PrimeSrcHelper {
         return linksFound > 0
     }
 }
+
+// =========================================================================
+// MODEL DATA CUSTOM UNTUK BACKENDFETCH API JSON
+// =========================================================================
+
+data class BackendFetchResponse(
+    @JsonProperty("data") val data: BackendData?
+)
+
+data class BackendData(
+    @JsonProperty("sources") val sources: List<BackendSource>?
+)
+
+data class BackendSource(
+    @JsonProperty("quality") val quality: String?,
+    @JsonProperty("url") val url: String?,
+    @JsonProperty("source") val source: String?,
+    @JsonProperty("format") val format: String?
+)
