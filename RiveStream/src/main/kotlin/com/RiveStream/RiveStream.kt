@@ -136,6 +136,14 @@ class RiveStreamProvider : MainAPI() {
         val isMovie = !cleanData.contains("?s=")
         val cleanId = cleanData.substringAfter("/").substringBefore("?")
 
+        val embedUrl = if (isMovie) {
+            "https://primesrc.me/embed/movie?tmdb=$cleanId"
+        } else {
+            val season = cleanData.substringAfter("?s=").substringBefore("&")
+            val episode = cleanData.substringAfter("&e=")
+            "https://primesrc.me/embed/tv?tmdb=$cleanId&season=$season&episode=$episode"
+        }
+
         val serversUrl = if (isMovie) {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
         } else {
@@ -144,92 +152,81 @@ class RiveStreamProvider : MainAPI() {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        val embedUrl = if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
-                       else "https://primesrc.me/embed/tv?tmdb=$cleanId"
+        // ===================================================================
+        // STEP 1: GUNAKAN WEBVIEWRESOLVER UNTUK INTERSEP API CALL NYATA
+        // Tujuan: Memaksa WebView membuka embedUrl terlebih dahulu agar
+        // cf_clearance cookie ter-set dengan sah di session OkHttp.
+        // useOkhttp = true → cookie otomatis di-share ke OkHttp session.
+        // ===================================================================
+        try {
+            val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
+                // Intersep URL API nyata, bukan URL palsu
+                interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
+                useOkhttp = true
+            )
 
-        // REPLIKA HEADERS TOTAL (Disamakan penuh dengan struktur rapi dari pengetesan BINGO V4)
-        val baseHeaders = mapOf(
-            "Host" to "primesrc.me",
+            webViewResolver.resolveUsingWebView(
+                url = embedUrl,
+                referer = "$mainUrl/"
+            )
+        } catch (e: Exception) {
+            // Lanjutkan meskipun WebView gagal; OkHttp tetap dicoba
+            e.printStackTrace()
+        }
+
+        // ===================================================================
+        // STEP 2: SIAPKAN HEADERS — TANPA "Host" MANUAL
+        // OkHttp akan set Host secara otomatis dan benar.
+        // Menambahkan Host manual bisa menyebabkan konflik jika ada redirect.
+        // ===================================================================
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to embedUrl,
+            "Origin" to "https://primesrc.me",
+            "Accept" to "*/*",
             "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
             "sec-ch-ua-mobile" to "?1",
             "sec-ch-ua-platform" to "\"Android\"",
-            "Accept" to "*/*",
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Dest" to "empty",
-            "User-Agent" to USER_AGENT,
-            "Referer" to embedUrl
+            "Sec-Fetch-Dest" to "empty"
         )
-
-        // === TIMED BREAKOUT INJECTION (FORMULA BINGO) ===
-        // Memaksa WebView background menahan diri selama 6.2 detik agar Cloudflare 
-        // menyelesaikan kalkulasi /flow telemetri dan mematangkan kepingan cookie cf_clearance.
-        val timedBreakoutScript = """
-            var startTime = Date.now();
-            var checkExist = setInterval(function() {
-                var timeElapsed = Date.now() - startTime;
-                if ((window.hasInfo === true || window.sInfo) && timeElapsed > 6200) {
-                    clearInterval(checkExist);
-                    window.location.href = "https://stop-webview.com";
-                }
-            }, 200);
-            
-            setTimeout(function() {
-                window.location.href = "https://stop-webview.com";
-            }, 9500);
-        """.trimIndent()
-
-        try {
-            val interceptor = com.lagradost.cloudstream3.network.WebViewResolver(
-                interceptUrl = Regex(".*stop-webview\\.com.*"),
-                useOkhttp = false,
-                script = timedBreakoutScript
-            )
-            
-            // Perintahkan WebView memproses jabat tangan keamanan
-            interceptor.resolveUsingWebView(
-                url = embedUrl,
-                headers = mapOf("Referer" to "$mainUrl/")
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
 
         var linksFound = 0
 
         try {
-            // Sisa penembakan dilanjutkan OkHttp menggunakan kepingan cookie matang dari WebView
-            val response = app.get(serversUrl, headers = baseHeaders).text
+            // ===================================================================
+            // STEP 3: TEMBAK API SERVERS — OkHttp sudah punya cookie matang
+            // ===================================================================
+            val response = app.get(serversUrl, headers = headers).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
-            val servers = parsed.servers
+            val servers = parsed.servers ?: return false
 
-            if (servers != null) {
-                for (server in servers) {
-                    val internalKey = server.key ?: continue
+            for (server in servers) {
+                val internalKey = server.key ?: continue
 
-                    try {
-                        // === AKTIVASI SESI ===
-                        val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
-                        app.get(spidermanUrl, headers = baseHeaders)
+                try {
+                    // AKTIVASI SESI
+                    val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
+                    app.get(spidermanUrl, headers = headers)
 
-                        // === DEKRIPSI GERBANG AKHIR (Formula Sukses Tanpa Token) ===
-                        val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
+                    // DEKRIPSI GERBANG AKHIR
+                    val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
+                    val decryptResponse = app.get(decryptUrl, headers = headers).text
+                    val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
+                    val realEmbedUrl = linkData.link ?: continue
+                    val serverName = server.name ?: linkData.host ?: "Direct Link"
 
-                        val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
-                        val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
-                        val realEmbedUrl = linkData.link ?: continue
-                        val serverName = server.name ?: linkData.host ?: "Direct Link"
-
-                        // Kirim link menggunakan extractor builder modern bebas dari constructor deprecated
-                        callback(newExtractorLink(
-                            source = this.name,
-                            name = serverName,
-                            url = realEmbedUrl
-                        ) {
-                            this.referer = embedUrl
-                        })
-                        linksFound++
-                    } catch (e: Exception) { e.printStackTrace() }
+                    callback(newExtractorLink(
+                        source = this.name,
+                        name = serverName,
+                        url = realEmbedUrl
+                    ) {
+                        this.referer = embedUrl
+                    })
+                    linksFound++
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         } catch (e: Exception) {
@@ -239,6 +236,8 @@ class RiveStreamProvider : MainAPI() {
 
         return linksFound > 0
     }
+
+    // ===== DATA CLASSES =====
 
     data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
