@@ -159,23 +159,19 @@ class RiveStreamProvider : MainAPI() {
             "Referer" to embedUrl
         )
 
-        // === AMBIL TOKEN SECARA DINAMIS VIA WEBVIEW RESOLVER ===
-        val interceptor = com.lagradost.cloudstream3.network.WebViewResolver(
-            interceptUrl = Regex("""primesrc\.me/api/v1/l\?key=.*"""),
-            useOkhttp = false
-        )
-
-        var token = ""
         try {
-            val (finalRequest, collectedRequests) = interceptor.resolveUsingWebView(
+            // === WARING SESI COOKIE DENGAN WEBVIEW RESOLVER ===
+            // Cencegat api/v1/s karena request ini dipicu secara otomatis oleh halaman embed
+            val interceptor = com.lagradost.cloudstream3.network.WebViewResolver(
+                interceptUrl = Regex("""primesrc\.me/api/v1/s\?.*"""),
+                useOkhttp = false
+            )
+            
+            // Jalankan sekali saja untuk menanam Cookie clearance ke CookieJar internal CloudStream
+            interceptor.resolveUsingWebView(
                 url = embedUrl,
                 headers = mapOf("Referer" to "$mainUrl/")
             )
-            val interceptedRequest = finalRequest ?: collectedRequests.firstOrNull()
-            val validDecryptUrl = interceptedRequest?.url?.toString() ?: ""
-            if (validDecryptUrl.contains("token=")) {
-                token = validDecryptUrl.substringAfter("token=").substringBefore("&")
-            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -183,6 +179,7 @@ class RiveStreamProvider : MainAPI() {
         var linksFound = 0
 
         try {
+            // Sisa alur dijalankan via OkHttp biasa menggunakan cookie yang sudah matang dari WebView
             val response = app.get(serversUrl, headers = baseHeaders).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
             val servers = parsed.servers
@@ -196,25 +193,21 @@ class RiveStreamProvider : MainAPI() {
                         val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
                         app.get(spidermanUrl, headers = baseHeaders)
 
-                        // === DEKRIPSI DENGAN TOKEN ===
-                        val decryptUrl = if (token.isNotEmpty())
-                            "https://primesrc.me/api/v1/l?key=$internalKey&token=$token"
-                        else
-                            "https://primesrc.me/api/v1/l?key=$internalKey"
+                        // === DEKRIPSI LINK LANGSUNG (TANPA PARAMETER TOKEN) ===
+                        val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
 
                         val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
                         val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
                         val realEmbedUrl = linkData.link ?: continue
+                        val serverName = server.name ?: linkData.host ?: "Direct Link"
 
-                        // Langsung kirim link mentah, biarkan CloudStream mengekstrak
+                        // Kirim link menggunakan arsitektur modern bebas deprecated
                         callback(newExtractorLink(
-                            source = server.name ?: "RiveStream",
-                            name = server.name ?: "Direct Link",
-                            url = realEmbedUrl,
-                            type = INFER_TYPE
+                            source = this.name,
+                            name = serverName,
+                            url = realEmbedUrl
                         ) {
                             this.referer = embedUrl
-                            this.quality = Qualities.Unknown.value
                         })
                         linksFound++
                     } catch (e: Exception) { e.printStackTrace() }
