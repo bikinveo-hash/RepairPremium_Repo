@@ -132,105 +132,15 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val cleanData = data.replace("$mainUrl/", "")
-        val isMovie = !cleanData.contains("?s=")
-        val cleanId = cleanData.substringAfter("/").substringBefore("?")
-
-        val embedUrl = if (isMovie) {
-            "https://primesrc.me/embed/movie?tmdb=$cleanId"
-        } else {
-            val season = cleanData.substringAfter("?s=").substringBefore("&")
-            val episode = cleanData.substringAfter("&e=")
-            "https://primesrc.me/embed/tv?tmdb=$cleanId&season=$season&episode=$episode"
-        }
-
-        val serversUrl = if (isMovie) {
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
-        } else {
-            val season = cleanData.substringAfter("?s=").substringBefore("&")
-            val episode = cleanData.substringAfter("&e=")
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
-        }
-
-        // ================================================================
-        // STEP 1: Biarkan WebView lewati Cloudflare challenge DULU
-        // useOkhttp = FALSE agar WebView tidak bypass ke OkHttp sebelum
-        // cf_clearance terbentuk. Setelah cookie ada, baru OkHttp bisa pakai.
-        // ================================================================
-        try {
-            val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                useOkhttp = false  // <-- KUNCI: false untuk Cloudflare!
-            )
-
-            // Tangkap hasil intercept
-            val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
-                url = embedUrl,
-                referer = "$mainUrl/"
-            )
-
-            // Jika berhasil intercept, gunakan headers dari request yang di-intercept
-            if (interceptedRequest != null) {
-                // Cookie sudah otomatis ada di session setelah WebView sukses
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // ================================================================
-        // STEP 2: Headers — pastikan User-Agent sama dengan yang dipakai WebView
-        // ================================================================
-        val headers = mapOf(
-            "User-Agent" to (com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent 
-                ?: USER_AGENT),
-            "Referer" to embedUrl,
-            "Origin" to "https://primesrc.me",
-            "Accept" to "*/*",
-            "Sec-Fetch-Site" to "same-origin",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Dest" to "empty"
+        // Memanggil Helper di berkas terpisah agar loadLinks tetap bersih
+        val primeSrcHelper = PrimeSrcHelper()
+        return primeSrcHelper.invokePrimeSrc(
+            data = data,
+            mainUrl = mainUrl,
+            providerName = this.name,
+            subtitleCallback = subtitleCallback,
+            callback = callback
         )
-
-        var linksFound = 0
-
-        try {
-            // ================================================================
-            // STEP 3: Tembak API — cookie cf_clearance sudah matang dari WebView
-            // ================================================================
-            val response = app.get(serversUrl, headers = headers).text
-            val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
-            val servers = parsed.servers ?: return false
-
-            for (server in servers) {
-                val internalKey = server.key ?: continue
-                try {
-                    val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
-                    app.get(spidermanUrl, headers = headers)
-
-                    val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
-                    val decryptResponse = app.get(decryptUrl, headers = headers).text
-                    val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
-                    val realEmbedUrl = linkData.link ?: continue
-                    val serverName = server.name ?: linkData.host ?: "Direct Link"
-
-                    callback(newExtractorLink(
-                        source = this.name,
-                        name = serverName,
-                        url = realEmbedUrl
-                    ) {
-                        this.referer = embedUrl
-                    })
-                    linksFound++
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return false
-        }
-
-        return linksFound > 0
     }
 
     // ===== DATA CLASSES =====
@@ -276,17 +186,3 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
 }
-
-data class PrimeSrcResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
-)
-
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?
-)
-
-data class PrimeSrcLinkResponse(
-    @JsonProperty("link") val link: String?,
-    @JsonProperty("host") val host: String?
-)
