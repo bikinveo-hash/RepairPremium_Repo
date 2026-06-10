@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.mvvm.logError
 import java.net.URLEncoder
 
 class RiveStreamProvider : MainAPI() {
@@ -17,216 +18,42 @@ class RiveStreamProvider : MainAPI() {
         private const val TMDB_API_KEY = "d64117f26031a428449f102ced3aba73"
         private const val TMDB_BASE = "https://api.themoviedb.org/3"
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
+        private const val GATEWAY_BASE = "https://primesrc.me"
+
+        private fun buildUrl(path: String, useProxy: Boolean = true): String {
+            val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
+            return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
+        }
     }
 
-    // Biar user bisa isi cf_clearance di Settings → Credentials
-    override var storedCredentials: String? = null
-    override var canBeOverridden: Boolean = true
-
-    override val mainPage = mainPageOf(
-        Pair("movie/now_playing", "Latest Movies"),
-        Pair("tv/airing_today", "Latest TV Shows"),
-        Pair("trending/movie/week", "Trending Movies"),
-        Pair("trending/tv/week", "Trending TV Shows")
+    // -----------------------------------------------------------------
+    // STRUKTUR DATA CLASS UNTUK MODEL API PRIMESRC (ANTI-CRASH LOGIC)
+    // -----------------------------------------------------------------
+    data class PrimeServerResponse(
+        @JsonProperty("servers") val servers: List<PrimeServerItem>?,
+        @JsonProperty("info") val info: PrimeMediaInfo?
     )
 
-    private fun buildUrl(path: String, useProxy: Boolean = true): String {
-        val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
-        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
-    }
+    data class PrimeServerItem(
+        @JsonProperty("name") val name: String,
+        @JsonProperty("key") val key: String,
+        @JsonProperty("quality") val quality: String?,
+        @JsonProperty("file_size") val fileSize: String?
+    )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val path = "${request.data}?page=$page"
-        val url = buildUrl(path)
-        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
+    data class PrimeMediaInfo(
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("tmdb_id") val tmdbId: Int?
+    )
 
-        val homeItems = parsed.results?.mapNotNull { item ->
-            val isMovie = item.title != null || request.data.contains("movie")
-            val idAndType = if (isMovie) "movie/${item.id}" else "tv/${item.id}"
-            val title = item.title ?: item.name ?: return@mapNotNull null
-            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+    data class PrimeLinkResponse(
+        @JsonProperty("link") val link: String?
+    )
 
-            if (isMovie) {
-                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
-            } else {
-                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
-            }
-        } ?: emptyList()
-
-        return newHomePageResponse(request.name, homeItems, hasNext = true)
-    }
-
-    override suspend fun search(query: String): List<SearchResponse>? {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val url = buildUrl("search/multi?query=$encodedQuery")
-        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
-
-        return parsed.results?.mapNotNull { item ->
-            val title = item.title ?: item.name ?: return@mapNotNull null
-            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-            val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
-            val idAndType = "$mediaType/${item.id}"
-
-            if (mediaType == "movie") {
-                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
-            } else if (mediaType == "tv") {
-                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
-            } else null
-        }
-    }
-
-    override suspend fun load(url: String): LoadResponse? {
-        val cleanPath = url.replace("$mainUrl/", "")
-        val type = cleanPath.substringBefore("/")
-        val id = cleanPath.substringAfter("/")
-        val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
-        val response = app.get(detailsUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-        val item = tryParseJson<TmdbDetailResult>(response) ?: return null
-
-        val title = item.title ?: item.name ?: return null
-        val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-        val overview = item.overview
-        val genres = item.genres?.mapNotNull { it.name }
-
-        if (type == "movie") {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
-                this.plot = overview
-                this.year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
-                this.tags = genres
-                item.voteAverage?.let { this.score = Score.from10(it) }
-            }
-        } else {
-            val episodes = Coroutines.threadSafeListOf<Episode>()
-            item.seasons?.amap { season ->
-                val seasonNum = season.seasonNumber ?: return@amap
-                if (seasonNum == 0) return@amap
-                try {
-                    val seasonUrl = buildUrl("$type/$id/season/$seasonNum")
-                    val seasonResponse = app.get(seasonUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-                    val seasonData = tryParseJson<TmdbSeasonResponse>(seasonResponse)
-
-                    seasonData?.episodes?.forEach { ep ->
-                        episodes.add(newEpisode(url) {
-                            this.name = ep.name
-                            this.season = seasonNum
-                            this.episode = ep.episodeNumber
-                            this.data = "$url?s=$seasonNum&e=${ep.episodeNumber}"
-                        })
-                    }
-                } catch (e: Exception) { e.printStackTrace() }
-            }
-
-            val sortedEpisodes = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
-                this.posterUrl = poster
-                this.plot = overview
-                this.year = item.firstAirDate?.substringBefore("-")?.toIntOrNull()
-                this.tags = genres
-                item.voteAverage?.let { this.score = Score.from10(it) }
-            }
-        }
-    }
-
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val cleanData = data.replace("$mainUrl/", "")
-        val isMovie = !cleanData.contains("?s=")
-        val cleanId = cleanData.substringAfter("/").substringBefore("?")
-
-        // Baca cf_clearance dari pengaturan (storedCredentials)
-        val cfClearance = storedCredentials?.trim()?.takeIf { it.isNotEmpty() }
-
-        // Fungsi untuk menambahkan header Cookie jika cf_clearance ada
-        fun Map<String, String>.withCfCookie(): Map<String, String> {
-            return if (cfClearance != null) this + ("Cookie" to "cf_clearance=$cfClearance")
-            else this
-        }
-
-        val serversUrl = if (isMovie) {
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
-        } else {
-            val season = cleanData.substringAfter("?s=").substringBefore("&")
-            val episode = cleanData.substringAfter("&e=")
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
-        }
-
-        val baseHeaders = mapOf(
-            "Host" to "primesrc.me",
-            "Pragma" to "no-cache",
-            "Cache-Control" to "no-cache",
-            "Accept" to "*/*",
-            "Sec-Fetch-Site" to "same-origin",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Dest" to "empty",
-            "User-Agent" to USER_AGENT,
-            "Referer" to if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
-                         else "https://primesrc.me/embed/tv?tmdb=$cleanId"
-        ).withCfCookie()
-
-        // Ambil token dari halaman embed
-        val embedUrl = if (isMovie) "https://primesrc.me/embed/movie?tmdb=$cleanId"
-                       else "https://primesrc.me/embed/tv?tmdb=$cleanId"
-        val embedHtml = app.get(embedUrl, headers = baseHeaders).text
-        // Cari token dalam inline script atau JSON
-        val tokenRegex = Regex("""token\s*[=:]\s*["']([^"']+)["']""")
-        val token = tokenRegex.find(embedHtml)?.groupValues?.get(1) ?: ""
-
-        var linksFound = 0
-
-        try {
-            val response = app.get(serversUrl, headers = baseHeaders).text
-            val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
-            val servers = parsed.servers
-
-            if (servers != null) {
-                for (server in servers) {
-                    val internalKey = server.key ?: continue
-
-                    try {
-                        // Aktivasi sesi
-                        app.get("https://primesrc.me/spiderman?l=$internalKey", headers = baseHeaders)
-
-                        // Request link dengan token (jika ada)
-                        val decryptUrl = if (token.isNotEmpty())
-                            "https://primesrc.me/api/v1/l?key=$internalKey&token=$token"
-                        else
-                            "https://primesrc.me/api/v1/l?key=$internalKey"
-
-                        val decryptResponse = app.get(decryptUrl, headers = baseHeaders).text
-                        val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
-                        val realEmbedUrl = linkData.link ?: continue
-
-                        // Kirim link mentah, biarkan CloudStream mengekstraknya
-                        callback(newExtractorLink(
-                            source = server.name ?: "RiveStream",
-                            name = server.name ?: "Direct Link",
-                            url = realEmbedUrl,
-                            type = INFER_TYPE
-                        ) {
-                            this.referer = embedUrl
-                            this.quality = Qualities.Unknown.value
-                        })
-                        linksFound++
-                    } catch (e: Exception) { e.printStackTrace() }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return false
-        }
-
-        return linksFound > 0
-    }
-
-    // Data classes sama seperti sebelumnya
-    data class TmdbResultsResponse(
+    // -----------------------------------------------------------------
+    // STRUKTUR DATA CLASS MODEL TMDB INTERNAL (KODE ASLI LU)
+    // -----------------------------------------------------------------
+    data class MainPageResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
     )
 
@@ -266,18 +93,178 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("name") val name: String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
+
+    data class EmbedApiResponse(
+        @JsonProperty("success") val success: Boolean?,
+        @JsonProperty("url") val url: String?
+    )
+
+    // -----------------------------------------------------------------
+    // KONFIGURASI HALAMAN UTAMA / MAIN PAGE
+    // -----------------------------------------------------------------
+    override val mainPage = mainPageOf(
+        Pair("movie/now_playing", "Latest Movies"),
+        Pair("tv/airing_today", "Airing Today TV Shows"),
+        Pair("trending/all/day", "Trending Today")
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val path = request.name
+        val useProxy = !path.startsWith("trending/")
+        val url = buildUrl("$path?page=$page", useProxy)
+        val res = app.get(url).text
+        val mapped = tryParseJson<MainPageResponse>(res)
+        val homeItems = mapped?.results?.mapNotNull { item ->
+            val isMovie = item.mediaType == "movie" || path.startsWith("movie/")
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            newMovieSearchResponse(title, "${item.id},${if (isMovie) "movie" else "tv"}", TvType.Movie) {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${item.posterPath}"
+            }
+        } ?: return null
+        return newHomePageResponse(request.value, homeItems)
+    }
+
+    // -----------------------------------------------------------------
+    // FITUR PENCARIAN / SEARCH DENGAN PROXY INTEGRASI
+    // -----------------------------------------------------------------
+    override suspend fun search(query: String): List<SearchResponse>? {
+        val url = buildUrl("search/multi?query=${URLEncoder.encode(query, "UTF-8")}&page=1", true)
+        val res = app.get(url).text
+        val mapped = tryParseJson<MainPageResponse>(res)
+        return mapped?.results?.mapNotNull { item ->
+            val isMovie = item.mediaType == "movie"
+            val isTv = item.mediaType == "tv"
+            if (!isMovie && !isTv) return@mapNotNull null
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            newMovieSearchResponse(title, "${item.id},${item.mediaType}", TvType.Movie) {
+                this.posterUrl = "https://image.tmdb.org/t/p/w500${item.posterPath}"
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // MEMUAT HALAMAN DETAIL (LOAD DATA EPISODE & MANIFEST MEDIA)
+    // -----------------------------------------------------------------
+    override suspend fun load(url: String): LoadResponse? {
+        val parts = url.split(",")
+        val id = parts.getOrNull(0) ?: return null
+        val type = parts.getOrNull(1) ?: "movie"
+        val isMovie = type == "movie"
+
+        val detailUrl = buildUrl("$type/$id", !isMovie)
+        val res = app.get(detailUrl).text
+        val item = tryParseJson<TmdbDetailResult>(res) ?: return null
+        val title = item.title ?: item.name ?: return null
+        val poster = "https://image.tmdb.org/t/p/w500${item.posterPath}"
+
+        return if (isMovie) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = item.overview
+                this.rating = item.voteAverage?.times(10)?.toInt()
+                this.tags = item.genres?.mapNotNull { it.name }
+            }
+        } else {
+            val episodesList = mutableListOf<Episode>()
+            item.seasons?.forEach { season ->
+                val seasonNum = season.seasonNumber ?: return@forEach
+                val seasonUrl = buildUrl("tv/$id/season/$seasonNum", true)
+                val seasonRes = app.get(seasonUrl).text
+                val seasonData = tryParseJson<TmdbSeasonResponse>(seasonRes)
+                seasonData?.episodes?.forEach { ep ->
+                    val epNum = ep.episodeNumber ?: return@forEach
+                    episodesList.add(Episode(
+                        data = "$id,tv,$seasonNum,$epNum",
+                        name = ep.name,
+                        season = seasonNum,
+                        episode = epNum
+                    ))
+                }
+            }
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodesList) {
+                this.posterUrl = poster
+                this.plot = item.overview
+                this.rating = item.voteAverage?.times(10)?.toInt()
+                this.tags = item.genres?.mapNotNull { it.name }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // MESIN LINK SCRAPER UTAMA (TAHAP 1 -> SPIDERMAN ACTIVATION -> TAHAP 3)
+    // -----------------------------------------------------------------
+    override suspend fun loadLinks(
+        data: String,
+        isCubic: Boolean,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val parts = data.split(",")
+        val id = parts.getOrNull(0) ?: return false
+        val type = parts.getOrNull(1) ?: "movie"
+        
+        // Membangun URL referer iframe dan URL API server secara dinamis (Movie / TV Series)
+        val embedUrl = if (type == "movie") {
+            "$GATEWAY_BASE/embed/movie?tmdb=$id"
+        } else {
+            val season = parts.getOrNull(2) ?: "1"
+            val episode = parts.getOrNull(3) ?: "1"
+            "$GATEWAY_BASE/embed/tv?tmdb=$id&season=$season&episode=$episode"
+        }
+
+        val apiServerUrl = if (type == "movie") {
+            "$GATEWAY_BASE/api/v1/s?tmdb=$id&type=movie"
+        } else {
+            val season = parts.getOrNull(2) ?: "1"
+            val episode = parts.getOrNull(3) ?: "1"
+            "$GATEWAY_BASE/api/v1/s?tmdb=$id&type=tv&season=$season&episode=$episode"
+        }
+
+        // TAHAP 1: Mengambil manifes daftar kunci server penyedia
+        val serverResponseText = app.get(
+            apiServerUrl,
+            referer = "$mainUrl/"
+        ).text
+
+        val parsedResponse = tryParseJson<PrimeServerResponse>(serverResponseText)
+        val serverList = parsedResponse?.servers
+        if (serverList.isNullOrEmpty()) return false
+
+        // Deteksi token otentikasi global Cloudflare Turnstile yang tersimpan di Cookie-Jar Core Android
+        val currentCookies = app.codeClient.cookieJar.loadForRequest(apiServerUrl.toHttpUrlOrNull() ?: return false)
+        val cfClearanceToken = currentCookies.firstOrNull { it.name == "cf_clearance" }?.value ?: ""
+
+        // Memproses ekstraksi tautan untuk setiap kunci server yang tersedia
+        serverList.forEach { server ->
+            try {
+                // TAHAP 2: Sinyal Ketok Pintu Rahasia (/spiderman) untuk Mengaktifkan Token Server
+                app.get(
+                    "$GATEWAY_BASE/spiderman?l=${server.key}",
+                    referer = embedUrl
+                )
+
+                // TAHAP 3: Meminta Tautan Direct Video Stream dari Endpoint /api/v1/l
+                val decryptUrl = "$GATEWAY_BASE/api/v1/l?key=${server.key}&token=$cfClearanceToken"
+                val decryptResponseText = app.get(
+                    decryptUrl,
+                    referer = embedUrl
+                ).text
+
+                val parsedLinkData = tryParseJson<PrimeLinkResponse>(decryptResponseText)
+                val finalStreamingUrl = parsedLinkData?.link
+
+                // Sinkronisasi Sempurna: Sinkronkan nama variabel pengumpan loadExtractor
+                if (!finalStreamingUrl.isNullOrEmpty() && finalStreamingUrl != "null") {
+                    loadExtractor(
+                        url = finalStreamingUrl,
+                        referer = embedUrl,
+                        callback = callback
+                    )
+                }
+            } catch (e: Exception) {
+                // Mitigasi Anti-Crash: Jika satu server mati, iterasi tetap melompat aman ke server berikutnya
+                logError(e)
+            }
+        }
+        return true
+    }
 }
-
-data class PrimeSrcResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
-)
-
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?
-)
-
-data class PrimeSrcLinkResponse(
-    @JsonProperty("link") val link: String?,
-    @JsonProperty("host") val host: String?
-)
