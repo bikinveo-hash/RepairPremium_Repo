@@ -6,54 +6,71 @@ import com.lagradost.cloudstream3.utils.*
 class PrimeSrcHelper {
 
     suspend fun invokePrimeSrc(
-        data: String, // Berisi URL tujuan asli (contoh: https://www.rivestream.app/movie/XXXXXX)
+        data: String, 
         mainUrl: String,
         providerName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // REGEX RADAR: Menangkap momen krusial saat cdn hulu atau host video pihak ketiga mulai dimuat
-        val playerRegex = Regex(".*(1shows|cdn\\.1shows\\.app|streamtape|voe|streamwish|filemoon|dood|mixdrop|streamplay|vinovo|vidmoly).*")
+        // RADAR INTERCEPTION: Menangkap momen matang saat m3u8 dari cdn 1shows mulai dialirkan
+        val playerRegex = Regex(".*(1shows|cdn\\.1shows\\.app|streamtape|voe|streamwish|filemoon|dood|mixdrop).*")
 
-        // SKRIP JINAK: Disuntikkan ke dalam WebView untuk menetralisir 'disable-devtools' agar tidak membekukan mesin JS
-        val bypassAntiDebugScript = """
-            Object.defineProperty(window, 'devtools', { get: function() { return { isOpen: false }; } });
-            Function.prototype.constructor = function(str) { 
-                if (str === 'debugger') return function(){}; 
-                return Function(str); 
-            };
+        // SKRIP PENYAMARAN: Menyabotase sensor detektor DisableDevtool dari dalam memori WebView
+        val bypassScript = """
+            (function() {
+                // 1. Jinakkan Sensor Ukuran (Detektor Size) dengan memalsukan dimensi viewport headless
+                Object.defineProperty(window, 'innerWidth', { get: function() { return window.outerWidth; } });
+                Object.defineProperty(window, 'innerHeight', { get: function() { return window.outerHeight; } });
+                
+                // 2. Kunci detektor devicePixelRatio agar perhitungan rasio selalu netral
+                if (window.screen) {
+                    Object.defineProperty(window.screen, 'deviceXDPI', { get: function() { return undefined; } });
+                }
+
+                // 3. Kebalkan fungsi window.close agar WebView tidak bisa dimatikan paksa
+                window.close = function() { console.log('Bypassed anti-devtool window.close()'); };
+
+                // 4. Sabotase putaran interval deteksi (membuat jeda deteksi menjadi 2,7 jam sekali)
+                var originalSetInterval = window.setInterval;
+                window.setInterval = function(fn, delay) {
+                    if (delay === 500 || delay === 400 || delay === 600) {
+                        return originalSetInterval(fn, 9999999);
+                    }
+                    return originalSetInterval(fn, delay);
+                };
+            })();
         """.trimIndent()
 
         var linksFound = 0
 
         try {
-            // Jalankan WebView langsung mengarah ke halaman frontend utama seperti isi DevTools kamu
+            // Konfigurasi WebViewResolver menggunakan User-Agent murni sistem dan menyuntikkan skrip bypass
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = playerRegex,
-                userAgent = null, // Menggunakan User-Agent bawaan mesin Chromium HP agar Turnstile lolos
+                userAgent = null, 
                 useOkhttp = false,
-                script = bypassAntiDebugScript // Menyuntikkan penjinak anti-debug
+                script = bypassScript // Skrip penjinak disuntikkan secara aman di sini
             )
 
-            // WebView memproses halaman secara natural di latar belakang
+            // WebView memproses halaman utama film secara natural tanpa memicu alarm proteksi
             val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
-                url = data, // KUNCI: Muat langsung rivestream.app/movie/... bukan embed primesrc
+                url = data, 
                 referer = "$mainUrl/"
             )
 
             val realEmbedUrl = interceptedRequest?.url?.toString()
 
             if (!realEmbedUrl.isNullOrBlank()) {
-                // KUNCI UTAMA: Jika cdn utama '1shows' yang berhasil kita tangkap lewat radar
+                // Eksekusi jika berkas m3u8 dari server utama cdn 1shows berhasil terjaring radar
                 if (realEmbedUrl.contains("1shows")) {
                     callback(newExtractorLink(
                         source = providerName,
-                        name = "RiveStream CDN",
+                        name = "RiveStream CDN (HLS Multi-Quality)",
                         url = realEmbedUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        // Pasang paspor header persis seperti parameter perintah 'curl' suksesmu
+                        // Amankan paspor akses streaming sesuai dengan hasil pengujian curl kamu
                         this.referer = "https://www.rivestream.app/"
                         this.headers = mapOf(
                             "Origin" to "https://www.rivestream.app",
@@ -62,7 +79,7 @@ class PrimeSrcHelper {
                     })
                     linksFound++
                 } else {
-                    // Jika yang tertangkap adalah cermin server alternatif (Streamtape, Voe, Filemoon, dll.)
+                    // Eksekusi cadangan jika hulu mengalihkan player ke host alternatif (Voe, Filemoon, dll.)
                     val isExtractorFound = loadExtractor(
                         url = realEmbedUrl,
                         referer = data,
@@ -73,7 +90,7 @@ class PrimeSrcHelper {
                     if (!isExtractorFound) {
                         callback(newExtractorLink(
                             source = providerName,
-                            name = "Mirror Video",
+                            name = "Mirror Alternate",
                             url = realEmbedUrl
                         ) {
                             this.referer = data
