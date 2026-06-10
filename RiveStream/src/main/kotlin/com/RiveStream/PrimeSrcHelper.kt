@@ -1,11 +1,12 @@
 package com.RiveStream
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class PrimeSrcHelper {
-    
+
     suspend fun invokePrimeSrc(
         data: String,
         mainUrl: String,
@@ -34,18 +35,18 @@ class PrimeSrcHelper {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // STEP 1: Eksekusi WebView (Bypass Cloudflare)
+        // STEP 1: Biarkan WebView melewati Cloudflare challenge terlebih dahulu
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                useOkhttp = false 
+                useOkhttp = false  // Kunci: Jangan gunakan OkHttp saat menyelesaikan tantangan CF
             )
             webViewResolver.resolveUsingWebView(url = embedUrl, referer = "$mainUrl/")
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // STEP 2: Siapkan Headers
+        // STEP 2: Headers — samakan User-Agent dengan sesi WebView yang telah lolos
         val headers = mapOf(
             "User-Agent" to (com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent ?: USER_AGENT),
             "Referer" to embedUrl,
@@ -58,7 +59,7 @@ class PrimeSrcHelper {
 
         var linksFound = 0
 
-        // STEP 3: Tembak API & Gunakan loadExtractor bawaan Cloudstream
+        // STEP 3: Ambil daftar server & urai tautan video menggunakan Extractor bawaan
         try {
             val response = app.get(serversUrl, headers = headers).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
@@ -76,7 +77,7 @@ class PrimeSrcHelper {
                     val realEmbedUrl = linkData.link ?: continue
                     val serverName = server.name ?: linkData.host ?: "Direct Link"
 
-                    // Minta Cloudstream mengecek apakah ada extractor untuk URL ini
+                    // LEWATI KE EXTRACTOR CORE CLOUDSTREAM (Streamtape, Voe, Filemoon, dll.)
                     val isExtractorFound = loadExtractor(
                         url = realEmbedUrl,
                         referer = embedUrl,
@@ -84,17 +85,15 @@ class PrimeSrcHelper {
                         callback = callback
                     )
 
-                    // Jika Cloudstream tidak punya extractor-nya, kembalikan sebagai link mentah
+                    // Jika core Cloudstream tidak mengenali jenis host, kirim sebagai tautan direct mentah
                     if (!isExtractorFound) {
-                        callback(
-                            newExtractorLink(
-                                source = providerName,
-                                name = serverName,
-                                url = realEmbedUrl
-                            ) {
-                                this.referer = embedUrl
-                            }
-                        )
+                        callback(newExtractorLink(
+                            source = providerName,
+                            name = serverName,
+                            url = realEmbedUrl
+                        ) {
+                            this.referer = embedUrl
+                        })
                     }
                     linksFound++
                 } catch (e: Exception) {
@@ -109,3 +108,18 @@ class PrimeSrcHelper {
         return linksFound > 0
     }
 }
+
+// Data Class khusus untuk respons dari PrimeSrc API
+data class PrimeSrcResponse(
+    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
+)
+
+data class PrimeSrcServer(
+    @JsonProperty("name") val name: String?,
+    @JsonProperty("key") val key: String?
+)
+
+data class PrimeSrcLinkResponse(
+    @JsonProperty("link") val link: String?,
+    @JsonProperty("host") val host: String?
+)
