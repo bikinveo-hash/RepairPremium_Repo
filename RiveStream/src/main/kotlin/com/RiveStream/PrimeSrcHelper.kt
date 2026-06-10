@@ -36,14 +36,14 @@ class PrimeSrcHelper {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // KUNCI 1: Paksa User-Agent menjadi identitas Chrome Android tulen
+        // Paksa User-Agent menjadi identitas Chrome Android tulen
         val browserUa = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
 
-        // STEP 1: Biarkan WebView melewati Cloudflare challenge terlebih dahulu
+        // STEP 1: Jalankan WebViewResolver untuk memicu lolosnya tantangan Cloudflare (cf_clearance)
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                userAgent = browserUa, // Menyamar secara sempurna sejak di WebView
+                userAgent = browserUa,
                 useOkhttp = false
             )
             webViewResolver.resolveUsingWebView(url = embedUrl, referer = "$mainUrl/")
@@ -51,14 +51,14 @@ class PrimeSrcHelper {
             e.printStackTrace()
         }
 
-        // KUNCI 2: Pastikan sinkronisasi Cookie telah selesai
+        // Pastikan sinkronisasi Cookie telah selesai
         android.webkit.CookieManager.getInstance().flush()
         var primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
         var attempt = 0
 
         // Tunggu hingga cf_clearance masuk memori (Maksimal 5 detik)
         while (!primeCookies.contains("cf_clearance") && attempt < 5) {
-            delay(1000) // Jeda 1 detik agar Android memproses cookie
+            delay(1000)
             android.webkit.CookieManager.getInstance().flush()
             primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
             attempt++
@@ -78,12 +78,12 @@ class PrimeSrcHelper {
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
             "Sec-Fetch-Dest" to "empty",
-            "Cookie" to primeCookies // Cookie emas penembus Cloudflare
+            "Cookie" to primeCookies
         )
 
         var linksFound = 0
 
-        // STEP 3: Ambil daftar server & urai tautan
+        // STEP 3: Ambil daftar server & urai tautan menggunakan Extractor bawaan Cloudstream
         try {
             val response = app.get(serversUrl, headers = headers).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
@@ -130,3 +130,22 @@ class PrimeSrcHelper {
         return linksFound > 0
     }
 }
+
+// =========================================================================
+// DATA CLASSES KHUSUS PRIMESRC API
+// Pastikan bagian di bawah ini tidak terhapus saat melakukan copy-paste!
+// =========================================================================
+
+data class PrimeSrcResponse(
+    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
+)
+
+data class PrimeSrcServer(
+    @JsonProperty("name") val name: String?,
+    @JsonProperty("key") val key: String?
+)
+
+data class PrimeSrcLinkResponse(
+    @JsonProperty("link") val link: String?,
+    @JsonProperty("host") val host: String?
+)
