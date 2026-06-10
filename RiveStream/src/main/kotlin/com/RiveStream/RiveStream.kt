@@ -39,11 +39,7 @@ class RiveStreamProvider : MainAPI() {
 
         val homeItems = parsed.results?.mapNotNull { item ->
             val isMovie = item.title != null || request.data.contains("movie")
-            val idAndType = if (isMovie) {
-                "$mainUrl/movie/${item.id}"
-            } else {
-                "$mainUrl/tv/${item.id}"
-            }
+            val idAndType = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
             val title = item.title ?: item.name ?: return@mapNotNull null
             val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
@@ -113,7 +109,7 @@ class RiveStreamProvider : MainAPI() {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
-                            // KUNCI PERBAIKAN: Format data dibuat rapi agar helper JSON bisa memilah parameter secara akurat
+                            // Sinkronisasi format parameter query agar PrimeSrcHelper tidak bingung
                             this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
                         })
                     }
@@ -148,11 +144,7 @@ class RiveStreamProvider : MainAPI() {
     }
 
     // ===== DATA CLASSES TMDB =====
-
-    data class TmdbResultsResponse(
-        @JsonProperty("results") val results: List<TmdbItem>?
-    )
-
+    data class TmdbResultsResponse(@JsonProperty("results") val results: List<TmdbItem>?)
     data class TmdbItem(
         @JsonProperty("id") val id: Int,
         @JsonProperty("title") val title: String?,
@@ -160,7 +152,6 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("poster_path") val posterPath: String?,
         @JsonProperty("media_type") val mediaType: String?
     )
-
     data class TmdbDetailResult(
         @JsonProperty("title") val title: String?,
         @JsonProperty("name") val name: String?,
@@ -172,19 +163,9 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("seasons") val seasons: List<TmdbSeasonItem>?,
         @JsonProperty("genres") val genres: List<TmdbGenreItem>?
     )
-
-    data class TmdbGenreItem(
-        @JsonProperty("name") val name: String?
-    )
-
-    data class TmdbSeasonItem(
-        @JsonProperty("season_number") val seasonNumber: Int?
-    )
-
-    data class TmdbSeasonResponse(
-        @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?
-    )
-
+    data class TmdbGenreItem(@JsonProperty("name") val name: String?)
+    data class TmdbSeasonItem(@JsonProperty("season_number") val seasonNumber: Int?)
+    data class TmdbSeasonResponse(@JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?)
     data class TmdbEpisodeItem(
         @JsonProperty("name") val name: String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
