@@ -16,87 +16,106 @@ class PrimeSrcHelper {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        val cleanData = data.replace("$mainUrl/", "")
-        val isMovie = !cleanData.contains("?s=")
-        val cleanId = cleanData.substringAfter("/").substringBefore("?")
-
-        // 1. Tentukan jenis requestID berdasarkan kategori konten
+        // Pembersihan & Deteksi Kategori Konten
+        val isMovie = !data.contains("?season=")
+        val cleanId = data.substringAfter("/movie/").substringAfter("/tv/").substringBefore("?")
         val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
 
-        // 2. Buat parameter secretKey dinamis: "0-" + ID lalu di-encode ke Base64
+        // Enkripsi secretKey Dinamis Base64
         val rawSecret = "0-$cleanId"
         val secretKey = Base64.encodeToString(rawSecret.toByteArray(), Base64.NO_WRAP)
 
-        // 3. Susun URL API BackendFetch internal
-        var apiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=primevids&secretKey=$secretKey&proxyMode=undefined"
-        
-        // Jikalau konten berupa Serial TV, tambahkan parameter season & episode bawaan
+        // Base URL untuk request internal
+        var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
         if (!isMovie) {
-            val season = cleanData.substringAfter("?s=").substringBefore("&")
-            val episode = cleanData.substringAfter("&e=")
-            apiUrl += "&season=$season&episode=$episode"
+            val season = data.substringAfter("?season=").substringBefore("&")
+            val episode = data.substringAfter("&episode=")
+            baseApiUrl += "&season=$season&episode=$episode"
         }
 
-        // 4. Pasang headers paspor agar server mengenali request berasal dari browser resmi
-        val headers = mapOf(
-            "Authority" to "www.rivestream.app",
-            "Accept" to "application/json",
-            "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-        )
-
+        // Daftar layanan aktif yang kita sisir sekaligus agar link keluar melimpah!
+        val activeServices = listOf("primevids", "flowcast")
         var linksFound = 0
 
-        try {
-            // Tembak API secara langsung tanpa ampun (0,2 detik selesai!)
-            val response = app.get(apiUrl, headers = headers).text
-            val parsedData = tryParseJson<BackendFetchResponse>(response)
-            val sources = parsedData?.data?.sources ?: return false
+        for (service in activeServices) {
+            try {
+                // Penyesuaian parameter proxyMode berdasarkan tipe layanan
+                val proxyMode = if (service == "primevids") "undefined" else "noProxy"
+                val finalApiUrl = "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
 
-            for (source in sources) {
-                val streamUrl = source.url ?: continue
-                val qualityName = source.quality ?: "Auto"
-                val sourceLabel = source.source ?: "RiveStream"
+                val headers = mapOf(
+                    "Authority" to "www.rivestream.app",
+                    "Accept" to "application/json",
+                    "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                )
 
-                // Tentukan nama tampilan di dalam menu kualitas pemutar media
-                val displayName = "$sourceLabel - ${qualityName.uppercase()}"
+                val response = app.get(finalApiUrl, headers = headers).text
+                val parsedData = tryParseJson<BackendFetchResponse>(response) ?: continue
+                val sources = parsedData.data?.sources ?: continue
 
-                if (streamUrl.contains(".m3u8") || source.format == "hls") {
-                    callback(newExtractorLink(
-                        source = providerName,
-                        name = displayName,
-                        url = streamUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "https://www.rivestream.app/"
-                        this.headers = mapOf(
-                            "Origin" to "https://www.rivestream.app",
-                            "Accept" to "*/*"
+                // Ambil takarir otomatis jika dilampirkan di dalam payload respon (Seperti di FlowCast)
+                parsedData.data.captions?.forEach { caption ->
+                    val captionUrl = caption.file ?: return@forEach
+                    val captionLabel = caption.label ?: "External Subtitle"
+                    subtitleCallback(
+                        SubtitleFile(
+                            lang = captionLabel,
+                            url = captionUrl
                         )
-                    })
-                    linksFound++
-                } else {
-                    // Fallback jika kedepannya server memberikan direct MP4 link
-                    val isExtractorFound = loadExtractor(
-                        url = streamUrl,
-                        referer = "$mainUrl/",
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
                     )
-                    if (!isExtractorFound) {
+                }
+
+                // Iterasi tautan video stream
+                for (source in sources) {
+                    val streamUrl = source.url ?: continue
+                    // Mengubah Any? aman menjadi string (Bypass Bug Mismatch Int/String)
+                    val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
+                    val sourceLabel = source.source ?: "RiveStream"
+                    val displayName = "$sourceLabel - $qualityName"
+
+                    // Kondisi penanganan berkas manifest (.m3u8 / HLS)
+                    if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
                         callback(newExtractorLink(
                             source = providerName,
                             name = displayName,
-                            url = streamUrl
+                            url = streamUrl,
+                            type = ExtractorLinkType.M3U8
                         ) {
-                            this.referer = "$mainUrl/"
+                            this.referer = "https://www.rivestream.app/"
+                            this.headers = mapOf(
+                                "Origin" to "https://www.rivestream.app",
+                                "Accept" to "*/*"
+                            )
                         })
+                        linksFound++
+                    } else {
+                        // Kondisi penanganan berkas Direct MP4 (Gunakan referer pengaman khusus)
+                        val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
+                        val isExtractorFound = loadExtractor(
+                            url = streamUrl,
+                            referer = targetReferer,
+                            subtitleCallback = subtitleCallback,
+                            callback = callback
+                        )
+                        if (!isExtractorFound) {
+                            callback(newExtractorLink(
+                                source = providerName,
+                                name = displayName,
+                                url = streamUrl
+                            ) {
+                                this.referer = targetReferer
+                                if (service == "flowcast") {
+                                    this.headers = mapOf("Origin" to "https://123movienow.cc")
+                                }
+                            })
+                        }
+                        linksFound++
                     }
-                    linksFound++
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
 
         return linksFound > 0
@@ -104,20 +123,23 @@ class PrimeSrcHelper {
 }
 
 // =========================================================================
-// MODEL DATA CUSTOM UNTUK BACKENDFETCH API JSON
+// MODEL DATA CUSTOM REVISI UNTUK BACKENDFETCH API JSON
 // =========================================================================
-
-data class BackendFetchResponse(
-    @JsonProperty("data") val data: BackendData?
-)
+data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 
 data class BackendData(
-    @JsonProperty("sources") val sources: List<BackendSource>?
+    @JsonProperty("sources") val sources: List<BackendSource>?,
+    @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 
 data class BackendSource(
-    @JsonProperty("quality") val quality: String?,
+    @JsonProperty("quality") val quality: Any?, // Diubah jadi Any? agar Jackson tidak crash!
     @JsonProperty("url") val url: String?,
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
+)
+
+data class BackendCaption(
+    @JsonProperty("label") val label: String?,
+    @JsonProperty("file") val file: String?
 )
