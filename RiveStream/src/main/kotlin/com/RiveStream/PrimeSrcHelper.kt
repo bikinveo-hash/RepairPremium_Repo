@@ -1,10 +1,7 @@
 package com.RiveStream
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import kotlinx.coroutines.delay
 
 class PrimeSrcHelper {
 
@@ -28,114 +25,56 @@ class PrimeSrcHelper {
             "https://primesrc.me/embed/tv?tmdb=$cleanId&season=$season&episode=$episode"
         }
 
-        val serversUrl = if (isMovie) {
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
-        } else {
-            val season = cleanData.substringAfter("?s=").substringBefore("&")
-            val episode = cleanData.substringAfter("&e=")
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
-        }
-
-        // STEP 1: Jalankan WebViewResolver dengan User-Agent ORGANIK (Biarkan null agar memakai bawaan sistem)
-        try {
-            val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                userAgent = null, // KUNCI: Biarkan sistem menggunakan User-Agent asli perangkat agar lolos Cloudflare
-                useOkhttp = false
-            )
-            webViewResolver.resolveUsingWebView(url = embedUrl, referer = "$mainUrl/")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Ambil User-Agent organik yang sukses digunakan oleh WebView tadi
-        val organicUa = com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent ?: USER_AGENT
-
-        // Ambil Cookies yang berhasil didapatkan oleh WebView
-        delay(1500)
-        android.webkit.CookieManager.getInstance().flush()
-        val primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
-
-        // STEP 2: Headers — Satukan User-Agent Organik dan Cookie Emas dari WebView
-        val headers = mapOf(
-            "User-Agent" to organicUa,
-            "Referer" to embedUrl,
-            "Accept" to "*/*",
-            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Sec-Fetch-Site" to "same-origin",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Dest" to "empty",
-            "Cookie" to primeCookies
-        )
+        // REGEX SAKTI: Menangkap momen saat situs primesrc memuat iframe server video asli
+        val playerRegex = Regex(".*(streamtape|voe|streamwish|filemoon|dood|mixdrop|streamplay|vinovo|vidmoly|vidara|savefiles|filelions|luluvdoo|streamruby|vidsst|mshare|uqload|fembed).*")
 
         var linksFound = 0
 
-        // STEP 3: Ambil daftar server
         try {
-            val response = app.get(serversUrl, headers = headers).text
-            
-            // LOG DEBUG: Untuk memantau isi asli respon server jika seandainya masih gagal
-            println("PrimeSrc API Response: $response")
+            // Berikan timeout agak panjang (25 detik) agar WebView punya waktu untuk
+            // menyelesaikan tantangan Cloudflare, memuat API, dan meluncurkan iframe server video.
+            val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
+                interceptUrl = playerRegex,
+                userAgent = null, // Biarkan organik sesuai bawaan HP kamu
+                useOkhttp = false // Wajib false untuk menghadapi Cloudflare
+            )
 
-            val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
-            val servers = parsed.servers ?: return false
+            // WebView akan memuat halaman secara mandiri di latar belakang
+            val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
+                url = embedUrl,
+                referer = "$mainUrl/"
+            )
 
-            for (server in servers) {
-                val internalKey = server.key ?: continue
-                try {
-                    val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
-                    app.get(spidermanUrl, headers = headers)
+            // Ambil URL server video asli hasil tangkapan WebView
+            val realEmbedUrl = interceptedRequest?.url?.toString()
 
-                    val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
-                    val decryptResponse = app.get(decryptUrl, headers = headers).text
-                    
-                    // LOG DEBUG: Memantau hasil enkripsi link embed asli
-                    println("PrimeSrc Decrypt Response: $decryptResponse")
+            if (!realEmbedUrl.isNullOrBlank()) {
+                // Berhasil ditangkap! Langsung lemparkan ke Extractor bawaan Cloudstream (Streamtape/Filemoon/Voe/dll.)
+                val isExtractorFound = loadExtractor(
+                    url = realEmbedUrl,
+                    referer = embedUrl,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback
+                )
 
-                    val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
-                    val realEmbedUrl = linkData.link ?: continue
-                    val serverName = server.name ?: linkData.host ?: "Direct Link"
-
-                    val isExtractorFound = loadExtractor(
-                        url = realEmbedUrl,
-                        referer = embedUrl,
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
-                    )
-
-                    if (!isExtractorFound) {
-                        callback(newExtractorLink(
-                            source = providerName,
-                            name = serverName,
-                            url = realEmbedUrl
-                        ) {
-                            this.referer = embedUrl
-                        })
-                    }
+                if (isExtractorFound) {
                     linksFound++
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                } else {
+                    // Fallback jika tidak ada extractor bawaan yang cocok, kirim sebagai direct link
+                    callback(newExtractorLink(
+                        source = providerName,
+                        name = "Mirror Video",
+                        url = realEmbedUrl
+                    ) {
+                        this.referer = embedUrl
+                    })
+                    linksFound++
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            return false
         }
 
         return linksFound > 0
     }
 }
-
-data class PrimeSrcResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
-)
-
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?
-)
-
-data class PrimeSrcLinkResponse(
-    @JsonProperty("link") val link: String?,
-    @JsonProperty("host") val host: String?
-)
