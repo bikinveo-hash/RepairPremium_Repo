@@ -152,41 +152,40 @@ class RiveStreamProvider : MainAPI() {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // ===================================================================
-        // STEP 1: GUNAKAN WEBVIEWRESOLVER UNTUK INTERSEP API CALL NYATA
-        // Tujuan: Memaksa WebView membuka embedUrl terlebih dahulu agar
-        // cf_clearance cookie ter-set dengan sah di session OkHttp.
-        // useOkhttp = true → cookie otomatis di-share ke OkHttp session.
-        // ===================================================================
+        // ================================================================
+        // STEP 1: Biarkan WebView lewati Cloudflare challenge DULU
+        // useOkhttp = FALSE agar WebView tidak bypass ke OkHttp sebelum
+        // cf_clearance terbentuk. Setelah cookie ada, baru OkHttp bisa pakai.
+        // ================================================================
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                // Intersep URL API nyata, bukan URL palsu
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                useOkhttp = true
+                useOkhttp = false  // <-- KUNCI: false untuk Cloudflare!
             )
 
-            webViewResolver.resolveUsingWebView(
+            // Tangkap hasil intercept
+            val (interceptedRequest, _) = webViewResolver.resolveUsingWebView(
                 url = embedUrl,
                 referer = "$mainUrl/"
             )
+
+            // Jika berhasil intercept, gunakan headers dari request yang di-intercept
+            if (interceptedRequest != null) {
+                // Cookie sudah otomatis ada di session setelah WebView sukses
+            }
         } catch (e: Exception) {
-            // Lanjutkan meskipun WebView gagal; OkHttp tetap dicoba
             e.printStackTrace()
         }
 
-        // ===================================================================
-        // STEP 2: SIAPKAN HEADERS — TANPA "Host" MANUAL
-        // OkHttp akan set Host secara otomatis dan benar.
-        // Menambahkan Host manual bisa menyebabkan konflik jika ada redirect.
-        // ===================================================================
+        // ================================================================
+        // STEP 2: Headers — pastikan User-Agent sama dengan yang dipakai WebView
+        // ================================================================
         val headers = mapOf(
-            "User-Agent" to USER_AGENT,
+            "User-Agent" to (com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent 
+                ?: USER_AGENT),
             "Referer" to embedUrl,
             "Origin" to "https://primesrc.me",
             "Accept" to "*/*",
-            "sec-ch-ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-            "sec-ch-ua-mobile" to "?1",
-            "sec-ch-ua-platform" to "\"Android\"",
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
             "Sec-Fetch-Dest" to "empty"
@@ -195,22 +194,19 @@ class RiveStreamProvider : MainAPI() {
         var linksFound = 0
 
         try {
-            // ===================================================================
-            // STEP 3: TEMBAK API SERVERS — OkHttp sudah punya cookie matang
-            // ===================================================================
+            // ================================================================
+            // STEP 3: Tembak API — cookie cf_clearance sudah matang dari WebView
+            // ================================================================
             val response = app.get(serversUrl, headers = headers).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
             val servers = parsed.servers ?: return false
 
             for (server in servers) {
                 val internalKey = server.key ?: continue
-
                 try {
-                    // AKTIVASI SESI
                     val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
                     app.get(spidermanUrl, headers = headers)
 
-                    // DEKRIPSI GERBANG AKHIR
                     val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
                     val decryptResponse = app.get(decryptUrl, headers = headers).text
                     val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
