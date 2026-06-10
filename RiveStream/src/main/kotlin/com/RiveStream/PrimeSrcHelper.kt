@@ -35,31 +35,38 @@ class PrimeSrcHelper {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=tv&season=$season&episode=$episode"
         }
 
-        // STEP 1: Biarkan WebView melewati Cloudflare challenge terlebih dahulu
+        // STEP 1: Jalankan WebViewResolver untuk memicu lolosnya tantangan Cloudflare (cf_clearance)
         try {
             val webViewResolver = com.lagradost.cloudstream3.network.WebViewResolver(
                 interceptUrl = Regex(".*primesrc\\.me/api/v1/s.*"),
-                useOkhttp = false  // Kunci: Jangan gunakan OkHttp saat menyelesaikan tantangan CF
+                useOkhttp = false // WAJIB false agar WebView menyelesaikan sendiri proteksi CF
             )
             webViewResolver.resolveUsingWebView(url = embedUrl, referer = "$mainUrl/")
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // STEP 2: Headers — samakan User-Agent dengan sesi WebView yang telah lolos
+        // =========================================================================
+        // EKSTRAK COOKIES DARI WEBVIEW
+        // Ini rahasia utama agar OkHttp tidak terkena Silent Drop / Timeout dari Cloudflare
+        // =========================================================================
+        val primeCookies = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me") ?: ""
+
+        // STEP 2: Susun Headers persis seperti analisis DevTools milikmu
         val headers = mapOf(
             "User-Agent" to (com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent ?: USER_AGENT),
             "Referer" to embedUrl,
-            "Origin" to "https://primesrc.me",
             "Accept" to "*/*",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7", // Mengikuti log analisis browser kamu
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Dest" to "empty"
+            "Sec-Fetch-Dest" to "empty",
+            "Cookie" to primeCookies // Menyisipkan token cf_clearance yang valid
         )
 
         var linksFound = 0
 
-        // STEP 3: Ambil daftar server & urai tautan video menggunakan Extractor bawaan
+        // STEP 3: Tembak API Server List menggunakan OkHttp yang sudah dipasangi Cookie lolos tantangan
         try {
             val response = app.get(serversUrl, headers = headers).text
             val parsed = tryParseJson<PrimeSrcResponse>(response) ?: return false
@@ -68,16 +75,18 @@ class PrimeSrcHelper {
             for (server in servers) {
                 val internalKey = server.key ?: continue
                 try {
+                    // Eksekusi spiderman endpoint
                     val spidermanUrl = "https://primesrc.me/spiderman?l=$internalKey"
                     app.get(spidermanUrl, headers = headers)
 
+                    // Jalankan dekripsi key untuk mengambil link embed video asli
                     val decryptUrl = "https://primesrc.me/api/v1/l?key=$internalKey"
                     val decryptResponse = app.get(decryptUrl, headers = headers).text
                     val linkData = tryParseJson<PrimeSrcLinkResponse>(decryptResponse) ?: continue
                     val realEmbedUrl = linkData.link ?: continue
                     val serverName = server.name ?: linkData.host ?: "Direct Link"
 
-                    // LEWATI KE EXTRACTOR CORE CLOUDSTREAM (Streamtape, Voe, Filemoon, dll.)
+                    // DELEGASIKAN KE EXTRACTOR CORE (Streamtape, Voe, Filemoon, dll.)
                     val isExtractorFound = loadExtractor(
                         url = realEmbedUrl,
                         referer = embedUrl,
@@ -85,7 +94,7 @@ class PrimeSrcHelper {
                         callback = callback
                     )
 
-                    // Jika core Cloudstream tidak mengenali jenis host, kirim sebagai tautan direct mentah
+                    // Jika Cloudstream core tidak punya script extractor-nya, kirim sebagai link direct mentah
                     if (!isExtractorFound) {
                         callback(newExtractorLink(
                             source = providerName,
@@ -109,7 +118,8 @@ class PrimeSrcHelper {
     }
 }
 
-// Data Class khusus untuk respons dari PrimeSrc API
+// ===== DATA CLASSES PRIMESRC API =====
+
 data class PrimeSrcResponse(
     @JsonProperty("servers") val servers: List<PrimeSrcServer>?
 )
