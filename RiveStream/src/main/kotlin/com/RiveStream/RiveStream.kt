@@ -109,7 +109,6 @@ class RiveStreamProvider : MainAPI() {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
-                            // Sinkronisasi format parameter query agar PrimeSrcHelper tidak bingung
                             this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
                         })
                     }
