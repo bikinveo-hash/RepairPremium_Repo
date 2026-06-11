@@ -16,11 +16,12 @@ class PrimeSrcHelper {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        val isMovie = !data.contains("?season=")
-        val cleanId = data.substringAfter("/movie/").substringAfter("/tv/").substringBefore("?")
+        val cleanData = data.replace("$mainUrl/", "")
+        val isMovie = !cleanData.contains("?season=")
+        val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
 
-        // Enkripsi Kunci Rahasia Sesi (Base64)
+        // Enkripsi secretKey Dinamis Base64
         val rawSecret = "0-$cleanId"
         val secretKey = Base64.encodeToString(rawSecret.toByteArray(), Base64.NO_WRAP)
 
@@ -29,11 +30,12 @@ class PrimeSrcHelper {
         // -------------------------------------------------------------------------
         var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
         if (!isMovie) {
-            val season = data.substringAfter("?season=").substringBefore("&")
-            val episode = data.substringAfter("&episode=")
+            val season = cleanData.substringAfter("?season=").substringBefore("&")
+            val episode = cleanData.substringAfter("&episode=")
             baseApiUrl += "&season=$season&episode=$episode"
         }
 
+        // Daftar seluruh layanan aktif yang disisir simultan
         val activeServices = listOf("primevids", "flowcast", "asiacloud")
         var linksFound = 0
 
@@ -53,7 +55,7 @@ class PrimeSrcHelper {
                 val parsedData = tryParseJson<BackendFetchResponse>(response) ?: continue
                 val sources = parsedData.data?.sources ?: continue
 
-                // Penarikan takarir otomatis jika tersedia (Seperti di FlowCast)
+                // Pemuatan takarir otomatis dari payload objek jika tersedia (Seperti di FlowCast)
                 parsedData.data.captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
                     val captionLabel = caption.label ?: "External Subtitle"
@@ -81,7 +83,7 @@ class PrimeSrcHelper {
                         })
                         linksFound++
                     } else {
-                        // Fallback jika berupa tautan direct MP4 (Gunakan referer pengaman target)
+                        // Fallback jika berupa tautan direct MP4 video
                         val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
                         val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
                         if (!isExtractorFound) {
@@ -97,9 +99,9 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // STRATEGI 2: Ekstraksi Server Iframe Murni dari Gateway PrimeSrc (Mode Embed)
+        // STRATEGI 2: Ekstraksi Otomatis Jalur Server Embed via Gateway PrimeSrc
         // -------------------------------------------------------------------------
-        if (isMovie) { // Difokuskan penuh untuk Movie terlebih dahulu
+        if (isMovie) { // Difokuskan penuh untuk mematangkan Movie terlebih dahulu
             try {
                 val primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
                 val primeSrcHeaders = mapOf(
@@ -113,7 +115,7 @@ class PrimeSrcHelper {
                     val serverName = server.name?.lowercase() ?: return@forEach
                     val serverKey = server.key ?: return@forEach
                     
-                    // Rumus konstruksi URL Embed murni berdasarkan analisa kode JS (Non-embed dibuang)
+                    // Rumus pembuatan URL Embed murni, mengabaikan halaman penuh iklan non-embed
                     val embedUrl = when {
                         serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
                         serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
@@ -128,7 +130,7 @@ class PrimeSrcHelper {
                     }
 
                     if (embedUrl != null) {
-                        // Dilempar langsung ke core extractor bawaan Cloudstream yang didukung native
+                        // Dilempar ke core extractor bawaan Cloudstream (Mendukung bypass otomatis)
                         val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                         if (isExtracted) linksFound++
                     }
@@ -141,7 +143,7 @@ class PrimeSrcHelper {
 }
 
 // =========================================================================
-// MODEL DATA MODEL CUSTOM BACKENDFETCH & PRIMESRC GATEWAY
+// MODEL DATA CUSTOM PENAHAN PAYLOAD JSON 
 // =========================================================================
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 
