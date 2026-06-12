@@ -1,128 +1,92 @@
-package com.lagradost.cloudstream3.movieproviders
+package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import java.util.ArrayList
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.net.URLEncoder
 
 class RiveStreamProvider : MainAPI() {
-    override var mainUrl = "https://www.rivestream.app"
     override var name = "RiveStream"
+    override var mainUrl = "https://www.rivestream.app"
+    override var lang = "en"
     override val hasMainPage = true
-    override var lang = "id"
     override val hasQuickSearch = true
-    override val supportedTypes = setOf(
-        TvType.Movie, 
-        TvType.TvSeries, 
-        TvType.AsianDrama, 
-        TvType.Anime
+
+    companion object {
+        private const val TMDB_API_KEY = "d64117f26031a428449f102ced3aba73"
+        private const val TMDB_BASE = "https://api.themoviedb.org/3"
+        private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
+    }
+
+    override val mainPage = mainPageOf(
+        Pair("movie/now_playing", "Latest Movies"),
+        Pair("tv/airing_today", "Latest TV Shows"),
+        Pair("trending/movie/week", "Trending Movies"),
+        Pair("trending/tv/week", "Trending TV Shows")
     )
 
-    private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
-    private const val TMDB_API = "https://api.themoviedb.org/3"
-    private const val API_KEY = "d64117f26031a428449f102ced3aba73"
-    private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-
-    // FIX OPTIMALISASI: Anti-Blank Page via Direct TMDB Fallback
-    private suspend fun safeTmdbGet(path: String, useProxy: Boolean = true): String {
-        val targetUrl = "$TMDB_API$path&api_key=$API_KEY"
-        val finalUrl = if (useProxy) "$PROXY_BASE$targetUrl" else targetUrl
-        return try {
-            app.get(finalUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
-        } catch (e: Exception) {
-            if (useProxy) {
-                // Jalur Darurat: Jika proxy valhalla down, tembak langsung ke server asli TMDB
-                safeTmdbGet(path, useProxy = false)
-            } else {
-                throw e
-            }
-        }
+    private fun buildUrl(path: String, useProxy: Boolean = true): String {
+        val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
+        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val lists = ArrayList<HomePageList>()
-        val categories = listOf(
-            Pair("/movie/popular?language=en-US&page=1", "Film Populer"),
-            Pair("/tv/popular?language=en-US&page=1", "Serial Populer"),
-            Pair("/trending/all/day?language=en-US", "Sedang Tren Hari Ini")
-        )
+        val path = "${request.data}?page=$page"
+        val url = buildUrl(path)
+        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
-        categories.forEach { (path, title) ->
-            try {
-                val jsonText = safeTmdbGet(path)
-                val response = tryParseJson<TmdbSearchResponse>(jsonText)
-                val results = response?.results?.mapNotNull { item ->
-                    val isMovie = item.mediaType == "movie" || path.contains("movie")
-                    val mediaId = item.id ?: return@mapNotNull null
-                    val titleName = item.title ?: item.name ?: return@mapNotNull null
-                    val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" } ?: ""
-                    
-                    val type = if (isMovie) TvType.Movie else TvType.TvSeries
+        val homeItems = parsed.results?.mapNotNull { item ->
+            val isMovie = item.title != null || request.data.contains("movie")
+            val idAndType = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
-                    MovieSearchResponse(
-                        titleName,
-                        "$mainUrl/${if (isMovie) "movie" else "tv"}/$mediaId",
-                        this.name,
-                        type,
-                        poster,
-                        item.voteAverage?.let { Score.from10(it) }
-                    )
-                } ?: emptyList()
-
-                if (results.isNotEmpty()) {
-                    lists.add(HomePageList(title, results))
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            if (isMovie) {
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
+            } else {
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
             }
-        }
-        return HomePageResponse(lists)
+        } ?: emptyList()
+
+        return newHomePageResponse(request.name, homeItems, hasNext = true)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val cleanQuery = query.replace(" ", "%20")
-        val movieSearchJson = safeTmdbGet("/search/movie?query=$cleanQuery&language=en-US&page=1")
-        val tvSearchJson = safeTmdbGet("/search/tv?query=$cleanQuery&language=en-US&page=1")
+    override suspend fun search(query: String): List<SearchResponse>? {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = buildUrl("search/multi?query=$encodedQuery")
+        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
-        val movies = tryParseJson<TmdbSearchResponse>(movieSearchJson)?.results?.mapNotNull { item ->
-            MovieSearchResponse(
-                item.title ?: return@mapNotNull null,
-                "$mainUrl/movie/${item.id}",
-                this.name,
-                TvType.Movie,
-                item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" },
-                item.voteAverage?.let { Score.from10(it) }
-            )
-        } ?: emptyList()
+        return parsed.results?.mapNotNull { item ->
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+            val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
+            val idAndType = "$mainUrl/$mediaType/${item.id}"
 
-        val tvShows = tryParseJson<TmdbSearchResponse>(tvSearchJson)?.results?.mapNotNull { item ->
-            MovieSearchResponse(
-                item.name ?: return@mapNotNull null,
-                "$mainUrl/tv/${item.id}",
-                this.name,
-                TvType.TvSeries,
-                item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" },
-                item.voteAverage?.let { Score.from10(it) }
-            )
-        } ?: emptyList()
-
-        return movies + tvShows
+            if (mediaType == "movie") {
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
+            } else if (mediaType == "tv") {
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
+            } else null
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val isMovie = url.contains("/movie/")
-        val id = url.substringAfterLast("/")
-        val path = if (isMovie) "/movie/$id?language=en-US" else "/tv/$id?language=en-US&append_to_response=external_ids"
-        
-        val jsonText = safeTmdbGet(path)
-        val item = tryParseJson<TmdbDetailResult>(jsonText) ?: return null
+        val cleanPath = url.replace("$mainUrl/", "")
+        val type = cleanPath.substringBefore("/")
+        val id = cleanPath.substringAfter("/")
+        val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
+        val response = app.get(detailsUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val item = tryParseJson<TmdbDetailResult>(response) ?: return null
 
         val title = item.title ?: item.name ?: return null
-        val overview = item.overview
         val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-        val genres = item.genres?.mapNotNull { it.name } ?: emptyList()
+        val overview = item.overview
+        val genres = item.genres?.mapNotNull { it.name }
 
-        if (isMovie) {
+        if (type == "movie") {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot = overview
@@ -131,49 +95,28 @@ class RiveStreamProvider : MainAPI() {
                 item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            val episodes = ArrayList<Episode>()
-            item.seasons?.forEach { season ->
-                val seasonNum = season.seasonNumber ?: return@forEach
-                if (seasonNum == 0) return@forEach // Cegah pencampuran indeks konten bonus/spesial
-
+            val episodes = Coroutines.threadSafeListOf<Episode>()
+            item.seasons?.amap { season ->
+                val seasonNum = season.seasonNumber ?: return@amap
+                if (seasonNum == 0) return@amap
                 try {
-                    val seasonJson = safeTmdbGet("/tv/$id/season/$seasonNum?language=en-US")
-                    val seasonData = tryParseJson<TmdbSeasonDetail>(seasonJson)
-                    
+                    val seasonUrl = buildUrl("$type/$id/season/$seasonNum")
+                    val seasonResponse = app.get(seasonUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+                    val seasonData = tryParseJson<TmdbSeasonResponse>(seasonResponse)
+
                     seasonData?.episodes?.forEach { ep ->
-                        // FIX BUG VISUAL: Cegah Gambar Pecah Jika Still Path Bernilai Null pada Episode Masa Depan
-                        val epThumb = if (!ep.stillPath.isNullOrBlank()) {
-                            "https://image.tmdb.org/t/p/w300${ep.stillPath}"
-                        } else {
-                            "https://image.tmdb.org/t/p/w300${item.posterPath}"
-                        }
-
-                        episodes.add(
-                            Episode(
-                                data = "$mainUrl/tv/$id?season=${ep.seasonNumber}&episode=${ep.episodeNumber}",
-                                name = ep.name ?: "Episode ${ep.episodeNumber}",
-                                episode = ep.episodeNumber,
-                                season = ep.seasonNumber,
-                                posterUrl = epThumb
-                            )
-                        )
+                        episodes.add(newEpisode(url) {
+                            this.name = ep.name
+                            this.season = seasonNum
+                            this.episode = ep.episodeNumber
+                            this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
+                        })
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
 
-            // FIX INTEGRASI CORE: Pengelompokan K-Drama & Anime Secara Akurat Lewat origin_country
-            val isAsianDrama = item.originCountry?.contains("KR") == true || item.originCountry?.contains("TW") == true
-            val isAnime = item.originCountry?.contains("JP") == true
-            
-            val finalType = when {
-                isAnime -> TvType.Anime
-                isAsianDrama -> TvType.AsianDrama
-                else -> TvType.TvSeries
-            }
-
-            return newTvSeriesLoadResponse(title, url, finalType, episodes) {
+            val sortedEpisodes = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = poster
                 this.plot = overview
                 this.year = item.firstAirDate?.substringBefore("-")?.toIntOrNull()
@@ -189,56 +132,41 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val isMovie = data.contains("/movie/")
-        val cleanId = data.substringBefore("?").substringAfterLast("/")
-        
-        PrimeSrcHelper.getPrimeSrcLinks(cleanId, isMovie, data, subtitleCallback, callback)
-        return true
+        val primeSrcHelper = PrimeSrcHelper()
+        return primeSrcHelper.invokePrimeSrc(
+            data = data,
+            mainUrl = mainUrl,
+            providerName = this.name,
+            subtitleCallback = subtitleCallback,
+            callback = callback
+        )
     }
+
+    // ===== DATA CLASSES TMDB =====
+    data class TmdbResultsResponse(@JsonProperty("results") val results: List<TmdbItem>?)
+    data class TmdbItem(
+        @JsonProperty("id") val id: Int,
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("poster_path") val posterPath: String?,
+        @JsonProperty("media_type") val mediaType: String?
+    )
+    data class TmdbDetailResult(
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("overview") val overview: String?,
+        @JsonProperty("poster_path") val posterPath: String?,
+        @JsonProperty("release_date") val releaseDate: String?,
+        @JsonProperty("first_air_date") val firstAirDate: String?,
+        @JsonProperty("vote_average") val voteAverage: Double?,
+        @JsonProperty("seasons") val seasons: List<TmdbSeasonItem>?,
+        @JsonProperty("genres") val genres: List<TmdbGenreItem>?
+    )
+    data class TmdbGenreItem(@JsonProperty("name") val name: String?)
+    data class TmdbSeasonItem(@JsonProperty("season_number") val seasonNumber: Int?)
+    data class TmdbSeasonResponse(@JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?)
+    data class TmdbEpisodeItem(
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("episode_number") val episodeNumber: Int?
+    )
 }
-
-// ================= MODEL DATA KERNEL (JACKSON) =================
-data class TmdbSearchResponse(
-    @JsonProperty("results") val results: List<TmdbSearchItem>?
-)
-
-data class TmdbSearchItem(
-    @JsonProperty("id") val id: Int?,
-    @JsonProperty("title") val title: String?,
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("poster_path") val posterPath: String?,
-    @JsonProperty("media_type") val mediaType: String?,
-    @JsonProperty("vote_average") val voteAverage: Double?
-)
-
-data class TmdbDetailResult(
-    @JsonProperty("title") val title: String?,
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("overview") val overview: String?,
-    @JsonProperty("poster_path") val posterPath: String?,
-    @JsonProperty("release_date") val releaseDate: String?,
-    @JsonProperty("first_air_date") val firstAirDate: String?,
-    @JsonProperty("vote_average") val voteAverage: Double?,
-    @JsonProperty("seasons") val seasons: List<TmdbSeasonItem>?,
-    @JsonProperty("genres") val genres: List<TmdbGenreItem>?,
-    @JsonProperty("origin_country") val originCountry: List<String>? = null
-)
-
-data class TmdbSeasonItem(
-    @JsonProperty("season_number") val seasonNumber: Int?
-)
-
-data class TmdbGenreItem(
-    @JsonProperty("name") val name: String?
-)
-
-data class TmdbSeasonDetail(
-    @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?
-)
-
-data class TmdbEpisodeItem(
-    @JsonProperty("episode_number") val episodeNumber: Int,
-    @JsonProperty("season_number") val seasonNumber: Int,
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("still_path") val stillPath: String?
-)
