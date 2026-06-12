@@ -9,6 +9,7 @@ import android.util.Base64
 class PrimeSrcHelper {
 
     companion object {
+        // Array 70 string garam dinamis dari Next.js RiveStream (Tetap dipertahankan untuk cadangan)
         private val SALT_ARRAY = listOf(
             "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
             "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
@@ -20,6 +21,9 @@ class PrimeSrcHelper {
         )
     }
 
+    // -------------------------------------------------------------------------
+    // ENGINE GENERATOR SECRETKEY (PORTING DARI NEXT.JS GLOBAL CHUNK)
+    // -------------------------------------------------------------------------
     private fun generateDynamicSecretKey(mediaId: String?): String {
         if (mediaId == null) return "rive"
         try {
@@ -100,6 +104,9 @@ class PrimeSrcHelper {
         return n.toString(16).padStart(8, '0')
     }
 
+    // -------------------------------------------------------------------------
+    // ALUR UTAMA EKSTRAKSI LINK (SINKRON CORE 2026)
+    // -------------------------------------------------------------------------
     suspend fun invokePrimeSrc(
         data: String, 
         mainUrl: String,
@@ -111,119 +118,135 @@ class PrimeSrcHelper {
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
-        val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
-
-        val secretKey = generateDynamicSecretKey(cleanId)
-
-        // -------------------------------------------------------------------------
-        // STRATEGI 1: Pemanenan Jalur Multi-Service Internal
-        // -------------------------------------------------------------------------
-        var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
-        if (!isMovie) {
-            val season = cleanData.substringAfter("?season=").substringBefore("&")
-            val episode = cleanData.substringAfter("&episode=")
-            baseApiUrl += "&season=$season&episode=$episode"
-        }
-
-        val activeServices = listOf("primevids", "flowcast", "asiacloud")
         var linksFound = 0
 
-        val standardHeaders = mapOf(
-            "Authority" to "www.rivestream.app",
-            "Accept" to "application/json",
-            "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-        )
+        // -------------------------------------------------------------------------
+        // JALUR UTAMA (STRATEGI 2): Pemanenan Instan via Gateway Server PrimeSrc
+        // Keuntungan: Kebal total dari jebakan Cloudflare 403 WAF RiveStream
+        // -------------------------------------------------------------------------
+        try {
+            val typeParam = if (isMovie) "movie" else "tv"
+            var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
+            
+            // Perluasan otomatis: jika serial, suntikkan parameter season & episode ke API PrimeSrc
+            if (!isMovie) {
+                val season = cleanData.substringAfter("?season=").substringBefore("&")
+                val episode = cleanData.substringAfter("&episode=")
+                primeSrcApiUrl += "&season=$season&episode=$episode"
+            }
 
-        for (service in activeServices) {
-            try {
-                val proxyMode = if (service == "primevids") "undefined" else "noProxy"
-                val finalApiUrl = "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
+            val primeSrcHeaders = mapOf(
+                "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            )
+            
+            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
-                val response = app.get(finalApiUrl, headers = standardHeaders).text
-                val parsedData = tryParseJson<BackendFetchResponse>(response) ?: continue
-                val sources = parsedData.data?.sources ?: continue
-
-                parsedData.data.captions?.forEach { caption ->
-                    val captionUrl = caption.file ?: return@forEach
-                    val captionLabel = caption.label ?: "External Subtitle"
-                    // PERBAIKAN CORE: Ganti ke newSubtitleFile (bukan Constructor biasa)
-                    subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
+            parsedPrimeSrc?.servers?.forEach { server ->
+                val serverName = server.name?.lowercase() ?: return@forEach
+                val serverKey = server.key ?: return@forEach
+                
+                // Menyusun URL resmi yang otomatis dipahami oleh Extractor Core CloudStream
+                val embedUrl = when {
+                    serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
+                    serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
+                    serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
+                    serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
+                    serverName.contains("dood") -> "https://dood.to/e/$serverKey"
+                    serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
+                    serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
+                    serverName.contains("vidnest") -> "https://vidnest.to/e/$serverKey"
+                    serverName.contains("vidvast") -> "https://vidvast.to/e/$serverKey"
+                    else -> null
                 }
 
-                for (source in sources) {
-                    val streamUrl = source.url ?: continue
-                    val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
-                    val sourceLabel = source.source ?: "RiveStream"
-                    val displayName = "$sourceLabel - $qualityName"
-
-                    if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                        callback(newExtractorLink(
-                            source = providerName,
-                            name = displayName,
-                            url = streamUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.quality = getQualityFromName(qualityName)
-                            this.referer = "https://www.rivestream.app/"
-                            this.headers = mapOf(
-                                "Origin" to "https://www.rivestream.app",
-                                "Accept" to "*/*"
-                            )
-                        })
-                        linksFound++
-                    } else {
-                        val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
-                        val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
-                        if (!isExtractorFound) {
-                            callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
-                                this.quality = getQualityFromName(qualityName)
-                                this.referer = targetReferer
-                                if (service == "flowcast") this.headers = mapOf("Origin" to "https://123movienow.cc")
-                            })
-                        }
-                        linksFound++
-                    }
+                if (embedUrl != null) {
+                    // loadExtractor bawaan core akan otomatis membongkar direct mp4 + vtt subtitle secara asinkronus
+                    val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+                    if (isExtracted) linksFound++
                 }
-            } catch (e: Exception) { e.printStackTrace() }
+            }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
         }
 
         // -------------------------------------------------------------------------
-        // STRATEGI 2: Ekstraksi Otomatis Jalur Server Embed via Gateway PrimeSrc
+        // JALUR CADANGAN (STRATEGI 1): API backendfetch RiveStream Internal
+        // Diturunkan sebagai Fallback karena rawan terblokir Cloudflare 403 Forbidden
         // -------------------------------------------------------------------------
-        if (isMovie) {
+        if (linksFound == 0) {
             try {
-                val primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=movie"
-                val primeSrcHeaders = mapOf(
-                    "Referer" to "https://primesrc.me/embed/movie?tmdb=$cleanId",
+                val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
+                val secretKey = generateDynamicSecretKey(cleanId)
+
+                var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
+                if (!isMovie) {
+                    val season = cleanData.substringAfter("?season=").substringBefore("&")
+                    val episode = cleanData.substringAfter("&episode=")
+                    baseApiUrl += "&season=$season&episode=$episode"
+                }
+
+                val activeServices = listOf("primevids", "flowcast", "asiacloud")
+                val standardHeaders = mapOf(
+                    "Authority" to "www.rivestream.app",
+                    "Accept" to "application/json",
+                    "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                 )
-                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
-                val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
-                parsedPrimeSrc?.servers?.forEach { server ->
-                    val serverName = server.name?.lowercase() ?: return@forEach
-                    val serverKey = server.key ?: return@forEach
-                    
-                    val embedUrl = when {
-                        serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
-                        serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
-                        serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
-                        serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
-                        serverName.contains("dood") -> "https://dood.to/e/$serverKey"
-                        serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
-                        serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                        serverName.contains("vidnest") -> "https://vidnest.to/e/$serverKey"
-                        serverName.contains("vidvast") -> "https://vidvast.to/e/$serverKey"
-                        else -> null
+                for (service in activeServices) {
+                    val proxyMode = if (service == "primevids") "undefined" else "noProxy"
+                    val finalApiUrl = "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
+
+                    val response = app.get(finalApiUrl, headers = standardHeaders).text
+                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: continue
+                    val sources = parsedData.data?.sources ?: continue
+
+                    parsedData.data.captions?.forEach { caption ->
+                        val captionUrl = caption.file ?: return@forEach
+                        val captionLabel = caption.label ?: "External Subtitle"
+                        
+                        // ATURAN CORE BARU: Menggunakan Factory Function newSubtitleFile, bukan constructor usang
+                        subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
                     }
 
-                    if (embedUrl != null) {
-                        val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                        if (isExtracted) linksFound++
+                    for (source in sources) {
+                        val streamUrl = source.url ?: continue
+                        val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
+                        val sourceLabel = source.source ?: "RiveStream"
+                        val displayName = "$sourceLabel - $qualityName"
+
+                        if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
+                            // ATURAN CORE BARU: Menggunakan newExtractorLink bawaan ExtractorApi.kt
+                            callback(newExtractorLink(
+                                source = providerName,
+                                name = displayName,
+                                url = streamUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.quality = getQualityFromName(qualityName)
+                                this.referer = "https://www.rivestream.app/"
+                                this.headers = mapOf("Origin" to "https://www.rivestream.app", "Accept" to "*/*")
+                            })
+                            linksFound++
+                        } else {
+                            val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
+                            val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
+                            if (!isExtractorFound) {
+                                callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
+                                    this.quality = getQualityFromName(qualityName)
+                                    this.referer = targetReferer
+                                    if (service == "flowcast") this.headers = mapOf("Origin" to "https://123movienow.cc")
+                                })
+                            }
+                            linksFound++
+                        }
                     }
                 }
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (e: Exception) { 
+                e.printStackTrace() 
+            }
         }
 
         return linksFound > 0
@@ -231,7 +254,7 @@ class PrimeSrcHelper {
 }
 
 // =========================================================================
-// MODEL DATA CUSTOM
+// MODEL DATA CUSTOM (JACKSON PARSER JSON)
 // =========================================================================
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 
