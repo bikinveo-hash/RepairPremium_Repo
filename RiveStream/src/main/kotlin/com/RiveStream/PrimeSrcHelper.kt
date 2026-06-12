@@ -9,7 +9,7 @@ import android.util.Base64
 class PrimeSrcHelper {
 
     companion object {
-        // Array 70 string garam dinamis dari Next.js RiveStream (Tetap dipertahankan untuk cadangan)
+        // Array 70 string garam dinamis dari Next.js RiveStream (Untuk Fallback Strategi 1)
         private val SALT_ARRAY = listOf(
             "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
             "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
@@ -105,7 +105,7 @@ class PrimeSrcHelper {
     }
 
     // -------------------------------------------------------------------------
-    // ALUR UTAMA EKSTRAKSI LINK (SINKRON CORE 2026)
+    // ALUR UTAMA EKSTRAKSI LINK (SINKRON CORE 2026 - FULL CHAIN RESOLUTION)
     // -------------------------------------------------------------------------
     suspend fun invokePrimeSrc(
         data: String, 
@@ -121,50 +121,57 @@ class PrimeSrcHelper {
         var linksFound = 0
 
         // -------------------------------------------------------------------------
-        // JALUR UTAMA (STRATEGI 2): Pemanenan Instan via Gateway Server PrimeSrc
-        // Keuntungan: Kebal total dari jebakan Cloudflare 403 WAF RiveStream
+        // JALUR UTAMA (STRATEGI 2): Rantai Resolusi Penuh Gateway PrimeSrc
+        // Alur: /api/v1/s -> /spiderman Handshake -> /api/v1/l -> Direct Extractor Link
         // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
             var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
             
-            // Perluasan otomatis: jika serial, suntikkan parameter season & episode ke API PrimeSrc
             if (!isMovie) {
                 val season = cleanData.substringAfter("?season=").substringBefore("&")
                 val episode = cleanData.substringAfter("&episode=")
                 primeSrcApiUrl += "&season=$season&episode=$episode"
             }
 
-            val primeSrcHeaders = mapOf(
+            val baseHeaders = mapOf(
                 "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+                "Accept" to "*/*"
             )
             
-            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+            // 1. Ambil daftar token perantara dari /api/v1/s
+            val primeSrcResponse = app.get(primeSrcApiUrl, headers = baseHeaders).text
             val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
-            parsedPrimeSrc?.servers?.forEach { server ->
-                val serverName = server.name?.lowercase() ?: return@forEach
-                val serverKey = server.key ?: return@forEach
-                
-                // Menyusun URL resmi yang otomatis dipahami oleh Extractor Core CloudStream
-                val embedUrl = when {
-                    serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
-                    serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
-                    serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
-                    serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
-                    serverName.contains("dood") -> "https://dood.to/e/$serverKey"
-                    serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
-                    serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                    serverName.contains("vidnest") -> "https://vidnest.to/e/$serverKey"
-                    serverName.contains("vidvast") -> "https://vidvast.to/e/$serverKey"
-                    else -> null
-                }
+            // OPTIMASI KECEPATAN: Taruh server Streamtape paling depan agar eksekusi instan
+            val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { 
+                it.name?.lowercase()?.contains("streamtape") == true 
+            }
 
-                if (embedUrl != null) {
-                    // loadExtractor bawaan core akan otomatis membongkar direct mp4 + vtt subtitle secara asinkronus
-                    val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+            sortedServers?.forEach { server ->
+                val proxyKey = server.key ?: return@forEach
+                
+                try {
+                    // 2. EKSEKUSI HANDSHAKE SPIDERMAN (Mengaktifkan Sesi Kunci di Backend)
+                    val spidermanUrl = "https://primesrc.me/spiderman?l=$proxyKey"
+                    app.get(spidermanUrl, headers = baseHeaders)
+
+                    // 3. TUKAR TOKEN MENJADI LINK STREAM EMBED ASLI VIA /api/v1/l
+                    val resolverUrl = "https://primesrc.me/api/v1/l?key=$proxyKey"
+                    val resolveResponse = app.get(resolverUrl, headers = baseHeaders).text
+                    val resolvedData = tryParseJson<PrimeSrcLinkResult>(resolveResponse)
+                    
+                    val realEmbedUrl = resolvedData?.link ?: return@forEach
+
+                    // 4. NORMALISASI DAN KIRIM KE EXTRACTOR CORE CLOUDSTREAM
+                    // Ubah streamta.site menjadi streamtape.com agar dikenali extractor internal
+                    val normalizedUrl = realEmbedUrl.replace("streamta.site", "streamtape.com")
+                    
+                    val isExtracted = loadExtractor(normalizedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                     if (isExtracted) linksFound++
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         } catch (e: Exception) { 
@@ -173,7 +180,6 @@ class PrimeSrcHelper {
 
         // -------------------------------------------------------------------------
         // JALUR CADANGAN (STRATEGI 1): API backendfetch RiveStream Internal
-        // Diturunkan sebagai Fallback karena rawan terblokir Cloudflare 403 Forbidden
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
@@ -206,8 +212,6 @@ class PrimeSrcHelper {
                     parsedData.data.captions?.forEach { caption ->
                         val captionUrl = caption.file ?: return@forEach
                         val captionLabel = caption.label ?: "External Subtitle"
-                        
-                        // ATURAN CORE BARU: Menggunakan Factory Function newSubtitleFile, bukan constructor usang
                         subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
                     }
 
@@ -218,7 +222,6 @@ class PrimeSrcHelper {
                         val displayName = "$sourceLabel - $qualityName"
 
                         if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                            // ATURAN CORE BARU: Menggunakan newExtractorLink bawaan ExtractorApi.kt
                             callback(newExtractorLink(
                                 source = providerName,
                                 name = displayName,
@@ -254,7 +257,7 @@ class PrimeSrcHelper {
 }
 
 // =========================================================================
-// MODEL DATA CUSTOM (JACKSON PARSER JSON)
+// MODEL DATA UTAMA (JACKSON PARSER JSON SINKRON CORE 2026)
 // =========================================================================
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 
@@ -279,4 +282,9 @@ data class PrimeSrcServerResponse(@JsonProperty("servers") val servers: List<Pri
 data class PrimeSrcServer(
     @JsonProperty("name") val name: String?,
     @JsonProperty("key") val key: String?
+)
+
+data class PrimeSrcLinkResult(
+    @JsonProperty("link") val link: String?,
+    @JsonProperty("host") val host: String? = null
 )
