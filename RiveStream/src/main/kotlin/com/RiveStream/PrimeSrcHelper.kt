@@ -5,15 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
-import android.util.Log
-import okhttp3.OkHttpClient
-import com.lagradost.nicehttp.Requests
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import javax.net.ssl.HostnameVerifier
-import java.util.concurrent.TimeUnit
 
 class PrimeSrcHelper {
 
@@ -27,31 +18,6 @@ class PrimeSrcHelper {
             "X2NnMn", "MBtoyD", "qz4Ilys7wB", "68lbOMye", "3YUJnmxp", "1fv5Imona", "PlfvvXD7mA", "ZarKfHCaPR", "owORnX", "dQP1YU",
             "dVdkx", "qgiK0E", "cx9wQ", "5F9bGa", "7UjkKrp", "Yvhrj", "wYXez5Dg3", "pG4GMU", "MwMAu", "rFRD5wlM"
         )
-
-        // -------------------------------------------------------------------------
-        // UNASAFE REQUESTS CLIENT: Kebal SSL Expired & Mencegah Timeout Soket
-        // -------------------------------------------------------------------------
-        @OptIn(UnsafeSSL::class)
-        private val unsafeRequests: Requests by lazy {
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            })
-            
-            val sslContext = SSLContext.getInstance("SSL").apply {
-                init(null, trustAllCerts, java.security.SecureRandom())
-            }
-            
-            val customOkhttp = OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier(HostnameVerifier { _, _ -> true })
-                .build()
-                
-            Requests(customOkhttp)
-        }
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
@@ -60,14 +26,16 @@ class PrimeSrcHelper {
         }
         
         if (mediaId == null) return "rive"
-        try {
+        return try {
             val idStr = mediaId.trim()
             val tWord = SALT_ARRAY[(idStr.toLongOrNull() ?: 0L % SALT_ARRAY.size).toInt()]
-            val insertIdx = ((idStr.toLongOrNull() ?: 0L % idStr.length).toInt()) / 2
+            
+            // FIX: Tambahkan kurung di (idStr.toLongOrNull() ?: 0L)
+            val insertIdx = (((idStr.toLongOrNull() ?: 0L) % idStr.length).toInt()) / 2
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
-            return Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
+            Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            return "MzZmMWZjZjc="
+            "MzZmMWZjZjc="
         }
     }
 
@@ -135,19 +103,17 @@ class PrimeSrcHelper {
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
-        // -------------------------------------------------------------------------
-        // JALUR UTAMA 1: Pemanenan Jalur API Internal backendfetch (Bypass WebView)
-        // -------------------------------------------------------------------------
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
-            val servicesResponse = unsafeRequests.get(servicesListUrl, headers = standardHeaders).text
+            // FIX: Gunakan app.get bawaan Cloudstream
+            val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
-            var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
+            val baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
 
             activeServices.amap { service ->
                 try {
@@ -157,25 +123,23 @@ class PrimeSrcHelper {
                     } else {
                         val season = cleanData.substringAfter("?season=").substringBefore("&")
                         val episode = cleanData.substringAfter("&episode=")
-                        "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
+                        "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
 
-                    val response = unsafeRequests.get(finalApiUrl, headers = standardHeaders).text
+                    // FIX: Gunakan app.get bawaan Cloudstream
+                    val response = app.get(finalApiUrl, headers = standardHeaders).text
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
-                    val captions = parsedData.data.captions
-                    if (captions != null) {
-                        for (caption in captions) {
-                            val captionUrl = caption.file ?: continue
-                            val captionLabel = caption.label ?: "External Subtitle"
-                            subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
-                        }
+                    parsedData.data.captions?.forEach { caption ->
+                        val captionUrl = caption.file ?: return@forEach
+                        val captionLabel = caption.label ?: "External Subtitle"
+                        subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
                     }
 
                     for (source in sources) {
                         val streamUrl = source.url ?: continue
-                        val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
+                        val qualityName = source.quality?.uppercase() ?: "AUTO"
                         val sourceLabel = source.source ?: "RiveStream"
                         val displayName = "$sourceLabel - $qualityName"
 
@@ -214,9 +178,6 @@ class PrimeSrcHelper {
             e.printStackTrace() 
         }
 
-        // -------------------------------------------------------------------------
-        // JALUR CADANGAN 2: Server Embed PrimeSrc (Fallback Serentak)
-        // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
                 val typeParam = if (isMovie) "movie" else "tv"
@@ -233,7 +194,8 @@ class PrimeSrcHelper {
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                 )
                 
-                val primeSrcResponse = unsafeRequests.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+                // FIX: Gunakan app.get bawaan Cloudstream
+                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
                 val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
                 val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
@@ -281,7 +243,7 @@ data class BackendData(
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 data class BackendSource(
-    @JsonProperty("quality") val quality: Any?, 
+    @JsonProperty("quality") val quality: String?, // FIX: Ubah Any? ke String?
     @JsonProperty("url") val url: String?,
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
