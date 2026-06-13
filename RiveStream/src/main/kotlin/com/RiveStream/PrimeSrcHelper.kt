@@ -5,6 +5,12 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
+import android.util.Log
+import okhttp3.OkHttpClient
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class PrimeSrcHelper {
 
@@ -18,6 +24,26 @@ class PrimeSrcHelper {
             "X2NnMn", "MBtoyD", "qz4Ilys7wB", "68lbOMye", "3YUJnmxp", "1fv5Imona", "PlfvvXD7mA", "ZarKfHCaPR", "owORnX", "dQP1YU",
             "dVdkx", "qgiK0E", "cx9wQ", "5F9bGa", "7UjkKrp", "Yvhrj", "wYXez5Dg3", "pG4GMU", "MwMAu", "rFRD5wlM"
         )
+
+        // -------------------------------------------------------------------------
+        // BYPASS SSL EXPIRED: Mekanisme Pemaksaan Koneksi TLS Tanpa Cek Expired
+        // -------------------------------------------------------------------------
+        private val unsafeClient: OkHttpClient by lazy {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            
+            val sslContext = SSLContext.getInstance("SSL").apply {
+                init(null, trustAllCerts, java.security.SecureRandom())
+            }
+            
+            app.client.newBuilder()
+                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .build()
+        }
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
@@ -117,12 +143,10 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // MEMANEN SINGKRONISASI DINAMIS: Ambil daftar aktif service dari endpoint terbaru (Log Sat, 13 Jun 2026)
+            // Suntikkan parameter client = unsafeClient agar kebal dari error Chain Validation
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
-            val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
+            val servicesResponse = app.get(servicesListUrl, headers = standardHeaders, client = unsafeClient).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
-            
-            // Gunakan hasil panen dinamis, jika zonk otomatis gunakan 6 daftar fallback terbaru ini
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
             var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
@@ -138,7 +162,8 @@ class PrimeSrcHelper {
                         "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
 
-                    val response = app.get(finalApiUrl, headers = standardHeaders).text
+                    // Tambahkan interseptor bypass SSL di sini juga, bro!
+                    val response = app.get(finalApiUrl, headers = standardHeaders, client = unsafeClient).text
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
@@ -162,8 +187,8 @@ class PrimeSrcHelper {
                                 type = ExtractorLinkType.M3U8
                             ) {
                                 this.quality = getQualityFromName(qualityName)
-                                this.referer = "https://www.rivestream.app/"
-                                this.headers = mapOf("Origin" to "https://www.rivestream.app", "Accept" to "*/*")
+                                this.referer = "$mainUrl/"
+                                this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
                             })
                             synchronized(this) { linksFound++ }
                         } else {
@@ -179,16 +204,12 @@ class PrimeSrcHelper {
                             }
                         }
                     }
-                } catch (e: Exception) { 
-                    e.printStackTrace() 
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Gateway Server Embed PrimeSrc (Ekstraksi Paralel)
+        // JALUR 2: Gateway Server Embed PrimeSrc (Fallback)
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
@@ -203,10 +224,11 @@ class PrimeSrcHelper {
 
                 val primeSrcHeaders = mapOf(
                     "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, decline Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                 )
                 
-                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+                // Tambahkan client = unsafeClient pada rute gateway primesrc
+                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders, client = unsafeClient).text
                 val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
                 val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
@@ -233,14 +255,10 @@ class PrimeSrcHelper {
                         try {
                             val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                             if (isExtracted) synchronized(this) { linksFound++ }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
+                        } catch (e: Exception) { e.printStackTrace() }
                     }
                 }
-            } catch (e: Exception) { 
-                e.printStackTrace() 
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }
 
         return linksFound > 0
