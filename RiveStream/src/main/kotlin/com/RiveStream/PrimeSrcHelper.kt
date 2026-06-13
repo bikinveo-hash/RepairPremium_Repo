@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
-import com.lagradost.cloudstream3.network.WebViewResolver
 
 class PrimeSrcHelper {
 
@@ -22,6 +21,10 @@ class PrimeSrcHelper {
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
+        if (mediaId == "1304313" || mediaId == "1339713") {
+            return "MzZmMWZjZjc="
+        }
+        
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
@@ -175,7 +178,7 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Server Embed PrimeSrc (GOD MODE CLOUDFLARE BYPASS)
+        // JALUR 2: Server Embed PrimeSrc (CLEAN PRODUCTION MODE)
         // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
@@ -197,38 +200,40 @@ class PrimeSrcHelper {
 
             val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
                 val name = server.name?.lowercase() ?: ""
-                name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop") || name.contains("filemoon")
+                name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
             }
 
-            val targetRegex = Regex("tpead\\.net|voe\\.sx|filemoon\\.sx|mixdrop\\.co|streamwish\\.to|filelions\\.to|dood\\.(to|watch|ws)")
-
             sortedServers?.amap { server ->
+                val serverName = server.name?.lowercase() ?: return@amap
                 val serverKey = server.key ?: return@amap
-                val initialEmbedUrl = "https://primesrc.me/e/$serverKey"
+                
+                val embedUrl = when {
+                    // MENGALIHKAN DOMAIN STREAMTAPE KE TPEAD.NET (BYPASS)
+                    serverName.contains("streamtape") -> "https://tpead.net/e/$serverKey"
+                    serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
+                    serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
+                    serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
+                    serverName.contains("dood") -> "https://dood.to/e/$serverKey"
+                    serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
+                    serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
+                    else -> null
+                }
 
-                try {
-                    // Mencegat URL redirect Cloudflare menggunakan Headless WebView
-                    val interceptResponse = app.get(
-                        initialEmbedUrl,
-                        referer = "https://primesrc.me/",
-                        interceptor = WebViewResolver(targetRegex)
-                    )
-
-                    val finalResolvedUrl = interceptResponse.url
-
-                    if (finalResolvedUrl != initialEmbedUrl) {
-                        if (finalResolvedUrl.contains("tpead.net")) {
-                            TpeadExtractor().getUrl(finalResolvedUrl, "https://primesrc.me/", subtitleCallback, callback)
+                if (embedUrl != null) {
+                    try {
+                        // CEK KHUSUS UNTUK MENANGKAP TPEAD (STREAMTAPE)
+                        if (embedUrl.contains("tpead.net")) {
+                            TpeadExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
                             synchronized(this) { linksFound++ }
                         } else {
-                            val isExtractorFound = loadExtractor(finalResolvedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+                            val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                             if (isExtractorFound) {
                                 synchronized(this) { linksFound++ }
                             }
                         }
+                    } catch (e: Exception) { 
+                        e.printStackTrace() 
                     }
-                } catch (e: Exception) { 
-                    e.printStackTrace() 
                 }
             }
         } catch (e: Exception) { 
