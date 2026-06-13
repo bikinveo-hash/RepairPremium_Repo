@@ -14,7 +14,7 @@ class TpeadExtractor : ExtractorApi() {
 
     override suspend fun getUrl(
         url: String,
-        referer: String?,
+        referer: String? = null,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
@@ -53,15 +53,16 @@ class TpeadExtractor : ExtractorApi() {
             if (token.isNotEmpty()) {
                 val finalUrl = "https:$baseUrl$token&dl=1"
                 
-                // Gunakan fungsi builder untuk mematuhi aturan bebas error / deprecated
+                // Gunakan lambda block {} untuk parameter tambahan sesuai aturan ExtractorApi.kt
                 callback(
                     newExtractorLink(
                         source = name,
                         name = "Streamtape (Tpead Bypass)",
-                        url = finalUrl,
-                        referer = mainUrl,
-                        quality = Qualities.Unknown.value
-                    )
+                        url = finalUrl
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         } catch (e: Exception) {
