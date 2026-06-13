@@ -12,6 +12,9 @@ class RiveStreamProvider : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
+    
+    // FIX: Mengaktifkan perlindungan WebView agar CloudStream otomatis merekam cookie clearance Cloudflare
+    override val usesWebView = true 
 
     companion object {
         private const val TMDB_API_KEY = "d64117f26031a428449f102ced3aba73"
