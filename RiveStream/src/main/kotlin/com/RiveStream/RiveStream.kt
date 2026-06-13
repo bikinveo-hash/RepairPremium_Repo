@@ -96,7 +96,6 @@ class RiveStreamProvider : MainAPI() {
             }
         } else {
             val episodes = Coroutines.threadSafeListOf<Episode>()
-        
             item.seasons?.amap { season ->
                 val seasonNum = season.seasonNumber ?: return@amap
                 if (seasonNum == 0) return@amap
