@@ -94,10 +94,13 @@ class PrimeSrcHelper {
             "Authority" to "www.rivestream.app",
             "Accept" to "application/json",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
+        // -------------------------------------------------------------------------
         // JALUR 1: API Internal Backend Fetch RiveStream
+        // -------------------------------------------------------------------------
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
@@ -171,7 +174,9 @@ class PrimeSrcHelper {
             e.printStackTrace() 
         }
 
+        // -------------------------------------------------------------------------
         // JALUR 2: Server Embed PrimeSrc (GOD MODE CLOUDFLARE BYPASS)
+        // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
             var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
