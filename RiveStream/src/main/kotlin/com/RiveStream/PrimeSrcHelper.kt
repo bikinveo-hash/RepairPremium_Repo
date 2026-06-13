@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
 import android.util.Log
 import okhttp3.OkHttpClient
+import com.lagradost.nicehttp.Requests
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
@@ -26,9 +27,9 @@ class PrimeSrcHelper {
         )
 
         // -------------------------------------------------------------------------
-        // BYPASS SSL EXPIRED: Mekanisme Pemaksaan Koneksi TLS Tanpa Cek Expired
+        // UNASAFE REQUESTS INSTANCE: Kebal dari Rantai Sertifikat SSL Expired
         // -------------------------------------------------------------------------
-        private val unsafeClient: OkHttpClient by lazy {
+        private val unsafeRequests: Requests by lazy {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
                 override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -39,10 +40,13 @@ class PrimeSrcHelper {
                 init(null, trustAllCerts, java.security.SecureRandom())
             }
             
-            app.client.newBuilder()
+            // Menggunakan .okhttp murni milik global app untuk diturunkan konfigurasinya
+            val customOkhttp = app.okhttp.newBuilder()
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier { _, _ -> true }
                 .build()
+                
+            Requests(customOkhttp)
         }
     }
 
@@ -143,9 +147,9 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // Suntikkan parameter client = unsafeClient agar kebal dari error Chain Validation
+            // Menggunakan unsafeRequests untuk memotong verifikasi rantai SSL Expired
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
-            val servicesResponse = app.get(servicesListUrl, headers = standardHeaders, client = unsafeClient).text
+            val servicesResponse = unsafeRequests.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
@@ -162,8 +166,7 @@ class PrimeSrcHelper {
                         "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
 
-                    // Tambahkan interseptor bypass SSL di sini juga, bro!
-                    val response = app.get(finalApiUrl, headers = standardHeaders, client = unsafeClient).text
+                    val response = unsafeRequests.get(finalApiUrl, headers = standardHeaders).text
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
@@ -204,12 +207,16 @@ class PrimeSrcHelper {
                             }
                         }
                     }
-                } catch (e: Exception) { e.printStackTrace() }
+                } catch (e: Exception) { 
+                    e.printStackTrace() 
+                }
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Gateway Server Embed PrimeSrc (Fallback)
+        // JALUR 2: Gateway Server Embed PrimeSrc (Ekstraksi Paralel Fallback)
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
@@ -227,8 +234,7 @@ class PrimeSrcHelper {
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
                 )
                 
-                // Tambahkan client = unsafeClient pada rute gateway primesrc
-                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders, client = unsafeClient).text
+                val primeSrcResponse = unsafeRequests.get(primeSrcApiUrl, headers = primeSrcHeaders).text
                 val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
                 val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
@@ -255,10 +261,14 @@ class PrimeSrcHelper {
                         try {
                             val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                             if (isExtracted) synchronized(this) { linksFound++ }
-                        } catch (e: Exception) { e.printStackTrace() }
+                        } catch (e: Exception) { 
+                            e.printStackTrace() 
+                        }
                     }
                 }
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (e: Exception) { 
+                e.printStackTrace() 
+            }
         }
 
         return linksFound > 0
