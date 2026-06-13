@@ -178,7 +178,7 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Server Embed PrimeSrc (VISUAL DEBUGGING MODE)
+        // JALUR 2: Server Embed PrimeSrc (CLEAN PRODUCTION MODE)
         // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
@@ -195,28 +195,12 @@ class PrimeSrcHelper {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
             
-            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders)
-            val responseText = primeSrcResponse.text
-
-            // === VISUAL DEBUGGER 1: Cek Koneksi ke PrimeSrc ===
-            callback(newExtractorLink(source = "1. CEK KONEKSI API", name = "PrimeSrc Status HTTP: ${primeSrcResponse.code}", url = "https://debug.com") {})
-            
-            if (primeSrcResponse.code != 200) {
-                callback(newExtractorLink(source = "1. CEK KONEKSI API", name = "DIBLOKIR CLOUDFLARE! (Butuh WebViewResolver)", url = "https://debug.com") {})
-            }
-
-            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(responseText)
+            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
             val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
                 val name = server.name?.lowercase() ?: ""
                 name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
-            }
-
-            // === VISUAL DEBUGGER 2: Cek Hasil Parsing JSON ===
-            if (sortedServers != null && sortedServers.isNotEmpty()) {
-                callback(newExtractorLink(source = "2. HASIL PARSING", name = "Sukses Narik ${sortedServers.size} Server Mentah", url = "https://debug.com") {})
-            } else if (primeSrcResponse.code == 200) {
-                callback(newExtractorLink(source = "2. HASIL PARSING", name = "Response 200 OK tapi JSON Kosong/Struktur Berubah!", url = "https://debug.com") {})
             }
 
             sortedServers?.amap { server ->
@@ -224,7 +208,8 @@ class PrimeSrcHelper {
                 val serverKey = server.key ?: return@amap
                 
                 val embedUrl = when {
-                    serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
+                    // MENGALIHKAN DOMAIN STREAMTAPE KE TPEAD.NET (BYPASS)
+                    serverName.contains("streamtape") -> "https://tpead.net/e/$serverKey"
                     serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
                     serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
                     serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
@@ -236,22 +221,23 @@ class PrimeSrcHelper {
 
                 if (embedUrl != null) {
                     try {
-                        val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                        
-                        // === VISUAL DEBUGGER 3: Cek Eksekusi Extractor ===
-                        if (!isExtractorFound) {
-                            callback(newExtractorLink(source = "3. CEK PLUGIN", name = "Plugin $serverName TIDAK TERINSTAL di HP lu!", url = embedUrl) {})
-                        } else {
+                        // CEK KHUSUS UNTUK MENANGKAP TPEAD (STREAMTAPE)
+                        if (embedUrl.contains("tpead.net")) {
+                            TpeadExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
                             synchronized(this) { linksFound++ }
+                        } else {
+                            val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+                            if (isExtractorFound) {
+                                synchronized(this) { linksFound++ }
+                            }
                         }
-
                     } catch (e: Exception) { 
                         e.printStackTrace() 
                     }
                 }
             }
         } catch (e: Exception) { 
-            callback(newExtractorLink(source = "0. FATAL CRASH", name = "Error: ${e.message}", url = "https://debug.com") {})
+            e.printStackTrace() 
         }
 
         return linksFound > 0
