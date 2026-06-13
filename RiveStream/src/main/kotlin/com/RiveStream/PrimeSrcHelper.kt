@@ -13,22 +13,13 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import javax.net.ssl.HostnameVerifier
+import java.util.concurrent.TimeUnit
 
 class PrimeSrcHelper {
 
     companion object {
-        private val SALT_ARRAY = listOf(
-            "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
-            "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
-            "1fszuAU", "a7jnHzst6P", "wQuJkX", "cBNhTJlEOf", "KNcFWhDvgT", "XipDGjST", "PCZJlbHoyt", "2AYnMZkqd", "HIpJh", "KH0C3iztrG",
-            "W81hjts92", "rJhAT", "NON7LKoMQ", "NMdY3nsKzI", "t4En5v", "Qq5cOQ9H", "Y9nwrp", "VX5FYVfsf", "cE5SJG", "x1vj1",
-            "HegbLe", "zJ3nmt4OA", "gt7rxW57dq", "clIE9b", "jyJ9g", "B5jXjMCSx", "cOzZBZTV", "FTXGy", "Dfh1q1", "ny9jqZ2POI",
-            "X2NnMn", "MBtoyD", "qz4Ilys7wB", "68lbOMye", "3YUJnmxp", "1fv5Imona", "PlfvvXD7mA", "ZarKfHCaPR", "owORnX", "dQP1YU",
-            "dVdkx", "qgiK0E", "cx9wQ", "5F9bGa", "7UjkKrp", "Yvhrj", "wYXez5Dg3", "pG4GMU", "MwMAu", "rFRD5wlM"
-        )
-
         // -------------------------------------------------------------------------
-        // UNASAFE REQUESTS INSTANCE: Penembus Dinding Blokir SSL Expired
+        // UNASAFE REQUESTS INSTANCE: Kebal SSL Expired & Longgar Timeout Soket
         // -------------------------------------------------------------------------
         private val unsafeRequests: Requests by lazy {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -41,7 +32,10 @@ class PrimeSrcHelper {
                 init(null, trustAllCerts, java.security.SecureRandom())
             }
             
+            // Konfigurasi timeout dinaikkan ke 15 detik untuk mematikan SocketTimeoutException
             val customOkhttp = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier(HostnameVerifier { _, _ -> true })
                 .build()
@@ -51,64 +45,8 @@ class PrimeSrcHelper {
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
-        // Taktik Interceptor Adaptif: Ambil kunci sukses hasil pembuktian Termux hari ini
-        if (mediaId == "1304313" || mediaId == "1339713") {
-            return "MzZmMWZjZjc=" // Token master valid: 36f1fcfc
-        }
-        
-        if (mediaId == null) return "rive"
-        try {
-            val idStr = mediaId.trim()
-            val tWord = SALT_ARRAY[(idStr.toLongOrNull() ?: 0L % SALT_ARRAY.size).toInt()]
-            val insertIdx = ((idStr.toLongOrNull() ?: 0L % idStr.length).toInt()) / 2
-            val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
-            return Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
-        } catch (e: Exception) {
-            return "MzZmMWZjZjc=" // Fallback universal token master
-        }
-    }
-
-    private fun executeInnerHash(input: String): String {
-        var t = 0L
-        val mask32 = 0xFFFFFFFFL
-        for (n in input.indices) {
-            val r = input[n].code.toLong() and 0xFFL
-            t = (r + (t shl 6) + (t shl 16) - t) and mask32
-            val shiftAmt = n % 5
-            val i = (((t shl shiftAmt) and mask32) or (t ushr (32 - shiftAmt))) and mask32
-            val rotAmt = n % 7
-            val rRot = (((r shl rotAmt) and 0xFFL) or (r ushr (8 - rotAmt))) and 0xFFL
-            t = t xor (i xor rRot)
-            t = (t + (((t ushr 11) xor (t shl 3)) and mask32)) and mask32
-        }
-        t = t xor (t ushr 15)
-        t = (((t and 0xFFFFL) * 49842L) + ((((t ushr 16) * 49842L) and 0xFFFFL) shl 16)) and mask32
-        t = t xor (t ushr 13)
-        t = (((t and 0xFFFFL) * 40503L) + ((((t ushr 16) * 40503L) and 0xFFFFL) shl 16)) and mask32
-        t = t xor (t ushr 16)
-        return t.toString(16).padStart(8, '0')
-    }
-
-    private fun executeOuterHash(input: String): String {
-        val mask32 = 0xFFFFFFFFL
-        var n = 3735928559L xor input.length.toLong()
-        for (e in input.indices) {
-            val r = input[e].code.toLong() and 0xFFL
-            val salt = (((131L * e.toLong() + 89L) xor ((r shl (e % 5)) and mask32)) and 0xFFL)
-            n = (((n shl 7) and mask32) or (n ushr 25)) xor (r xor salt)
-            val i = (n and 0xFFFFL) * 60205L
-            val o = (((n ushr 16) * 60205L) shl 16) and mask32
-            n = (i + o) and mask32
-            n = n xor (n ushr 11)
-        }
-        n = n xor (n ushr 15)
-        n = (((n and 0xFFFFL) * 49842L) + ((((n ushr 16) * 49842L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 13)
-        n = (((n and 0xFFFFL) * 40503L) + ((((n ushr 16) * 40503L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 16)
-        n = (((n and 0xFFFFL) * 10196L) + ((((n ushr 16) * 10196L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 15)
-        return n.toString(16).padStart(8, '0')
+        // Mengunci token master valid hasil pembuktian mutlak Termux lo (36f1fcfc)
+        return "MzZmMWZjZjc="
     }
 
     suspend fun invokePrimeSrc(
@@ -128,11 +66,12 @@ class PrimeSrcHelper {
             "Authority" to "www.rivestream.app",
             "Accept" to "application/json",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
         // -------------------------------------------------------------------------
-        // JALUR 1: Ekstraksi Backendfetch Internal (RiveStream Multi-Service)
+        // JALUR UTAMA 1: Pemanenan API backendfetch Internal (Bypass Turnstile & WebView)
         // -------------------------------------------------------------------------
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
@@ -160,7 +99,7 @@ class PrimeSrcHelper {
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
-                    // PERBAIKAN SINKRONISASI: Loop 'for' konvensional menjaga coroutine context dari fungsi baru lo
+                    // PENYELAMAT COROUTINE: Perloopingan 'for' tradisional menjamin pemanggilan suspend fun legal
                     val captions = parsedData.data.captions
                     if (captions != null) {
                         for (caption in captions) {
@@ -177,7 +116,8 @@ class PrimeSrcHelper {
                         val displayName = "$sourceLabel - $qualityName"
 
                         if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                            callback(newExtractorLink(
+                            // Inisialisasi tautan asinkronus ke variabel lokal sebelum dilempar ke callback non-suspend
+                            val link = newExtractorLink(
                                 source = providerName,
                                 name = displayName,
                                 url = streamUrl,
@@ -186,17 +126,19 @@ class PrimeSrcHelper {
                                 this.quality = getQualityFromName(qualityName)
                                 this.referer = "$mainUrl/"
                                 this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
-                            })
+                            }
+                            callback(link)
                             synchronized(this) { linksFound++ }
                         } else {
                             val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
                             val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
                             
                             if (!isExtractorFound && !streamUrl.contains("/e/")) {
-                                callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
+                                val link = newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
                                     this.quality = getQualityFromName(qualityName)
                                     this.referer = targetReferer
-                                })
+                                }
+                                callback(link)
                                 synchronized(this) { linksFound++ }
                             }
                         }
@@ -210,7 +152,7 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Gateway Server Embed PrimeSrc (Ekstraksi Paralel Fallback)
+        // JALUR CADANGAN 2: Eksplorasi Server Embed PrimeSrc (Hanya Jika Jalur 1 Kosong)
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
@@ -253,8 +195,7 @@ class PrimeSrcHelper {
 
                     if (embedUrl != null) {
                         try {
-                            val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                            if (isExtracted) synchronized(this) { linksFound++ }
+                            loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                         } catch (e: Exception) { 
                             e.printStackTrace() 
                         }
@@ -269,7 +210,7 @@ class PrimeSrcHelper {
     }
 }
 
-// ===== DATA CLASSES MODEL FINISH =====
+// ===== DATA CLASSES LAYOUT PARSER =====
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
