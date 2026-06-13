@@ -9,10 +9,10 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class TpeadExtractor : ExtractorApi() {
     override val name = "Streamtape"
-    override val mainUrl = "https://tpead.net"
+    // Ganti mainUrl menjadi standar Streamtape agar dideteksi Cloudstream otomatis
+    override val mainUrl = "https://streamtape.com" 
     override val requiresReferer = false
 
-    // FIX: Hapus "= null" di parameter referer karena dilarang oleh Kotlin saat override
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -20,10 +20,15 @@ class TpeadExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Nembak ke tpead.net
-            val response = app.get(url, referer = referer).text
+            // Translasi Otomatis: Ubah streamtape.com / streamtape.to menjadi domain bypass tpead.net
+            val bypassUrl = url.replace(Regex("(?i)streamtape\\.(com|to|net)"), "tpead.net")
             
-            // Regex nyari innerHTML = "//tpe..."
+            // Validasi format url Embed (Wajib menggunakan /e/)
+            val finalTargetUrl = if (bypassUrl.contains("/v/")) bypassUrl.replace("/v/", "/e/") else bypassUrl
+
+            val response = app.get(finalTargetUrl, referer = referer).text
+            
+            // Regex mencari src video utama dari Tpead HTML
             val baseRegex = Regex("""(?i)(?:document\.getElementById\('[^']+'\)\.)?innerHTML\s*=\s*['"](//[^'"]+)['"]""")
             val baseMatch = baseRegex.find(response) ?: return
             
@@ -31,7 +36,7 @@ class TpeadExtractor : ExtractorApi() {
             val startIndex = baseMatch.range.last
             val searchArea = response.substring(startIndex, (startIndex + 200).coerceAtMost(response.length))
             
-            // Regex narik token via .substring() atau direct concat
+            // Regex untuk mengambil sisa token yang disambung menggunakan JavaScript String Concatenation
             val tokenRegex = Regex("""\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""")
             val altTokenRegex = Regex("""\+\s*['"]([^'"]+)['"]""")
             
@@ -54,14 +59,14 @@ class TpeadExtractor : ExtractorApi() {
             if (token.isNotEmpty()) {
                 val finalUrl = "https:$baseUrl$token&dl=1"
                 
-                // Gunakan lambda block {} untuk parameter tambahan sesuai aturan ExtractorApi.kt
                 callback(
                     newExtractorLink(
                         source = name,
                         name = "Streamtape (Tpead Bypass)",
                         url = finalUrl
                     ) {
-                        this.referer = mainUrl
+                        // Header referer sangat penting agar tidak ditendang oleh Streamtape
+                        this.referer = "https://tpead.net/"
                         this.quality = Qualities.Unknown.value
                     }
                 )
