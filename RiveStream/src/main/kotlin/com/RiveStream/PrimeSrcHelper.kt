@@ -12,6 +12,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import javax.net.ssl.HostnameVerifier
 
 class PrimeSrcHelper {
 
@@ -27,7 +28,7 @@ class PrimeSrcHelper {
         )
 
         // -------------------------------------------------------------------------
-        // UNASAFE REQUESTS INSTANCE: Kebal dari Rantai Sertifikat SSL Expired
+        // UNASAFE REQUESTS INSTANCE: Kebal SSL Expired Menggunakan Client Mandiri
         // -------------------------------------------------------------------------
         private val unsafeRequests: Requests by lazy {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -40,10 +41,10 @@ class PrimeSrcHelper {
                 init(null, trustAllCerts, java.security.SecureRandom())
             }
             
-            // Menggunakan .okhttp murni milik global app untuk diturunkan konfigurasinya
-            val customOkhttp = app.okhttp.newBuilder()
+            // Membangun Builder murni dari awal untuk menghindari unresolved reference
+            val customOkhttp = OkHttpClient.Builder()
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
+                .hostnameVerifier(HostnameVerifier { _, _ -> true })
                 .build()
                 
             Requests(customOkhttp)
@@ -147,7 +148,7 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // Menggunakan unsafeRequests untuk memotong verifikasi rantai SSL Expired
+            // Perbaikan parameter: Bersih tanpa membawa buntulan argument 'client' ilegal
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
             val servicesResponse = unsafeRequests.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
@@ -288,7 +289,7 @@ data class BackendSource(
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
 )
-data class BackendCaption(
+data class BackendZeroCaption(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file") val file: String?
 )
