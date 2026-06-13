@@ -28,9 +28,7 @@ class PrimeSrcHelper {
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
-            // Aman dari crash Modulo!
             val tWord = SALT_ARRAY[((idStr.toLongOrNull() ?: 0L) % SALT_ARRAY.size).toInt()]
-            
             val insertIdx = (((idStr.toLongOrNull() ?: 0L) % idStr.length).toInt()) / 2
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
             Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
@@ -180,7 +178,7 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Server Embed PrimeSrc (GABUNGAN)
+        // JALUR 2: Server Embed PrimeSrc (VISUAL DEBUGGING MODE)
         // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
@@ -197,12 +195,28 @@ class PrimeSrcHelper {
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
             )
             
-            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
-            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
+            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders)
+            val responseText = primeSrcResponse.text
+
+            // === VISUAL DEBUGGER 1: Cek Koneksi ke PrimeSrc ===
+            callback(newExtractorLink(source = "1. CEK KONEKSI API", name = "PrimeSrc Status HTTP: ${primeSrcResponse.code}", url = "https://debug.com") {})
+            
+            if (primeSrcResponse.code != 200) {
+                callback(newExtractorLink(source = "1. CEK KONEKSI API", name = "DIBLOKIR CLOUDFLARE! (Butuh WebViewResolver)", url = "https://debug.com") {})
+            }
+
+            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(responseText)
 
             val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
                 val name = server.name?.lowercase() ?: ""
                 name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
+            }
+
+            // === VISUAL DEBUGGER 2: Cek Hasil Parsing JSON ===
+            if (sortedServers != null && sortedServers.isNotEmpty()) {
+                callback(newExtractorLink(source = "2. HASIL PARSING", name = "Sukses Narik ${sortedServers.size} Server Mentah", url = "https://debug.com") {})
+            } else if (primeSrcResponse.code == 200) {
+                callback(newExtractorLink(source = "2. HASIL PARSING", name = "Response 200 OK tapi JSON Kosong/Struktur Berubah!", url = "https://debug.com") {})
             }
 
             sortedServers?.amap { server ->
@@ -223,16 +237,21 @@ class PrimeSrcHelper {
                 if (embedUrl != null) {
                     try {
                         val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                        if (isExtractorFound) {
+                        
+                        // === VISUAL DEBUGGER 3: Cek Eksekusi Extractor ===
+                        if (!isExtractorFound) {
+                            callback(newExtractorLink(source = "3. CEK PLUGIN", name = "Plugin $serverName TIDAK TERINSTAL di HP lu!", url = embedUrl) {})
+                        } else {
                             synchronized(this) { linksFound++ }
                         }
+
                     } catch (e: Exception) { 
                         e.printStackTrace() 
                     }
                 }
             }
         } catch (e: Exception) { 
-            e.printStackTrace() 
+            callback(newExtractorLink(source = "0. FATAL CRASH", name = "Error: ${e.message}", url = "https://debug.com") {})
         }
 
         return linksFound > 0
@@ -247,7 +266,7 @@ data class BackendData(
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 data class BackendSource(
-    @JsonProperty("quality") val quality: String?,
+    @JsonProperty("quality") val quality: String?, 
     @JsonProperty("url") val url: String?,
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
