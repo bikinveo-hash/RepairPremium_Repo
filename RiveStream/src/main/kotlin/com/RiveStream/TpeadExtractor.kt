@@ -12,6 +12,7 @@ class TpeadExtractor : ExtractorApi() {
     override val mainUrl = "https://tpead.net"
     override val requiresReferer = false
 
+    // FIX: Hapus "= null" di parameter referer karena dilarang oleh Kotlin saat override
     override suspend fun getUrl(
         url: String,
         referer: String?,
