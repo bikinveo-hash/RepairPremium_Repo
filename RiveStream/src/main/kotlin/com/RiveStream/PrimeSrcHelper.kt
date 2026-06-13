@@ -28,7 +28,7 @@ class PrimeSrcHelper {
         )
 
         // -------------------------------------------------------------------------
-        // UNASAFE REQUESTS INSTANCE: Kebal SSL Expired Menggunakan Client Mandiri
+        // UNASAFE REQUESTS INSTANCE: Mengabaikan Proteksi SSL Expired Pada Gateway
         // -------------------------------------------------------------------------
         private val unsafeRequests: Requests by lazy {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -41,7 +41,6 @@ class PrimeSrcHelper {
                 init(null, trustAllCerts, java.security.SecureRandom())
             }
             
-            // Membangun Builder murni dari awal untuk menghindari unresolved reference
             val customOkhttp = OkHttpClient.Builder()
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier(HostnameVerifier { _, _ -> true })
@@ -148,7 +147,6 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // Perbaikan parameter: Bersih tanpa membawa buntulan argument 'client' ilegal
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
             val servicesResponse = unsafeRequests.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
@@ -171,10 +169,14 @@ class PrimeSrcHelper {
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
-                    parsedData.data.captions?.forEach { caption ->
-                        val captionUrl = caption.file ?: return@forEach
-                        val captionLabel = caption.label ?: "External Subtitle"
-                        subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
+                    // PERBAIKAN TIMEOUT COROUTINE: Ubah .forEach menjadi loop 'for' agar legal memanggil suspend fun newSubtitleFile
+                    val captions = parsedData.data.captions
+                    if (captions != null) {
+                        for (caption in captions) {
+                            val captionUrl = caption.file ?: continue
+                            val captionLabel = caption.label ?: "External Subtitle"
+                            subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
+                        }
                     }
 
                     for (source in sources) {
@@ -289,7 +291,7 @@ data class BackendSource(
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
 )
-data class BackendZeroCaption(
+data class BackendCaption(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file") val file: String?
 )
