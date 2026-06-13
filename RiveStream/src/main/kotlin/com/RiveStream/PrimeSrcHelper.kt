@@ -103,50 +103,84 @@ class PrimeSrcHelper {
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
+        val standardHeaders = mapOf(
+            "Authority" to "www.rivestream.app",
+            "Accept" to "application/json",
+            "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+        )
+
         // -------------------------------------------------------------------------
-        // JALUR 1: Gateway Server Embed PrimeSrc (Diproses Secara Paralel Asinkronus)
+        // JALUR 1: Ekstraksi Backendfetch Internal (RiveStream Multi-Service)
         // -------------------------------------------------------------------------
         try {
-            val typeParam = if (isMovie) "movie" else "tv"
-            var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
+            val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
+            val secretKey = generateDynamicSecretKey(cleanId)
+
+            // MEMANEN SINGKRONISASI DINAMIS: Ambil daftar aktif service dari endpoint terbaru (Log Sat, 13 Jun 2026)
+            val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
+            val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
+            val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             
-            if (!isMovie) {
-                val season = cleanData.substringAfter("?season=").substringBefore("&")
-                val episode = cleanData.substringAfter("&episode=")
-                primeSrcApiUrl += "&season=$season&episode=$episode"
-            }
+            // Gunakan hasil panen dinamis, jika zonk otomatis gunakan 6 daftar fallback terbaru ini
+            val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
-            val primeSrcHeaders = mapOf(
-                "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-            )
-            
-            val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
-            val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
+            var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
 
-            // Menggunakan .amap agar 33 server dieksekusi secara paralel dan serentak!
-            parsedPrimeSrc?.servers?.amap { server ->
-                val serverName = server.name?.lowercase() ?: return@amap
-                val serverKey = server.key ?: return@amap
-                
-                val embedUrl = when {
-                    serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
-                    serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
-                    serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
-                    serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
-                    serverName.contains("dood") -> "https://dood.to/e/$serverKey"
-                    serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
-                    serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                    else -> null
-                }
-
-                if (embedUrl != null) {
-                    try {
-                        val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                        if (isExtracted) synchronized(this) { linksFound++ }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+            activeServices.amap { service ->
+                try {
+                    val proxyMode = if (service == "primevids") "undefined" else "noProxy"
+                    val finalApiUrl = if (isMovie) {
+                        "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
+                    } else {
+                        val season = cleanData.substringAfter("?season=").substringBefore("&")
+                        val episode = cleanData.substringAfter("&episode=")
+                        "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
+
+                    val response = app.get(finalApiUrl, headers = standardHeaders).text
+                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
+                    val sources = parsedData.data?.sources ?: return@amap
+
+                    parsedData.data.captions?.forEach { caption ->
+                        val captionUrl = caption.file ?: return@forEach
+                        val captionLabel = caption.label ?: "External Subtitle"
+                        subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
+                    }
+
+                    for (source in sources) {
+                        val streamUrl = source.url ?: continue
+                        val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
+                        val sourceLabel = source.source ?: "RiveStream"
+                        val displayName = "$sourceLabel - $qualityName"
+
+                        if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
+                            callback(newExtractorLink(
+                                source = providerName,
+                                name = displayName,
+                                url = streamUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.quality = getQualityFromName(qualityName)
+                                this.referer = "https://www.rivestream.app/"
+                                this.headers = mapOf("Origin" to "https://www.rivestream.app", "Accept" to "*/*")
+                            })
+                            synchronized(this) { linksFound++ }
+                        } else {
+                            val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
+                            val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
+                            
+                            if (!isExtractorFound && !streamUrl.contains("/e/")) {
+                                callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
+                                    this.quality = getQualityFromName(qualityName)
+                                    this.referer = targetReferer
+                                })
+                                synchronized(this) { linksFound++ }
+                            }
+                        }
+                    }
+                } catch (e: Exception) { 
+                    e.printStackTrace() 
                 }
             }
         } catch (e: Exception) { 
@@ -154,77 +188,54 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR 2: Ekstraksi Backendfetch Internal (RiveStream Multi-Service Fallback)
+        // JALUR 2: Gateway Server Embed PrimeSrc (Ekstraksi Paralel)
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
-                val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
-                val secretKey = generateDynamicSecretKey(cleanId)
-
-                var baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
-                val standardHeaders = mapOf(
-                    "Authority" to "www.rivestream.app",
-                    "Accept" to "application/json",
-                    "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                )
-
-                val activeServices = listOf("primevids", "flowcast", "asiacloud")
+                val typeParam = if (isMovie) "movie" else "tv"
+                var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
                 
-                activeServices.amap { service ->
-                    try {
-                        val proxyMode = if (service == "primevids") "undefined" else "noProxy"
-                        val finalApiUrl = if (isMovie) {
-                            "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
-                        } else {
-                            val season = cleanData.substringAfter("?season=").substringBefore("&")
-                            val episode = cleanData.substringAfter("&episode=")
-                            "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
+                if (!isMovie) {
+                    val season = cleanData.substringAfter("?season=").substringBefore("&")
+                    val episode = cleanData.substringAfter("&episode=")
+                    primeSrcApiUrl += "&season=$season&episode=$episode"
+                }
+
+                val primeSrcHeaders = mapOf(
+                    "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, decline Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                )
+                
+                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
+                val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
+
+                val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
+                    val name = server.name?.lowercase() ?: ""
+                    name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
+                }
+
+                sortedServers?.amap { server ->
+                    val serverName = server.name?.lowercase() ?: return@amap
+                    val serverKey = server.key ?: return@amap
+                    
+                    val embedUrl = when {
+                        serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
+                        serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
+                        serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
+                        serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
+                        serverName.contains("dood") -> "https://dood.to/e/$serverKey"
+                        serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
+                        serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
+                        else -> null
+                    }
+
+                    if (embedUrl != null) {
+                        try {
+                            val isExtracted = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+                            if (isExtracted) synchronized(this) { linksFound++ }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-
-                        val response = app.get(finalApiUrl, headers = standardHeaders).text
-                        val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
-                        val sources = parsedData.data?.sources ?: return@amap
-
-                        parsedData.data.captions?.forEach { caption ->
-                            val captionUrl = caption.file ?: return@forEach
-                            val captionLabel = caption.label ?: "External Subtitle"
-                            subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
-                        }
-
-                        for (source in sources) {
-                            val streamUrl = source.url ?: continue
-                            val qualityName = source.quality?.toString()?.uppercase() ?: "AUTO"
-                            val sourceLabel = source.source ?: "RiveStream"
-                            val displayName = "$sourceLabel - $qualityName"
-
-                            if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                                callback(newExtractorLink(
-                                    source = providerName,
-                                    name = displayName,
-                                    url = streamUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.quality = getQualityFromName(qualityName)
-                                    this.referer = "https://www.rivestream.app/"
-                                    this.headers = mapOf("Origin" to "https://www.rivestream.app", "Accept" to "*/*")
-                                })
-                                synchronized(this) { linksFound++ }
-                            } else {
-                                val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
-                                val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
-                                
-                                if (!isExtractorFound && !streamUrl.contains("/e/")) {
-                                    callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
-                                        this.quality = getQualityFromName(qualityName)
-                                        this.referer = targetReferer
-                                    })
-                                    synchronized(this) { linksFound++ }
-                                }
-                            }
-                        }
-                    } catch (e: Exception) { 
-                        e.printStackTrace() 
                     }
                 }
             } catch (e: Exception) { 
@@ -237,6 +248,7 @@ class PrimeSrcHelper {
 }
 
 // ===== DATA CLASSES MODEL =====
+data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
     @JsonProperty("sources") val sources: List<BackendSource>?,
