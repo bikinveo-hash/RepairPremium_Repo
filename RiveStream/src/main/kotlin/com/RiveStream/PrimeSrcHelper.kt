@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
+import com.lagradost.cloudstream3.network.WebViewResolver // <-- IMPORT INI YANG BIKIN ERROR SEBELUMNYA HILANG
 
 class PrimeSrcHelper {
 
@@ -21,8 +22,6 @@ class PrimeSrcHelper {
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
-        // PERHATIAN: Logika hardcode "MzZmMWZjZjc=" sudah dihapus agar tidak bentrok dengan film lain.
-        // Sekarang semua film dijamin melewati perhitungan Hash yang adil.
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
@@ -31,7 +30,7 @@ class PrimeSrcHelper {
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
             Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            "MzZmMWZjZjc=" // Fallback darurat
+            "MzZmMWZjZjc="
         }
     }
 
@@ -98,9 +97,7 @@ class PrimeSrcHelper {
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
         )
 
-        // -------------------------------------------------------------------------
         // JALUR 1: API Internal Backend Fetch RiveStream
-        // -------------------------------------------------------------------------
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
@@ -174,9 +171,7 @@ class PrimeSrcHelper {
             e.printStackTrace() 
         }
 
-        // -------------------------------------------------------------------------
         // JALUR 2: Server Embed PrimeSrc (GOD MODE CLOUDFLARE BYPASS)
-        // -------------------------------------------------------------------------
         try {
             val typeParam = if (isMovie) "movie" else "tv"
             var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
@@ -200,34 +195,26 @@ class PrimeSrcHelper {
                 name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop") || name.contains("filemoon")
             }
 
-            // Target regex untuk mencegat WebViewResolver ketika sudah mendarat di domain asli
             val targetRegex = Regex("tpead\\.net|voe\\.sx|filemoon\\.sx|mixdrop\\.co|streamwish\\.to|filelions\\.to|dood\\.(to|watch|ws)")
 
             sortedServers?.amap { server ->
                 val serverKey = server.key ?: return@amap
-                
-                // KITA TEMBAK DULU KE PRIMESRC SEBAGAI PENENGAH!
                 val initialEmbedUrl = "https://primesrc.me/e/$serverKey"
 
                 try {
-                    // MELEPASKAN WEBVIEW RESOLVER UNTUK MEMBUNUH CLOUDFLARE TURNSTILE
-                    // Mesin ini akan mengeksekusi main.js, dapet cf_clearance, lalu nangkap redirectnya!
                     val interceptResponse = app.get(
                         initialEmbedUrl,
                         referer = "https://primesrc.me/",
                         interceptor = WebViewResolver(targetRegex)
                     )
 
-                    // Inilah harta karunnya: URL Asli setelah Cloudflare dipecahkan
                     val finalResolvedUrl = interceptResponse.url
 
                     if (finalResolvedUrl != initialEmbedUrl) {
-                        // CEK KHUSUS UNTUK MENANGKAP TPEAD (STREAMTAPE)
                         if (finalResolvedUrl.contains("tpead.net")) {
                             TpeadExtractor().getUrl(finalResolvedUrl, "https://primesrc.me/", subtitleCallback, callback)
                             synchronized(this) { linksFound++ }
                         } else {
-                            // Sisa server lempar ke sistem bawaan
                             val isExtractorFound = loadExtractor(finalResolvedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                             if (isExtractorFound) {
                                 synchronized(this) { linksFound++ }
@@ -246,7 +233,6 @@ class PrimeSrcHelper {
     }
 }
 
-// ===== DATA CLASSES MODEL =====
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
