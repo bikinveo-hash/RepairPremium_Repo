@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import android.util.Base64
-import com.lagradost.cloudstream3.network.WebViewResolver // <-- IMPORT INI YANG BIKIN ERROR SEBELUMNYA HILANG
+import com.lagradost.cloudstream3.network.WebViewResolver
 
 class PrimeSrcHelper {
 
@@ -202,6 +202,7 @@ class PrimeSrcHelper {
                 val initialEmbedUrl = "https://primesrc.me/e/$serverKey"
 
                 try {
+                    // Mencegat URL redirect Cloudflare menggunakan Headless WebView
                     val interceptResponse = app.get(
                         initialEmbedUrl,
                         referer = "https://primesrc.me/",
@@ -233,6 +234,7 @@ class PrimeSrcHelper {
     }
 }
 
+// ===== DATA CLASSES MODEL =====
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
