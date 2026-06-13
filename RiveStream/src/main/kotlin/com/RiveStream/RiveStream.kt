@@ -132,14 +132,80 @@ class RiveStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val primeSrcHelper = PrimeSrcHelper()
-        return primeSrcHelper.invokePrimeSrc(
-            data = data,
-            mainUrl = mainUrl,
-            providerName = this.name,
-            subtitleCallback = subtitleCallback,
-            callback = callback
-        )
+        var linksFound = 0
+        try {
+            // 1. Parsing data URL untuk mendapatkan ID, Season, dan Episode
+            val isMovie = data.contains("/movie/")
+            val cleanData = data.substringBefore("?")
+            val tmdbId = cleanData.substringAfterLast("/")
+            
+            var season: Int? = null
+            var episode: Int? = null
+            
+            if (!isMovie) {
+                val query = data.substringAfter("?", "")
+                val params = query.split("&").associate { 
+                    val parts = it.split("=")
+                    parts[0] to (parts.getOrNull(1) ?: "")
+                }
+                season = params["season"]?.toIntOrNull()
+                episode = params["episode"]?.toIntOrNull()
+            }
+
+            // 2. Dapatkan daftar server langsung dari endpoint rahasia PrimeSrc
+            val servers = PrimeSrcHelper.getServers(tmdbId, isMovie, season, episode) ?: return false
+            
+            // 3. Generate Secret Key menggunakan algoritma Hash baru kita
+            val secretKey = PrimeSrcHelper.generateDynamicSecretKey(tmdbId)
+            val requestID = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
+
+            // 4. Eksekusi request ke masing-masing server secara paralel (amap)
+            servers.amap { server ->
+                val service = server.key ?: server.name?.lowercase() ?: return@amap
+                
+                // Merakit URL Backend Fetch
+                var fetchUrl = "https://www.rivestream.app/api/backendfetch?requestID=$requestID&id=$tmdbId&service=$service&secretKey=$secretKey&proxyMode=undefined"
+                if (!isMovie && season != null && episode != null) {
+                    fetchUrl += "&season=$season&episode=$episode"
+                }
+
+                try {
+                    val response = app.get(fetchUrl, referer = data).text
+                    val fetchResponse = tryParseJson<BackendFetchResponse>(response)
+                    
+                    // Proses Subtitle jika server menyediakannya
+                    fetchResponse?.data?.captions?.forEach { caption ->
+                        val subUrl = caption.file ?: return@forEach
+                        val lang = caption.label ?: "Unknown"
+                        subtitleCallback(
+                            SubtitleFile(lang, subUrl)
+                        )
+                    }
+
+                    // 5. Lempar source video ke Super Strict M3U8 Checker di Helper
+                    fetchResponse?.data?.sources?.forEach { source ->
+                        val isSuccess = PrimeSrcHelper.processBackendSource(
+                            source = source,
+                            providerName = server.name ?: this.name,
+                            displayName = server.name ?: this.name,
+                            mainUrl = mainUrl,
+                            service = service,
+                            subtitleCallback = subtitleCallback,
+                            callback = callback
+                        )
+                        if (isSuccess) {
+                            synchronized(this) { linksFound++ }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return linksFound > 0
     }
 
     // ===== DATA CLASSES TMDB =====
