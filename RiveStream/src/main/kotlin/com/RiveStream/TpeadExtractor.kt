@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class TpeadExtractor : ExtractorApi() {
     override val name = "Streamtape"
-    // Ganti mainUrl menjadi standar Streamtape agar dideteksi Cloudstream otomatis
     override val mainUrl = "https://streamtape.com" 
     override val requiresReferer = false
 
@@ -20,56 +19,64 @@ class TpeadExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Translasi Otomatis: Ubah streamtape.com / streamtape.to menjadi domain bypass tpead.net
+            // Translasi ke domain bypass
             val bypassUrl = url.replace(Regex("(?i)streamtape\\.(com|to|net)"), "tpead.net")
-            
-            // Validasi format url Embed (Wajib menggunakan /e/)
             val finalTargetUrl = if (bypassUrl.contains("/v/")) bypassUrl.replace("/v/", "/e/") else bypassUrl
+            val videoId = finalTargetUrl.split("/").lastOrNull() ?: return
 
             val response = app.get(finalTargetUrl, referer = referer).text
             
-            // Regex mencari src video utama dari Tpead HTML
+            // Tarik Base URL
             val baseRegex = Regex("""(?i)(?:document\.getElementById\('[^']+'\)\.)?innerHTML\s*=\s*['"](//[^'"]+)['"]""")
             val baseMatch = baseRegex.find(response) ?: return
             
-            val baseUrl = baseMatch.groupValues[1]
             val startIndex = baseMatch.range.last
             val searchArea = response.substring(startIndex, (startIndex + 200).coerceAtMost(response.length))
             
-            // Regex untuk mengambil sisa token yang disambung menggunakan JavaScript String Concatenation
             val tokenRegex = Regex("""\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""")
             val altTokenRegex = Regex("""\+\s*['"]([^'"]+)['"]""")
             
-            var token = ""
+            var rawTokenData = ""
             
             val tokenMatch = tokenRegex.find(searchArea)
             if (tokenMatch != null) {
                 val rawToken = tokenMatch.groupValues[1]
                 val cutIdx = tokenMatch.groupValues[2].toIntOrNull() ?: 0
                 if (cutIdx < rawToken.length) {
-                    token = rawToken.substring(cutIdx)
+                    rawTokenData = rawToken.substring(cutIdx)
                 }
             } else {
                 val altMatch = altTokenRegex.find(searchArea)
                 if (altMatch != null) {
-                    token = altMatch.groupValues[1]
+                    rawTokenData = altMatch.groupValues[1]
                 }
             }
             
-            if (token.isNotEmpty()) {
-                val finalUrl = "https:$baseUrl$token&dl=1"
-                
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name = "Streamtape (Tpead Bypass)",
-                        url = finalUrl
-                    ) {
-                        // Header referer sangat penting agar tidak ditendang oleh Streamtape
-                        this.referer = "https://tpead.net/"
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
+            if (rawTokenData.isNotEmpty()) {
+                // JURUS PAMUNGKAS: Ekstrak parameter penting dan rakit manual
+                val expiresMatch = Regex("""expires=([^&]+)""").find(rawTokenData)
+                val ipMatch = Regex("""ip=([^&]+)""").find(rawTokenData)
+                val tokenMatchVal = Regex("""token=([^&]+)""").find(rawTokenData)
+
+                if (expiresMatch != null && ipMatch != null && tokenMatchVal != null) {
+                    val expires = expiresMatch.groupValues[1]
+                    val ip = ipMatch.groupValues[1]
+                    val token = tokenMatchVal.groupValues[1]
+
+                    // Merakit URL streamtape yang sempurna tanpa mempedulikan huruf sampah
+                    val cleanUrl = "https://tpead.net/get_video?id=$videoId&expires=$expires&ip=$ip&token=$token&dl=1"
+                    
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = "Streamtape (Tpead Bypass)",
+                            url = cleanUrl
+                        ) {
+                            this.referer = "https://tpead.net/"
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
