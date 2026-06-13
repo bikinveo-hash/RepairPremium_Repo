@@ -29,8 +29,7 @@ class PrimeSrcHelper {
         )
 
         // -------------------------------------------------------------------------
-        // UNASAFE REQUESTS CLIENT: Menggunakan Anotasi Internal Bawaan Core
-        // Kebal dari SSL Expired & Mencegah SocketTimeoutException Secara Mutlak
+        // UNASAFE REQUESTS CLIENT: Kebal SSL Expired & Mencegah Timeout Soket
         // -------------------------------------------------------------------------
         @OptIn(UnsafeSSL::class)
         private val unsafeRequests: Requests by lazy {
@@ -44,7 +43,6 @@ class PrimeSrcHelper {
                 init(null, trustAllCerts, java.security.SecureRandom())
             }
             
-            // Mengatur batas kesabaran soket ke 15 detik mengikuti standardisasi debug Termux
             val customOkhttp = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
@@ -57,9 +55,8 @@ class PrimeSrcHelper {
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
-        // Taktik Penyelamat Hasil Validasi Sukses: Mengunci Kunci Dinamis yang Terbukti Lolos 200 OK
         if (mediaId == "1304313" || mediaId == "1339713") {
-            return "MzZmMWZjZjc=" // Decode asli: 36f1fcfc
+            return "MzZmMWZjZjc="
         }
         
         if (mediaId == null) return "rive"
@@ -70,7 +67,7 @@ class PrimeSrcHelper {
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
             return Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            return "MzZmMWZjZjc=" // Fallback universal token master jika enkripsi lokal miss
+            return "MzZmMWZjZjc="
         }
     }
 
@@ -130,7 +127,6 @@ class PrimeSrcHelper {
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
-        // Menyamakan struktur header murni dengan sidik jari pengetesan Termux lo
         val standardHeaders = mapOf(
             "Authority" to "www.rivestream.app",
             "Accept" to "application/json",
@@ -168,7 +164,6 @@ class PrimeSrcHelper {
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
-                    [span_1](start_span)// ATURAN MAIN BARU CORE: Loop 'for' tradisional menjamin pemanggilan suspend fun legal[span_1](end_span)
                     val captions = parsedData.data.captions
                     if (captions != null) {
                         for (caption in captions) {
@@ -184,7 +179,6 @@ class PrimeSrcHelper {
                         val sourceLabel = source.source ?: "RiveStream"
                         val displayName = "$sourceLabel - $qualityName"
 
-                        // BYPASS WEBVIEW TOTAL: Jika biner manifest terdeteksi, tembak langsung ke ExoPlayer core!
                         if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
                             val link = newExtractorLink(
                                 source = providerName,
@@ -194,7 +188,6 @@ class PrimeSrcHelper {
                             ) {
                                 this.quality = getQualityFromName(qualityName)
                                 this.referer = "$mainUrl/"
-                                // Proteksi CORS pembatasan asal CDN diikat ketat di sini
                                 this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
                             }
                             callback(link)
@@ -222,8 +215,7 @@ class PrimeSrcHelper {
         }
 
         // -------------------------------------------------------------------------
-        // JALUR CADANGAN 2: Eksplorasi Server Embed PrimeSrc (Asinkronus Fallback)
-        // Saling lepas, seng akan menyabotase kelancaran Jalur Utama 1 jika Turnstile macet
+        // JALUR CADANGAN 2: Server Embed PrimeSrc (Fallback Serentak)
         // -------------------------------------------------------------------------
         if (linksFound == 0) {
             try {
@@ -281,7 +273,7 @@ class PrimeSrcHelper {
     }
 }
 
-// ===== MODEL DATA CLASSES PARSER SINKRON 100% =====
+// ===== DATA CLASSES MODEL =====
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
