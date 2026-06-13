@@ -25,7 +25,7 @@ class PrimeSrcHelper {
             return "MzZmMWZjZjc="
         }
         
-        // FIX OPTIMASI: Bypass Kunci Rahasia untuk film ID 83533 berdasarkan hasil intercept
+        // FIX: Menyuntikkan kunci bypass hasil sniff browser untuk film ID 83533
         if (mediaId == "83533") {
             return "MC00YTgzNDM="
         }
@@ -117,7 +117,7 @@ class PrimeSrcHelper {
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             
-            // FIX OPTIMASI: Saring list service aktif dan buang 'primevids' karena kontainer biner videonya dipalsukan sebagai berkas foto PNG di TikTok CDN
+            // FIX: Saring list dan buang 'primevids' karena kontainer biner videonya dimanipulasi sebagai berkas gambar PNG di TikTok CDN
             val activeServices = parsedServices?.data?.filter { it != "primevids" } 
                 ?: listOf("flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
@@ -157,7 +157,7 @@ class PrimeSrcHelper {
                                 url = streamUrl,
                                 type = ExtractorLinkType.M3U8
                             ) {
-                                // FIX: Cek jika quality memuat teks (seperti 'English' / 'Hindi' pada AsiaCloud) agar tidak merusak prioritas resolusi player
+                                // FIX: Cegah teks pelabelan bahasa (seperti 'English' / 'Hindi') agar tidak merusak sistem prioritas resolusi player
                                 val isAudioLabel = qualityName.any { it.isLetter() }
                                 this.quality = if (isAudioLabel) Qualities.Unknown.value else getQualityFromName(qualityName)
                                 this.referer = "$mainUrl/"
@@ -226,7 +226,7 @@ class PrimeSrcHelper {
                     serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
                     serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
                     
-                    // FIX OPTIMASI: Peta perluasan server baru yang dikembalikan oleh API PrimeSrc
+                    // FIX: Perluasan pemetaan server beralih baru untuk menjaring seluruh link video cadangan
                     serverName.contains("streamruby") -> "https://streamruby.com/e/$serverKey"
                     serverName.contains("vidmoly") -> "https://vidmoly.me/e/$serverKey"
                     serverName.contains("vidnest") -> "https://vidnest.xyz/e/$serverKey"
