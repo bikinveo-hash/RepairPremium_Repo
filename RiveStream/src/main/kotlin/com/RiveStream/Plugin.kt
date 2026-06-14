@@ -7,10 +7,9 @@ import android.content.Context
 @CloudstreamPlugin
 class RiveStreamPlugin: Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan provider utama RiveStream ke sistem core
+        // Mendaftarkan API utama RiveStream ke dalam sistem core Cloudstream
         registerMainAPI(RiveStreamProvider())
-        
-        // Mendaftarkan seluruh custom extractor yang ada di dalam berkas Extractor.kt
+        // Mendaftarkan mesin pemrosesan link (Extractor) Streamtape dan VOE
         registerExtractorAPI(TpeadExtractor())
         registerExtractorAPI(VoeExtractor())
     }
