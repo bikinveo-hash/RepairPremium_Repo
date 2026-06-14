@@ -10,7 +10,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 // =========================================================================
-// 1. STREAMTAPE EXTRACTOR (TpeadExtractor)
+// 1. STREAMTAPE EXTRACTOR (TpeadExtractor) - CDN FIXED
 // =========================================================================
 class TpeadExtractor : ExtractorApi() {
     override val name = "Streamtape"
@@ -24,7 +24,7 @@ class TpeadExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // FIX 404: Tembak menggunakan identitas mirror player agar lolos dari kecurigaan bot
+            // Tembak menggunakan identitas mirror player agar lolos dari kecurigaan bot
             val response = app.get(
                 url, 
                 referer = "https://streamta.site/",
@@ -62,17 +62,25 @@ class TpeadExtractor : ExtractorApi() {
             if (token.isNotEmpty()) {
                 val finalUrl = "https:$baseUrl$token&dl=1"
                 
-                // Pembungkusan menggunakan Lambda Block {} sesuai aturan arsitektur baru
+                // Pembungkusan menggunakan Lambda Block {} dengan amunisi header storage tepercaya
                 callback(
                     newExtractorLink(
                         source = name,
-                        name = "Streamtape (Tpead Bypass)",
+                        name = "Streamtape Premium (Direct CDN)",
                         url = finalUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
                         this.referer = "https://streamta.site/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf("Origin" to "https://streamta.site")
+                        this.quality = Qualities.P2160.value // Mengunci kualitas tinggi (4K/2160p) hasil intercept radosgw
+                        this.headers = mapOf(
+                            "Origin" to "https://streamta.site",
+                            "Referer" to "https://streamta.site/",
+                            "Connection" to "keep-alive",
+                            "Accept" to "*/*",
+                            "Sec-Fetch-Dest" to "video",
+                            "Sec-Fetch-Mode" to "cors",
+                            "Sec-Fetch-Site" to "cross-site"
+                        )
                     }
                 )
             }
