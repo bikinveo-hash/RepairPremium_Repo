@@ -9,6 +9,7 @@ import android.util.Base64
 class PrimeSrcHelper {
 
     companion object {
+        // Daftar salt array statis hasil ekstraksi chunk Next.js RiveStream
         private val SALT_ARRAY = listOf(
             "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
             "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
@@ -20,6 +21,9 @@ class PrimeSrcHelper {
         )
     }
 
+    /**
+     * Menghasilkan nilai secretKey secara dinamis berdasarkan kalkulasi matematika terenkripsi situs asli
+     */
     private fun generateDynamicSecretKey(mediaId: String?): String {
         if (mediaId == "1304313" || mediaId == "1339713") {
             return "MzZmMWZjZjc="
@@ -28,14 +32,16 @@ class PrimeSrcHelper {
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
-            val tWord = SALT_ARRAY[(idStr.toLongOrNull() ?: 0L % SALT_ARRAY.size).toInt()]
+            val idLong = idStr.toLongOrNull() ?: 0L
             
-            // FIX: Tambahkan kurung di (idStr.toLongOrNull() ?: 0L)
-            val insertIdx = (((idStr.toLongOrNull() ?: 0L) % idStr.length).toInt()) / 2
+            // FIX: Menggunakan kurung pengunci agar sisa bagi (%) dievaluasi setelah operator Elvis (?:) selesai
+            val tWord = SALT_ARRAY[(idLong % SALT_ARRAY.size).toInt()]
+            val insertIdx = ((idLong % idStr.length).toInt()) / 2
+            
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
             Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            "MzZmMWZjZjc="
+             "MzZmMWZjZjc=" // Fallback token jika terjadi anomali
         }
     }
 
@@ -99,7 +105,7 @@ class PrimeSrcHelper {
             "Authority" to "www.rivestream.app",
             "Accept" to "application/json",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
@@ -107,14 +113,15 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
+            // Jabat tangan awal (Handshake) meminta daftar peladen aktif ke backend
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
-            // FIX: Gunakan app.get bawaan Cloudstream
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
             val baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
 
+            // Ekstraksi paralel asinkron menggunakan loop bawaan CloudStream untuk setiap peladen video kustom
             activeServices.amap { service ->
                 try {
                     val proxyMode = if (service == "primevids") "undefined" else "noProxy"
@@ -126,17 +133,18 @@ class PrimeSrcHelper {
                         "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
 
-                    // FIX: Gunakan app.get bawaan Cloudstream
                     val response = app.get(finalApiUrl, headers = standardHeaders).text
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
+                    // Memproses Subtitle / Captions bawaan backend RiveStream
                     parsedData.data.captions?.forEach { caption ->
                         val captionUrl = caption.file ?: return@forEach
                         val captionLabel = caption.label ?: "External Subtitle"
                         subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
                     }
 
+                    // Memproses tautan pemutar video stream
                     for (source in sources) {
                         val streamUrl = source.url ?: continue
                         val qualityName = source.quality?.uppercase() ?: "AUTO"
@@ -178,6 +186,7 @@ class PrimeSrcHelper {
             e.printStackTrace() 
         }
 
+        // Jalur Fallback B: Jika ekstraksi API utama nihil, cari peladen alternatif embed di PrimeSrc.me
         if (linksFound == 0) {
             try {
                 val typeParam = if (isMovie) "movie" else "tv"
@@ -191,10 +200,9 @@ class PrimeSrcHelper {
 
                 val primeSrcHeaders = mapOf(
                     "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
                 )
                 
-                // FIX: Gunakan app.get bawaan Cloudstream
                 val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
                 val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
@@ -243,7 +251,7 @@ data class BackendData(
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 data class BackendSource(
-    @JsonProperty("quality") val quality: String?, // FIX: Ubah Any? ke String?
+    @JsonProperty("quality") val quality: String?,
     @JsonProperty("url") val url: String?,
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
