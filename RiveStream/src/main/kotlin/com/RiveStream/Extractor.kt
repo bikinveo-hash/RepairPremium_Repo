@@ -24,7 +24,6 @@ class TpeadExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Mengunduh isi dokumen player utama dengan taktik penyamaran mirror klien
             val response = app.get(
                 url, 
                 referer = "https://streamta.site/",
@@ -34,19 +33,16 @@ class TpeadExtractor : ExtractorApi() {
                 )
             ).text
             
-            // PERTAHANAN ANTI-HONEYPOT MUTLAK: Mengunci ekspresi reguler langsung ke ID elemen asli 'botlink' 
-            // guna menghancurkan jebakan 'ideoolink' dan 'robotlink' yang sengaja dibuat server
             val botlinkRegex = Regex("""document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""")
             val match = botlinkRegex.find(response)
             
             if (match != null) {
-                val baseUrl = match.groupValues[1]   // Menangkap string pangkalan dasar '//streamta.sit'
-                val rawToken = match.groupValues[2]  // Menangkap gugusan token sandi dinamis klien
-                val cutIdx = match.groupValues[3].toIntOrNull() ?: 0 // Menangkap index batasan pemotong biner (.substring)
+                val baseUrl = match.groupValues[1]   
+                val rawToken = match.groupValues[2]  
+                val cutIdx = match.groupValues[3].toIntOrNull() ?: 0 
                 
                 if (cutIdx < rawToken.length) {
-                    val token = rawToken.substring(cutIdx) // Menjalankan fungsi pemotongan string otorisasi asli
-                    // Merakit link langsung menuju kluster penyimpanan objek CDN dengan parameter direct stream
+                    val token = rawToken.substring(cutIdx) 
                     val finalUrl = "https:$baseUrl$token&stream=1"
                     
                     callback(
@@ -57,9 +53,8 @@ class TpeadExtractor : ExtractorApi() {
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = "https://streamta.site/"
-                            this.quality = Qualities.P2160.value // Mengunci status video ke kasta tertinggi 4K Ultra HD
+                            this.quality = Qualities.P2160.value 
                             
-                            // AMUNISI HEADER EMAS: Mengirim stempel validasi browser agar Ceph RadosGW mengembalikan status 206 Partial Content
                             this.headers = mapOf(
                                 "Origin" to "https://streamta.site",
                                 "Referer" to "https://streamta.site/",
@@ -96,11 +91,9 @@ class VoeExtractor : ExtractorApi() {
         try {
             val response = app.get(url, referer = referer).text
             
-            // Mencari variabel manifes berkas video langsung di dalam variabel halaman hulu
             val videoMatch = Regex("""["']file["']\s*:\s*["'](https?://[^"']+)["']""").find(response)
             var directLink = videoMatch?.groupValues?.get(1)
 
-            // Skenario Penyelamat: Mendekripsi payload biner Base64 jika target disembunyikan dalam lapisan skrip obf
             if (directLink == null) {
                 val b64Match = Regex("""base64\s*,\s*([a-zA-Z0-9+/={}\s]+)""").find(response)
                 b64Match?.groupValues?.get(1)?.let { b64Text ->
