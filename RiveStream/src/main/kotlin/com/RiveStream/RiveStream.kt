@@ -13,7 +13,7 @@ class RiveStreamProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     
-    // Perlindungan WebView aktif agar Cloudstream otomatis merekam cookie clearance Cloudflare
+    // FIX: Mengaktifkan perlindungan WebView agar CloudStream otomatis merekam cookie clearance Cloudflare
     override val usesWebView = true 
 
     companion object {
