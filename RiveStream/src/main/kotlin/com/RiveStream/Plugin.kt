@@ -10,7 +10,8 @@ class RiveStreamPlugin: Plugin() {
         // Mendaftarkan provider utama RiveStream ke sistem core
         registerMainAPI(RiveStreamProvider())
         
-        // Mendaftarkan custom extractor super dewa untuk bypass Streamtape (tpead.net)
+        // Mendaftarkan seluruh custom extractor yang ada di dalam berkas Extractor.kt
         registerExtractorAPI(TpeadExtractor())
+        registerExtractorAPI(VoeExtractor())
     }
 }
