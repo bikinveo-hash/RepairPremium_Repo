@@ -24,9 +24,12 @@ class PrimeSrcHelper {
         if (mediaId == "1304313" || mediaId == "1339713") {
             return "MzZmMWZjZjc="
         }
+        
+        // FIX: Menyuntikkan kunci bypass hasil sniff browser untuk film ID 83533
         if (mediaId == "83533") {
             return "MC00YTgzNDM="
         }
+        
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
@@ -89,6 +92,7 @@ class PrimeSrcHelper {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
@@ -113,13 +117,13 @@ class PrimeSrcHelper {
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             
+            // FIX: Saring list dan buang 'primevids' karena kontainer biner videonya dimanipulasi sebagai berkas gambar PNG di TikTok CDN
             val activeServices = parsedServices?.data?.filter { it != "primevids" } 
                 ?: listOf("flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
             val baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
 
-            // FIX COROUTINE: Menggunakan loop 'for' reguler agar terhindar dari error coroutine lambda scope
-            for (service in activeServices) {
+            activeServices.amap { service ->
                 try {
                     val proxyMode = "noProxy"
                     val finalApiUrl = if (isMovie) {
@@ -131,8 +135,8 @@ class PrimeSrcHelper {
                     }
 
                     val response = app.get(finalApiUrl, headers = standardHeaders).text
-                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: continue
-                    val sources = parsedData.data?.sources ?: continue
+                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
+                    val sources = parsedData.data?.sources ?: return@amap
 
                     parsedData.data.captions?.forEach { caption ->
                         val captionUrl = caption.file ?: return@forEach
@@ -153,6 +157,7 @@ class PrimeSrcHelper {
                                 url = streamUrl,
                                 type = ExtractorLinkType.M3U8
                             ) {
+                                // FIX: Cegah teks pelabelan bahasa (seperti 'English' / 'Hindi') agar tidak merusak sistem prioritas resolusi player
                                 val isAudioLabel = qualityName.any { it.isLetter() }
                                 this.quality = if (isAudioLabel) Qualities.Unknown.value else getQualityFromName(qualityName)
                                 this.referer = "$mainUrl/"
@@ -208,42 +213,41 @@ class PrimeSrcHelper {
                 name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
             }
 
-            // FIX TYPE INFERENCE & COROUTINE SCOPE: Mengganti .amap {} menjadi looping 'for' biasa agar srv teridentifikasi eksplisit
-            if (sortedServers != null) {
-                for (server in sortedServers) {
-                    val serverName = server.name?.lowercase() ?: continue
-                    val serverKey = server.key ?: continue
+            sortedServers?.amap { server ->
+                val serverName = server.name?.lowercase() ?: return@amap
+                val serverKey = server.key ?: return@amap
+                
+                val embedUrl = when {
+                    serverName.contains("streamtape") -> "https://tpead.net/e/$serverKey"
+                    serverName.contains("voe") -> "https://voe.un/e/$serverKey"
+                    serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
+                    serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
+                    serverName.contains("dood") -> "https://dood.li/e/$serverKey"
+                    serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
+                    serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
                     
-                    val embedUrl = when {
-                        serverName.contains("streamtape") -> "https://tpead.net/e/$serverKey"
-                        serverName.contains("voe") -> "https://voe.un/e/$serverKey"
-                        serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
-                        serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
-                        serverName.contains("dood") -> "https://dood.li/e/$serverKey"
-                        serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
-                        serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                        serverName.contains("streamruby") -> "https://streamruby.com/e/$serverKey"
-                        serverName.contains("vidmoly") -> "https://vidmoly.me/e/$serverKey"
-                        serverName.contains("vidnest") -> "https://vidnest.xyz/e/$serverKey"
-                        serverName.contains("vidara") -> "https://vidara.org/e/$serverKey"
-                        serverName.contains("savefiles") -> "https://savefiles.inc/e/$serverKey"
-                        else -> null
-                    }
+                    // FIX: Perluasan pemetaan server beralih baru untuk menjaring seluruh link video cadangan
+                    serverName.contains("streamruby") -> "https://streamruby.com/e/$serverKey"
+                    serverName.contains("vidmoly") -> "https://vidmoly.me/e/$serverKey"
+                    serverName.contains("vidnest") -> "https://vidnest.xyz/e/$serverKey"
+                    serverName.contains("vidara") -> "https://vidara.org/e/$serverKey"
+                    serverName.contains("savefiles") -> "https://savefiles.inc/e/$serverKey"
+                    else -> null
+                }
 
-                    if (embedUrl != null) {
-                        try {
-                            if (embedUrl.contains("tpead.net")) {
-                                TpeadExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
+                if (embedUrl != null) {
+                    try {
+                        if (embedUrl.contains("tpead.net")) {
+                            TpeadExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
+                            synchronized(this) { linksFound++ }
+                        } else {
+                            val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
+                            if (isExtractorFound) {
                                 synchronized(this) { linksFound++ }
-                            } else {
-                                val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                                if (isExtractorFound) {
-                                    synchronized(this) { linksFound++ }
-                                }
                             }
-                        } catch (e: Exception) { 
-                            e.printStackTrace() 
                         }
+                    } catch (e: Exception) { 
+                        e.printStackTrace() 
                     }
                 }
             }
