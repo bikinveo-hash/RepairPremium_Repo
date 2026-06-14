@@ -7,10 +7,10 @@ import android.content.Context
 @CloudstreamPlugin
 class RiveStreamPlugin: Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan API utama RiveStream ke dalam sistem core Cloudstream
+        // Mendaftarkan API utama RiveStream (Scraper TMDB & Core Engine) ke Cloudstream
         registerMainAPI(RiveStreamProvider())
-        // Mendaftarkan mesin pemrosesan link (Extractor) Streamtape dan VOE
+        
+        // Mendaftarkan Custom Extractor Streamtape (Tpead) yang sudah kita lengkapi dengan Anti-Honeypot
         registerExtractorAPI(TpeadExtractor())
-        registerExtractorAPI(VoeExtractor())
     }
 }
