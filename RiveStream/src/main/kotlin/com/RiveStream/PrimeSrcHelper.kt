@@ -21,24 +21,17 @@ class PrimeSrcHelper {
     }
 
     private fun generateDynamicSecretKey(mediaId: String?): String {
-        if (mediaId == "1304313" || mediaId == "1339713") {
-            return "MzZmMWZjZjc="
-        }
-        
-        // FIX: Menyuntikkan kunci bypass hasil sniff browser untuk film ID 83533
-        if (mediaId == "83533") {
-            return "MC00YTgzNDM="
-        }
-        
+        if (mediaId == "1304313" || mediaId == "1339713") return "MzZmMWZjZjc="
+        if (mediaId == "83533") return "MC00YTgzNDM="
         if (mediaId == null) return "rive"
-        return try {
+        try {
             val idStr = mediaId.trim()
             val tWord = SALT_ARRAY[((idStr.toLongOrNull() ?: 0L) % SALT_ARRAY.size).toInt()]
             val insertIdx = (((idStr.toLongOrNull() ?: 0L) % idStr.length).toInt()) / 2
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
-            Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
+            return Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            "MzZmMWZjZjc="
+            return "MzZmMWZjZjc="
         }
     }
 
@@ -49,9 +42,9 @@ class PrimeSrcHelper {
             val r = input[n].code.toLong() and 0xFFL
             t = (r + (t shl 6) + (t shl 16) - t) and mask32
             val shiftAmt = n % 5
-            val i = (((t shl shiftAmt) and mask32) or (t ushr (32 - shiftAmt))) and mask32
+            val i = if (shiftAmt == 0) t and mask32 else (((t shl shiftAmt) and mask32) or (t ushr (32 - shiftAmt))) and mask32
             val rotAmt = n % 7
-            val rRot = (((r shl rotAmt) and 0xFFL) or (r ushr (8 - rotAmt))) and 0xFFL
+            val rRot = if (rotAmt == 0) r and 0xFFL else (((r shl rotAmt) and 0xFFL) or (r ushr (8 - rotAmt))) and 0xFFL
             t = t xor (i xor rRot)
             t = (t + (((t ushr 11) xor (t shl 3)) and mask32)) and mask32
         }
@@ -102,13 +95,10 @@ class PrimeSrcHelper {
             "Authority" to "www.rivestream.app",
             "Accept" to "application/json",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+            "User-Agent" to USER_AGENT
         )
 
-        // -------------------------------------------------------------------------
-        // JALUR 1: API Internal Backend Fetch RiveStream
-        // -------------------------------------------------------------------------
+        // JALUR 1: API Internal Backend Fetch
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
@@ -117,7 +107,6 @@ class PrimeSrcHelper {
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             
-            // FIX: Saring list dan buang 'primevids' karena kontainer biner videonya dimanipulasi sebagai berkas gambar PNG di TikTok CDN
             val activeServices = parsedServices?.data?.filter { it != "primevids" } 
                 ?: listOf("flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
@@ -151,45 +140,38 @@ class PrimeSrcHelper {
                         val displayName = "$sourceLabel - $qualityName"
 
                         if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                            val link = newExtractorLink(
-                                source = providerName,
-                                name = displayName,
-                                url = streamUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                // FIX: Cegah teks pelabelan bahasa (seperti 'English' / 'Hindi') agar tidak merusak sistem prioritas resolusi player
-                                val isAudioLabel = qualityName.any { it.isLetter() }
-                                this.quality = if (isAudioLabel) Qualities.Unknown.value else getQualityFromName(qualityName)
-                                this.referer = "$mainUrl/"
-                                this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
-                            }
-                            callback(link)
+                            callback(
+                                newExtractorLink(
+                                    source = providerName,
+                                    name = displayName,
+                                    url = streamUrl,
+                                    type = ExtractorLinkType.M3U8
+                                 ) {
+                                    val isAudioLabel = qualityName.any { it.isLetter() }
+                                    this.quality = if (isAudioLabel) Qualities.Unknown.value else getQualityFromName(qualityName)
+                                    this.referer = "$mainUrl/"
+                                    this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
+                                }
+                            )
                             synchronized(this) { linksFound++ }
                         } else {
                             val targetReferer = if (service == "flowcast" || service == "hindicast") "https://123movienow.cc/" else "$mainUrl/"
                             val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
                             
                             if (!isExtractorFound && !streamUrl.contains("/e/")) {
-                                val link = newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
+                                callback(newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
                                     this.quality = getQualityFromName(qualityName)
                                     this.referer = targetReferer
-                                }
-                                callback(link)
+                                })
                                 synchronized(this) { linksFound++ }
                             }
                         }
                     }
-                } catch (e: Exception) { 
-                    e.printStackTrace() 
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
 
-        // -------------------------------------------------------------------------
-        // JALUR 2: Server Embed PrimeSrc (CLEAN PRODUCTION MODE)
-        // -------------------------------------------------------------------------
+        // JALUR 2: Server Embed PrimeSrc Production
         try {
             val typeParam = if (isMovie) "movie" else "tv"
             var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
@@ -202,18 +184,13 @@ class PrimeSrcHelper {
 
             val primeSrcHeaders = mapOf(
                 "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+                "User-Agent" to USER_AGENT
             )
             
             val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
             val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
 
-            val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
-                val name = server.name?.lowercase() ?: ""
-                name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
-            }
-
-            sortedServers?.amap { server ->
+            parsedPrimeSrc?.servers?.amap { server ->
                 val serverName = server.name?.lowercase() ?: return@amap
                 val serverKey = server.key ?: return@amap
                 
@@ -225,8 +202,6 @@ class PrimeSrcHelper {
                     serverName.contains("dood") -> "https://dood.li/e/$serverKey"
                     serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
                     serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                    
-                    // FIX: Perluasan pemetaan server beralih baru untuk menjaring seluruh link video cadangan
                     serverName.contains("streamruby") -> "https://streamruby.com/e/$serverKey"
                     serverName.contains("vidmoly") -> "https://vidmoly.me/e/$serverKey"
                     serverName.contains("vidnest") -> "https://vidnest.xyz/e/$serverKey"
@@ -240,26 +215,25 @@ class PrimeSrcHelper {
                         if (embedUrl.contains("tpead.net")) {
                             TpeadExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
                             synchronized(this) { linksFound++ }
+                        } else if (embedUrl.contains("voe.un")) {
+                            // FIX: Sambungkan rute bypass VOE secara eksplisit
+                            VoeExtractor().getUrl(embedUrl, "https://primesrc.me/", subtitleCallback, callback)
+                            synchronized(this) { linksFound++ }
                         } else {
                             val isExtractorFound = loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
                             if (isExtractorFound) {
                                 synchronized(this) { linksFound++ }
                             }
                         }
-                    } catch (e: Exception) { 
-                        e.printStackTrace() 
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
 
         return linksFound > 0
     }
 }
 
-// ===== DATA CLASSES MODEL =====
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
 data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
 data class BackendData(
