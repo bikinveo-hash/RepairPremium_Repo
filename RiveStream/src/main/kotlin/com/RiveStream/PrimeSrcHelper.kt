@@ -9,7 +9,7 @@ import android.util.Base64
 class PrimeSrcHelper {
 
     companion object {
-        // Daftar salt array statis hasil ekstraksi chunk Next.js RiveStream
+        // Daftar salt array statis hasil ekstraksi chunk Next.js RiveStream (Modul 2873)
         private val SALT_ARRAY = listOf(
             "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
             "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
@@ -22,7 +22,7 @@ class PrimeSrcHelper {
     }
 
     /**
-     * Menghasilkan nilai secretKey secara dinamis berdasarkan kalkulasi matematika terenkripsi situs asli
+     * Menghasilkan nilai secretKey SECARA OTOMATIS untuk semua ID konten secara dinamis
      */
     private fun generateDynamicSecretKey(mediaId: String?): String {
         if (mediaId == "1304313" || mediaId == "1339713") {
@@ -34,14 +34,16 @@ class PrimeSrcHelper {
             val idStr = mediaId.trim()
             val idLong = idStr.toLongOrNull() ?: 0L
             
-            // FIX: Menggunakan kurung pengunci agar sisa bagi (%) dievaluasi setelah operator Elvis (?:) selesai
             val tWord = SALT_ARRAY[(idLong % SALT_ARRAY.size).toInt()]
             val insertIdx = ((idLong % idStr.length).toInt()) / 2
             
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
-            Base64.encodeToString(executeOuterHash(executeInnerHash(combinedStr)).toByteArray(), Base64.NO_WRAP)
+            val innerHash = executeInnerHash(combinedStr)
+            val outerHash = executeOuterHash(innerHash)
+            
+            Base64.encodeToString(outerHash.toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-             "MzZmMWZjZjc=" // Fallback token jika terjadi anomali
+             "MzZmMWZjZjc=" 
         }
     }
 
@@ -52,10 +54,13 @@ class PrimeSrcHelper {
             val r = input[n].code.toLong() and 0xFFL
             t = (r + (t shl 6) + (t shl 16) - t) and mask32
             val shiftAmt = n % 5
-            val i = (((t shl shiftAmt) and mask32) or (t ushr (32 - shiftAmt))) and mask32
+            val realShift = (32 - shiftAmt) % 32
+            val i = (((t shl shiftAmt) and mask32) or (t ushr realShift)) and mask32
+            
             val rotAmt = n % 7
-            val rRot = (((r shl rotAmt) and 0xFFL) or (r ushr (8 - rotAmt))) and 0xFFL
-            t = t xor (i xor rRot)
+            val rRot = ((r shl rotAmt) or (r ushr (8 - rotAmt))) and mask32
+            
+            t = t xor (i xor rRot) and mask32
             t = (t + (((t ushr 11) xor (t shl 3)) and mask32)) and mask32
         }
         t = t xor (t ushr 15)
@@ -72,9 +77,9 @@ class PrimeSrcHelper {
         for (e in input.indices) {
             val r = input[e].code.toLong() and 0xFFL
             val salt = (((131L * e.toLong() + 89L) xor ((r shl (e % 5)) and mask32)) and 0xFFL)
-            n = (((n shl 7) and mask32) or (n ushr 25)) xor (r xor salt)
+            n = (((n shl 7) and mask32) or (n ushr 25)) xor (r xor salt) and mask32
             val i = (n and 0xFFFFL) * 60205L
-            val o = (((n ushr 16) * 60205L) shl 16) and mask32
+            val o = ((((n ushr 16) * 60205L) and 0xFFFFL) shl 16) and mask32
             n = (i + o) and mask32
             n = n xor (n ushr 11)
         }
@@ -85,7 +90,9 @@ class PrimeSrcHelper {
         n = n xor (n ushr 16)
         n = (((n and 0xFFFFL) * 10196L) + ((((n ushr 16) * 10196L) and 0xFFFFL) shl 16)) and mask32
         n = n xor (n ushr 15)
-        return n.toString(16).padStart(8, '0')
+        
+        // SINKRONISASI UTAMA: Mengonversi unsigned 32-bit Long ke signed 32-bit Int string desimal
+        return n.toInt().toString()
     }
 
     suspend fun invokePrimeSrc(
@@ -95,33 +102,47 @@ class PrimeSrcHelper {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        
+    
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
         val standardHeaders = mapOf(
-            "Authority" to "www.rivestream.app",
+            "Host" to "www.rivestream.app",
             "Accept" to "application/json",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Sec-Ch-Ua" to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
+            "Sec-Ch-Ua-Mobile" to "?1",
+            "Sec-Ch-Ua-Platform" to "\"Android\"",
+            "Sec-Fetch-Site" to "same-origin",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Dest" to "empty"
         )
 
         try {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // Jabat tangan awal (Handshake) meminta daftar peladen aktif ke backend
-            val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=noProxy"
+            // Tahap 1: Memicu requestID=movieData/tvData untuk melegalkan status session di backend
+            val dataId = if (isMovie) "movieData" else "tvData"
+            val stateUrl = "$mainUrl/api/backendfetch?id=$cleanId&requestID=$dataId&language=en-US&secretKey=$secretKey&proxyMode=undefined"
+            try {
+                app.get(stateUrl, headers = standardHeaders)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // Tahap 2: Jabat tangan meminta daftar peladen aktif
+            val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=undefined"
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
 
             val baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
 
-            // Ekstraksi paralel asinkron menggunakan loop bawaan CloudStream untuk setiap peladen video kustom
             activeServices.amap { service ->
                 try {
                     val proxyMode = if (service == "primevids") "undefined" else "noProxy"
@@ -137,14 +158,14 @@ class PrimeSrcHelper {
                     val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
                     val sources = parsedData.data?.sources ?: return@amap
 
-                    // Memproses Subtitle / Captions bawaan backend RiveStream
+                    // Memproses Subtitle menggunakan builder legal bawaan CloudStream
                     parsedData.data.captions?.forEach { caption ->
                         val captionUrl = caption.file ?: return@forEach
                         val captionLabel = caption.label ?: "External Subtitle"
                         subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
                     }
 
-                    // Memproses tautan pemutar video stream
+                    // Memproses tautan pemutar video stream via newExtractorLink
                     for (source in sources) {
                         val streamUrl = source.url ?: continue
                         val qualityName = source.quality?.uppercase() ?: "AUTO"
@@ -186,7 +207,7 @@ class PrimeSrcHelper {
             e.printStackTrace() 
         }
 
-        // Jalur Fallback B: Jika ekstraksi API utama nihil, cari peladen alternatif embed di PrimeSrc.me
+        // Jalur Fallback B: Jika ekstraksi utama kosong, lempar ke alternatif embed di PrimeSrc.me
         if (linksFound == 0) {
             try {
                 val typeParam = if (isMovie) "movie" else "tv"
