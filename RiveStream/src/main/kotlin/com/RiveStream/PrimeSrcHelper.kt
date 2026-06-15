@@ -1,15 +1,15 @@
-package com.RiveStream
+package com.lagradost.cloudstream3
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.getQualityFromName
 import android.util.Base64
 
 class PrimeSrcHelper {
 
     companion object {
-        // Daftar salt array statis hasil ekstraksi chunk Next.js RiveStream (Modul 2873)
+        // Larik garam statis resmi hasil ekstraksi Modul 2873 / 7522
         private val SALT_ARRAY = listOf(
             "4Z7lUo", "gwIVSMD", "PLmz2elE2v", "Z4OFV0", "SZ6RZq6Zc", "zhJEFYxrz8", "FOm7b0", "axHS3q4KDq", "o9zuXQ", "4Aebt",
             "wgjjWwKKx", "rY4VIxqSN", "kfjbnSo", "2DyrFA1M", "YUixDM9B", "JQvgEj0", "mcuFx6JIek", "eoTKe26gL", "qaI9EVO1rB", "0xl33btZL",
@@ -22,79 +22,81 @@ class PrimeSrcHelper {
     }
 
     /**
-     * Menghasilkan nilai secretKey SECARA OTOMATIS untuk semua ID konten secara dinamis
+     * Memperbaiki overflow matematika perkalian besar sesuai standard JavaScript V8 engine
      */
-    private fun generateDynamicSecretKey(mediaId: String?): String {
-        if (mediaId == "1304313" || mediaId == "1339713") {
-            return "MzZmMWZjZjc="
+    private fun splitMul(value: Int, multiplier: Int): Int {
+        val low = (value and 0xFFFF) * multiplier
+        val high = (((value ushr 16) * multiplier) and 0xFFFF) shl 16
+        return low + high
+    }
+
+    private fun executeInnerHash(input: String): String {
+        var t = 0
+        for (n in input.indices) {
+            val r = input[n].code
+            t = r + (t shl 6) + (t shl 16) - t
+            val shiftAmt = n % 5
+            val rightShiftDist = (32 - shiftAmt) % 32
+            val i = (t shl shiftAmt) or (t ushr rightShiftDist)
+            val rotAmt = n % 7
+            val rRot = (r shl rotAmt) or (r ushr (8 - rotAmt))
+            t = t xor (i xor rRot)
+            t = t + ((t ushr 11) xor (t shl 3))
         }
-        
+        t = t xor (t ushr 15)
+        t = splitMul(t, 49842)
+        t = t xor (t ushr 13)
+        t = splitMul(t, 40503)
+        t = t xor (t ushr 16)
+        return String.format("%08x", t)
+    }
+
+    private fun executeOuterHash(input: String): Int {
+        var nVal = 0xDEADBEEF.toInt() xor input.length
+        for (e in input.indices) {
+            val r = input[e].code
+            val saltMultiplier = ((131 * e + 89) xor (r shl (e % 5))) and 255
+            val finalR = r xor saltMultiplier
+            nVal = ((nVal shl 7) or (nVal ushr 25)) xor finalR
+            nVal = splitMul(nVal, 60205)
+            nVal = nVal xor (nVal ushr 11)
+        }
+        nVal = nVal xor (nVal ushr 15)
+        nVal = splitMul(nVal, 49842)
+        nVal = nVal xor (nVal ushr 13)
+        nVal = splitMul(nVal, 40503)
+        nVal = nVal xor (nVal ushr 16)
+        val splitMulVal = splitMul(nVal, 10196)
+        nVal = splitMulVal xor (splitMulVal ushr 15)
+        return nVal
+    }
+
+    /**
+     * Generator Kunci Otomatis Dinamis - Menghasilkan Luaran Hex ke Base64
+     */
+    fun generateDynamicSecretKey(mediaId: String?): String {
         if (mediaId == null) return "rive"
         return try {
             val idStr = mediaId.trim()
-            val idLong = idStr.toLongOrNull() ?: 0L
+            val idLong = idStr.toLongOrNull() ?: return "rive"
             
             val tWord = SALT_ARRAY[(idLong % SALT_ARRAY.size).toInt()]
             val insertIdx = ((idLong % idStr.length).toInt()) / 2
             
             val combinedStr = idStr.substring(0, insertIdx) + tWord + idStr.substring(insertIdx)
-            val innerHash = executeInnerHash(combinedStr)
-            val outerHash = executeOuterHash(innerHash)
+            val inner = executeInnerHash(combinedStr)
+            val outerInt = executeOuterHash(inner)
             
-            Base64.encodeToString(outerHash.toByteArray(), Base64.NO_WRAP)
+            val hexStr = String.format("%08x", outerInt)
+            Base64.encodeToString(hexStr.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         } catch (e: Exception) {
-             "MzZmMWZjZjc=" 
+            "topSecret"
         }
     }
 
-    private fun executeInnerHash(input: String): String {
-        var t = 0L
-        val mask32 = 0xFFFFFFFFL
-        for (n in input.indices) {
-            val r = input[n].code.toLong() and 0xFFL
-            t = (r + (t shl 6) + (t shl 16) - t) and mask32
-            val shiftAmt = n % 5
-            val realShift = (32 - shiftAmt) % 32
-            val i = (((t shl shiftAmt) and mask32) or (t ushr realShift)) and mask32
-            
-            val rotAmt = n % 7
-            val rRot = ((r shl rotAmt) or (r ushr (8 - rotAmt))) and mask32
-            
-            t = t xor (i xor rRot) and mask32
-            t = (t + (((t ushr 11) xor (t shl 3)) and mask32)) and mask32
-        }
-        t = t xor (t ushr 15)
-        t = (((t and 0xFFFFL) * 49842L) + ((((t ushr 16) * 49842L) and 0xFFFFL) shl 16)) and mask32
-        t = t xor (t ushr 13)
-        t = (((t and 0xFFFFL) * 40503L) + ((((t ushr 16) * 40503L) and 0xFFFFL) shl 16)) and mask32
-        t = t xor (t ushr 16)
-        return t.toString(16).padStart(8, '0')
-    }
-
-    private fun executeOuterHash(input: String): String {
-        val mask32 = 0xFFFFFFFFL
-        var n = 3735928559L xor input.length.toLong()
-        for (e in input.indices) {
-            val r = input[e].code.toLong() and 0xFFL
-            val salt = (((131L * e.toLong() + 89L) xor ((r shl (e % 5)) and mask32)) and 0xFFL)
-            n = (((n shl 7) and mask32) or (n ushr 25)) xor (r xor salt) and mask32
-            val i = (n and 0xFFFFL) * 60205L
-            val o = ((((n ushr 16) * 60205L) and 0xFFFFL) shl 16) and mask32
-            n = (i + o) and mask32
-            n = n xor (n ushr 11)
-        }
-        n = n xor (n ushr 15)
-        n = (((n and 0xFFFFL) * 49842L) + ((((n ushr 16) * 49842L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 13)
-        n = (((n and 0xFFFFL) * 40503L) + ((((n ushr 16) * 40503L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 16)
-        n = (((n and 0xFFFFL) * 10196L) + ((((n ushr 16) * 10196L) and 0xFFFFL) shl 16)) and mask32
-        n = n xor (n ushr 15)
-        
-        // SINKRONISASI UTAMA: Mengonversi unsigned 32-bit Long ke signed 32-bit Int string desimal
-        return n.toInt().toString()
-    }
-
+    /**
+     * Fungsi Pemicu Utama untuk Ekstraksi Link Video multi-server
+     */
     suspend fun invokePrimeSrc(
         data: String, 
         mainUrl: String,
@@ -102,7 +104,6 @@ class PrimeSrcHelper {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-    
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
@@ -110,13 +111,11 @@ class PrimeSrcHelper {
 
         val standardHeaders = mapOf(
             "Host" to "www.rivestream.app",
-            "Accept" to "application/json",
+            "Accept" to "application/json, text/plain, */*",
             "Referer" to "$mainUrl/watch?type=${if (isMovie) "movie" else "tv"}&id=$cleanId",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
             "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Sec-Ch-Ua" to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
-            "Sec-Ch-Ua-Mobile" to "?1",
-            "Sec-Ch-Ua-Platform" to "\"Android\"",
+            "Origin" to mainUrl,
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Mode" to "cors",
             "Sec-Fetch-Dest" to "empty"
@@ -126,46 +125,33 @@ class PrimeSrcHelper {
             val requestId = if (isMovie) "movieVideoProvider" else "tvVideoProvider"
             val secretKey = generateDynamicSecretKey(cleanId)
 
-            // Tahap 1: Memicu requestID=movieData/tvData untuk melegalkan status session di backend
-            val dataId = if (isMovie) "movieData" else "tvData"
-            val stateUrl = "$mainUrl/api/backendfetch?id=$cleanId&requestID=$dataId&language=en-US&secretKey=$secretKey&proxyMode=undefined"
-            try {
-                app.get(stateUrl, headers = standardHeaders)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // Tahap 2: Jabat tangan meminta daftar peladen aktif
+            // Mengambil daftar layanan aktif dari server (seperti primevids, flowcast, dll)
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=undefined"
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
-            val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "hindicast", "guru", "ophim")
+            val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud")
 
-            val baseApiUrl = "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId"
-
-            activeServices.amap { service ->
+            activeServices.forEach { service ->
                 try {
                     val proxyMode = if (service == "primevids") "undefined" else "noProxy"
                     val finalApiUrl = if (isMovie) {
-                        "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
+                        "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
                     } else {
                         val season = cleanData.substringAfter("?season=").substringBefore("&")
                         val episode = cleanData.substringAfter("&episode=")
-                        "$baseApiUrl&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
+                        "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode&season=$season&episode=$episode"
                     }
 
                     val response = app.get(finalApiUrl, headers = standardHeaders).text
-                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@amap
-                    val sources = parsedData.data?.sources ?: return@amap
+                    val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@forEach
+                    val sources = parsedData.data?.sources ?: return@forEach
 
-                    // Memproses Subtitle menggunakan builder legal bawaan CloudStream
                     parsedData.data.captions?.forEach { caption ->
                         val captionUrl = caption.file ?: return@forEach
-                        val captionLabel = caption.label ?: "External Subtitle"
-                        subtitleCallback(newSubtitleFile(lang = captionLabel, url = captionUrl))
+                        val captionLabel = caption.label ?: "Subtitle"
+                        subtitleCallback(SubtitleFile(captionLabel, captionUrl))
                     }
 
-                    // Memproses tautan pemutar video stream via newExtractorLink
                     for (source in sources) {
                         val streamUrl = source.url ?: continue
                         val qualityName = source.quality?.uppercase() ?: "AUTO"
@@ -173,100 +159,34 @@ class PrimeSrcHelper {
                         val displayName = "$sourceLabel - $qualityName"
 
                         if (streamUrl.contains(".m3u8") || source.format?.lowercase() == "hls") {
-                            val link = newExtractorLink(
+                            val link = ExtractorLink(
                                 source = providerName,
                                 name = displayName,
                                 url = streamUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.quality = getQualityFromName(qualityName)
-                                this.referer = "$mainUrl/"
-                                this.headers = mapOf("Origin" to mainUrl, "Accept" to "*/*")
-                            }
+                                referer = "$mainUrl/",
+                                quality = getQualityFromName(qualityName),
+                                isM3u8 = true,
+                                headers = mapOf("Origin" to mainUrl)
+                            )
                             callback(link)
-                            synchronized(this) { linksFound++ }
-                        } else {
-                            val targetReferer = if (service == "flowcast") "https://123movienow.cc/" else "$mainUrl/"
-                            val isExtractorFound = loadExtractor(url = streamUrl, referer = targetReferer, subtitleCallback, callback)
-                            
-                            if (!isExtractorFound && !streamUrl.contains("/e/")) {
-                                val link = newExtractorLink(source = providerName, name = displayName, url = streamUrl) {
-                                    this.quality = getQualityFromName(qualityName)
-                                    this.referer = targetReferer
-                                }
-                                callback(link)
-                                synchronized(this) { linksFound++ }
-                            }
+                            linksFound++
                         }
                     }
-                } catch (e: Exception) { 
-                    e.printStackTrace() 
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
-
-        // Jalur Fallback B: Jika ekstraksi utama kosong, lempar ke alternatif embed di PrimeSrc.me
-        if (linksFound == 0) {
-            try {
-                val typeParam = if (isMovie) "movie" else "tv"
-                var primeSrcApiUrl = "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$typeParam"
-                
-                if (!isMovie) {
-                    val season = cleanData.substringAfter("?season=").substringBefore("&")
-                    val episode = cleanData.substringAfter("&episode=")
-                    primeSrcApiUrl += "&season=$season&episode=$episode"
-                }
-
-                val primeSrcHeaders = mapOf(
-                    "Referer" to "https://primesrc.me/embed/$typeParam?tmdb=$cleanId",
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-                )
-                
-                val primeSrcResponse = app.get(primeSrcApiUrl, headers = primeSrcHeaders).text
-                val parsedPrimeSrc = tryParseJson<PrimeSrcServerResponse>(primeSrcResponse)
-
-                val sortedServers = parsedPrimeSrc?.servers?.sortedByDescending { server ->
-                    val name = server.name?.lowercase() ?: ""
-                    name.contains("streamtape") || name.contains("voe") || name.contains("mixdrop")
-                }
-
-                sortedServers?.amap { server ->
-                    val serverName = server.name?.lowercase() ?: return@amap
-                    val serverKey = server.key ?: return@amap
-                    
-                    val embedUrl = when {
-                        serverName.contains("streamtape") -> "https://streamtape.com/e/$serverKey"
-                        serverName.contains("voe") -> "https://voe.sx/e/$serverKey"
-                        serverName.contains("streamwish") -> "https://streamwish.to/e/$serverKey"
-                        serverName.contains("filemoon") -> "https://filemoon.sx/e/$serverKey"
-                        serverName.contains("dood") -> "https://dood.to/e/$serverKey"
-                        serverName.contains("mixdrop") -> "https://mixdrop.co/e/$serverKey"
-                        serverName.contains("filelions") -> "https://filelions.to/e/$serverKey"
-                        else -> null
-                    }
-
-                    if (embedUrl != null) {
-                        try {
-                            loadExtractor(embedUrl, referer = "https://primesrc.me/", subtitleCallback, callback)
-                        } catch (e: Exception) { 
-                            e.printStackTrace() 
-                        }
-                    }
-                }
-            } catch (e: Exception) { 
-                e.printStackTrace() 
-            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         return linksFound > 0
     }
 }
 
-// ===== DATA CLASSES MODEL =====
+// Objek Data Class Penampung Respons JSON Peladen Next.js BFF
 data class BackendServicesResponse(@JsonProperty("data") val data: List<String>?)
-data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
+data class BackendFetchResponse( @JsonProperty("data") val data: BackendData?)
 data class BackendData(
     @JsonProperty("sources") val sources: List<BackendSource>?,
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
@@ -280,9 +200,4 @@ data class BackendSource(
 data class BackendCaption(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file") val file: String?
-)
-data class PrimeSrcServerResponse(@JsonProperty("servers") val servers: List<PrimeSrcServer>?)
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key") val key: String?
 )
