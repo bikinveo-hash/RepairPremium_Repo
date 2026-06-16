@@ -10,13 +10,13 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 class PrimeSrcHelper {
 
     companion object {
-        // Domain API Gateway Utama hasil audit pipa jaringan universal
         private const val SCRAPER_BASE = "https://scrapper.rivestream.app/api/provider"
-        // API Key statis universal yang terbukti tembus status 200 OK
         private const val AUDITED_API_KEY = "d64117f26031a428449f102ced3aba73"
         
-        // Daftar provider hasil verifikasi lapangan (PrimeVids terbukti menghasilkan link)
-        private val TARGET_PROVIDERS = listOf("primevids", "flow", "speed", "vidsrc")
+        // Menggabungkan token lama dan token asli dari manifestasi JS untuk di-audit massal
+        private val TEST_PROVIDERS = listOf(
+            "primevids", "flowcast", "asiacloud", "guru", "ophim", "flow", "speed", "vidsrc"
+        )
     }
 
     suspend fun invokePrimeSrc(
@@ -31,7 +31,6 @@ class PrimeSrcHelper {
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
-        // Headers emulasi aman agar menyerupai request Python/Browser yang valid
         val standardHeaders = mapOf(
             "Accept" to "application/json",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 11; OPPO CPH2235) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Mobile Safari/537.36",
@@ -39,33 +38,55 @@ class PrimeSrcHelper {
             "Referer" to "https://rivestream.app/"
         )
 
-        // Lakukan iterasi langsung ke core scraper API tanpa melewati proxy website frontend
-        TARGET_PROVIDERS.forEach { service ->
+        println("[RIVE_AUDIT] === MEMULAI AUDIT JARINGAN PIPELINE ===")
+        println("[RIVE_AUDIT] TARGET ID KONTEN: $cleanId | TIPE: ${if (isMovie) "MOVIE" else "TV"}")
+
+        TEST_PROVIDERS.forEach { service ->
+            // 1. Merakit URL Final
+            val finalApiUrl = if (isMovie) {
+                "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$AUDITED_API_KEY"
+            } else {
+                val season = cleanData.substringAfter("?season=").substringBefore("&")
+                val episode = cleanData.substringAfter("&episode=")
+                "$SCRAPER_BASE?provider=$service&id=$cleanId&season=$season&episode=$episode&api_key=$AUDITED_API_KEY"
+            }
+
+            println("[RIVE_AUDIT] ----------------------------------------------------")
+            println("[RIVE_AUDIT] EVALUASI TOKEN PROVIDER: ${service.toUpperCase()}")
+            println("[RIVE_AUDIT] URL REQUEST: $finalApiUrl")
+
             try {
-                // Merakit URL secara deterministik sesuai manifes jaringan Next.js
-                val finalApiUrl = if (isMovie) {
-                    "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$AUDITED_API_KEY"
-                } else {
-                    val season = cleanData.substringAfter("?season=").substringBefore("&")
-                    val episode = cleanData.substringAfter("&episode=")
-                    "$SCRAPER_BASE?provider=$service&id=$cleanId&season=$season&episode=$episode&api_key=$AUDITED_API_KEY"
+                // 2. Eksekusi Jaringan & Tangkap Objek Respon HTTP
+                val response = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
+                val httpStatus = response.code
+                val rawJsonJsonBody = response.text
+
+                // 3. Cetak Fakta Respons Nyata ke Logcat
+                println("[RIVE_AUDIT] HTTP STATUS CODE : $httpStatus")
+                println("[RIVE_AUDIT] RAW JSON BODY     : $rawJsonJsonBody")
+
+                // 4. Proses Parsing Standar
+                val parsedData = tryParseJson<BackendFetchResponse>(rawJsonJsonBody)
+                if (parsedData == null) {
+                    println("[RIVE_AUDIT] STATUS PARSING    : GAGAL (Bukan format JSON valid)")
+                    return@forEach
                 }
 
-                // Eksekusi HTTP GET request dengan batasan timeout aman
-                val response = app.get(finalApiUrl, headers = standardHeaders, timeout = 10).text
-                val parsedData = tryParseJson<BackendFetchResponse>(response) ?: return@forEach
-                val sources = parsedData.data?.sources ?: return@forEach
+                val sources = parsedData.data?.sources
+                val captions = parsedData.data?.captions
 
-                // Ekstraksi subtitel jika disediakan oleh respons API
-                parsedData.data.captions?.forEach { caption ->
+                println("[RIVE_AUDIT] JUMLAH SOURCES    : ${sources?.size ?: 0}")
+                println("[RIVE_AUDIT] JUMLAH CAPTIONS   : ${captions?.size ?: 0}")
+
+                // Aliran pemrosesan data ke Cloudstream player
+                captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
                     val captionLabel = caption.label ?: "Subtitle"
                     subtitleCallback(SubtitleFile(captionLabel, captionUrl))
                 }
 
-                // Injeksi tautan video langsung ke core player Cloudstream
-                for (source in sources) {
-                    val streamUrl = source.url ?: continue
+                sources?.forEach { source ->
+                    val streamUrl = source.url ?: return@forEach
                     val qualityName = source.quality?.toString() ?: "AUTO"
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
@@ -82,20 +103,21 @@ class PrimeSrcHelper {
                     })
                     linksFound++
                 }
+
             } catch (e: Exception) {
-                // Mencegah kegagalan satu provider merusak perulangan provider lainnya
+                println("[RIVE_AUDIT] EXCEPTION TERJADI : ${e.message}")
                 e.printStackTrace()
             }
         }
-
+        
+        println("[RIVE_AUDIT] === AUDIT PIPELINE SELESAI (TOTAL LINKS: $linksFound) ===")
         return linksFound > 0
     }
 }
 
-// =======================================================
-// DATA SKEMA JSON YANG DISINKRONKAN DENGAN PAYLOAD RESPONS
-// =======================================================
-data class BackendFetchResponse(@JsonProperty("data") val data: BackendData?)
+data class BackendFetchResponse(
+    @JsonProperty("data") val data: BackendData?
+)
 data class BackendData(
     @JsonProperty("sources") val sources: List<BackendSource>?,
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
