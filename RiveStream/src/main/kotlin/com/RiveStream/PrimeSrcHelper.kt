@@ -52,7 +52,8 @@ class PrimeSrcHelper {
             }
 
             println("[RIVE_AUDIT] ----------------------------------------------------")
-            println("[RIVE_AUDIT] EVALUASI TOKEN PROVIDER: ${service.toUpperCase()}")
+            // PERBAIKAN: Menggunakan .uppercase() sesuai regulasi Kotlin terbaru
+            println("[RIVE_AUDIT] EVALUASI TOKEN PROVIDER: ${service.uppercase()}")
             println("[RIVE_AUDIT] URL REQUEST: $finalApiUrl")
 
             try {
