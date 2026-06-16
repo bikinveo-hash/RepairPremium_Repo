@@ -70,17 +70,14 @@ class PrimeSrcHelper {
     }
 
     /**
-     * DINAMIS BYPASS: Menghasilkan Kunci Secara Otomatis Untuk Semua Judul Konten
+     * IMPLEMENTASI DINAMIS MURNI: Menghasilkan kunci kriptografis murni berbasis input ID konten
      */
     fun generateDynamicSecretKey(mediaId: String?): String {
-        if (mediaId == null) return "LTE0NDkzOTE2"
+        val idStr = mediaId?.trim() ?: return ""
+        if (idStr.isEmpty()) return ""
+        
         return try {
-            val idStr = mediaId.trim()
-            if (idStr == "1304313") {
-                return Base64.encodeToString("36f1fcf7".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            }
-            
-            val idLong = idStr.toLongOrNull() ?: return "LTE0NDkzOTE2"
+            val idLong = idStr.toLongOrNull() ?: return ""
             val tWord = SALT_ARRAY[(idLong % SALT_ARRAY.size).toInt()]
             val insertIdx = ((idLong % idStr.length).toInt()) / 2
             
@@ -88,19 +85,10 @@ class PrimeSrcHelper {
             val inner = executeInnerHash(combinedStr)
             val outerSignedInt = executeOuterHash(inner)
             
-            var finalIntStr = outerSignedInt.toString()
-            
-            // Sinkronisasi khusus penanda biner jika menemui kecocokan ID Project Hail Mary
-            if (idStr.length == 6) {
-                val unsignedHex = (outerSignedInt.toLong() and 0xFFFFFFFFL)
-                if (unsignedHex == 0xebba0eeaL) {
-                    finalIntStr = "-14493916"
-                }
-            }
-
+            val finalIntStr = outerSignedInt.toString()
             Base64.encodeToString(finalIntStr.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         } catch (e: Exception) {
-            "LTE0NDkzOTE2"
+            ""
         }
     }
 
@@ -135,13 +123,15 @@ class PrimeSrcHelper {
             val servicesListUrl = "$mainUrl/api/backendfetch?requestID=VideoProviderServices&secretKey=rive&proxyMode=undefined"
             val servicesResponse = app.get(servicesListUrl, headers = standardHeaders).text
             val parsedServices = tryParseJson<BackendServicesResponse>(servicesResponse)
+            
+            // Prioritaskan 'primevids' yang terbukti aktif berdasarkan uji jaringan empiris
             val activeServices = parsedServices?.data ?: listOf("primevids", "flowcast", "asiacloud", "guru", "ophim")
 
             activeServices.forEach { service ->
                 try {
                     val proxyMode = if (service == "primevids") "undefined" else "noProxy"
                     val finalApiUrl = if (isMovie) {
-                        "$mainUrl/api/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
+                        "$mainUrl/api/backendfetch?requestID=$requestId&id=$cleanId&service=$service&secretKey=$secretKey&proxyMode=$proxyMode"
                     } else {
                         val season = cleanData.substringAfter("?season=").substringBefore("&")
                         val episode = cleanData.substringAfter("&episode=")
@@ -164,7 +154,6 @@ class PrimeSrcHelper {
                         val sourceLabel = source.source ?: "RiveStream"
                         val displayName = "$sourceLabel - $qualityName"
 
-                        // SOLUSI ABSOLUT SINKRONISASI: Gunakan pola instansiasi lambda block {} bawaan standard baru
                         callback(newExtractorLink(
                             source = providerName,
                             name = displayName,
