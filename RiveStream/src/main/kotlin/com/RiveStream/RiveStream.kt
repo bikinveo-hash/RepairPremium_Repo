@@ -105,11 +105,12 @@ class RiveStreamProvider : MainAPI() {
                     val seasonData = tryParseJson<TmdbSeasonResponse>(seasonResponse)
 
                     seasonData?.episodes?.forEach { ep ->
-                        episodes.add(newEpisode(url) {
+                        val epNum = ep.episodeNumber ?: return@forEach
+                        // ✅ FIX #3: URL episode langsung sebagai data, tanpa set this.data manual
+                        episodes.add(newEpisode("$url?season=$seasonNum&episode=$epNum") {
                             this.name = ep.name
                             this.season = seasonNum
-                            this.episode = ep.episodeNumber
-                            this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
+                            this.episode = epNum
                         })
                     }
                 } catch (e: Exception) { e.printStackTrace() }
