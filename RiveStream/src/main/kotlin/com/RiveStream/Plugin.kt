@@ -7,12 +7,13 @@ import android.content.Context
 @CloudstreamPlugin
 class RiveStreamPlugin : Plugin() {
     override fun load(context: Context) {
-        // Daftarkan provider utama: scraper TMDB + PrimeSrc engine untuk load link
+        // Provider utama: scraper TMDB + PrimeSrc engine
         registerMainAPI(RiveStreamProvider())
-        
-        // Daftarkan Extractor Standalone secara kaku (Mode Embed Mandiri)
-        registerExtractorAPI(RiveVidara())
-        registerExtractorAPI(RiveVidsST())
-        registerExtractorAPI(RiveSavefiles())
+
+        // Extractor untuk embed URL yang datang dari loadExtractor()
+        registerExtractorAPI(RiveVidara())       // vidara.so/e/...
+        registerExtractorAPI(RiveVidsST())       // vids.st/e/...
+        registerExtractorAPI(RiveSavefiles())    // savefiles.com/e/...
+        registerExtractorAPI(RiveLizer())        // lizer123.site/getm3u8/... ← NEW
     }
 }
