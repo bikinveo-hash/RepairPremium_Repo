@@ -9,5 +9,10 @@ class RiveStreamPlugin : Plugin() {
     override fun load(context: Context) {
         // Daftarkan provider utama: scraper TMDB + PrimeSrc engine untuk load link
         registerMainAPI(RiveStreamProvider())
+        
+        // Daftarkan Extractor Standalone secara kaku (Mode Embed Mandiri)
+        registerExtractorAPI(RiveVidara())
+        registerExtractorAPI(RiveVidsST())
+        registerExtractorAPI(RiveSavefiles())
     }
 }
