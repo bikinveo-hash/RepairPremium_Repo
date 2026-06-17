@@ -155,7 +155,7 @@ data class BackendSource(
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
 )
-data class BackendSource(
+data class BackendCaption(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file") val file: String?
 )
