@@ -14,19 +14,18 @@ class VerifiedActiveExtractor {
 
     suspend fun extractVidara(embedUrl: String, callback: (ExtractorLink) -> Unit) {
         try {
-            // Step 1: Validasi Halaman Embed Hulu & Kunci Sesi Kuki
+            // Step 1: Validasi Halaman Embed Hulu
             val landingResponse = app.get(
                 url = embedUrl,
                 headers = mapOf("User-Agent" to userAgent)
             )
             val html = landingResponse.text
 
-            // Verifikasi Eksistensi Endpoint Berdasarkan Bukti Sidik Jari Lapangan V5
             if (html.contains("/api/stream")) {
                 val fileCode = embedUrl.substringAfter("/e/").substringBefore("?")
                 val baseDomain = embedUrl.substringBefore("/e/")
                 
-                // Step 2: Handshake API POST JSON Menggunakan Payload Kaku android
+                // Step 2: Handshake API POST JSON
                 val jsonPayload = VidaraPayload(filecode = fileCode, device = "android")
                 val apiResponse = app.post(
                     url = "$baseDomain/api/stream",
@@ -42,15 +41,17 @@ class VerifiedActiveExtractor {
                 val streamUrl = parsed?.streamingUrl
 
                 if (!streamUrl.isNullOrEmpty()) {
+                    // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                     callback(
                         newExtractorLink(
                             source = "Vidara",
                             name = "Vidara - 1080p",
                             url = streamUrl,
-                            referer = "$baseDomain/",
-                            type = ExtractorLinkType.M3U8,
-                            quality = Qualities.P1080.value
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = "$baseDomain/"
+                            this.quality = Qualities.P1080.value
+                        }
                     )
                 }
             }
@@ -67,7 +68,7 @@ class VerifiedActiveExtractor {
                 headers = mapOf("User-Agent" to userAgent)
             ).text
 
-            // Step 2: Normalisasi Karakter Escape DOM Pre-Cleaning Seperti Aturan Engine V5
+            // Step 2: Normalisasi Karakter Escape DOM Pre-Cleaning
             val normalizedHtml = response.replace("\\/", "/")
 
             // Step 3: Pemanenan Tautan Menggunakan Pola Pencarian Regex Kaku VidsST
@@ -76,15 +77,17 @@ class VerifiedActiveExtractor {
 
             if (!streamUrl.isNullOrEmpty()) {
                 val baseDomain = embedUrl.substringBefore("/e/")
+                // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                 callback(
                     newExtractorLink(
                         source = "VidsST",
                         name = "VidsST - 1080p",
                         url = streamUrl,
-                        referer = "$baseDomain/",
-                        type = ExtractorLinkType.VIDEO,
-                        quality = Qualities.P1080.value
-                    )
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "$baseDomain/"
+                        this.quality = Qualities.P1080.value
+                    }
                 )
             }
         } catch (e: Exception) {
@@ -98,7 +101,7 @@ class VerifiedActiveExtractor {
             val fileCode = embedUrl.substringAfter("/e/").substringBefore("?")
             val baseDomain = embedUrl.substringBefore("/e/")
 
-            // Step 2: Pembangunan Payload Form Tradisional Urlencoded Sesuai Form F1
+            // Step 2: Pembangunan Payload Form Tradisional Urlencoded
             val formBody = FormBody.Builder()
                 .add("op", "embed")
                 .add("file_code", fileCode)
@@ -123,15 +126,17 @@ class VerifiedActiveExtractor {
             val masterM3u8Url = m3u8Regex.find(dlResponse)?.value
 
             if (!masterM3u8Url.isNullOrEmpty()) {
+                // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                 callback(
                     newExtractorLink(
                         source = "Savefiles",
                         name = "Savefiles - 720p",
                         url = masterM3u8Url,
-                        referer = "$baseDomain/",
-                        type = ExtractorLinkType.M3U8,
-                        quality = Qualities.P720.value
-                    )
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$baseDomain/"
+                        this.quality = Qualities.P720.value
+                    }
                 )
             }
         } catch (e: Exception) {
