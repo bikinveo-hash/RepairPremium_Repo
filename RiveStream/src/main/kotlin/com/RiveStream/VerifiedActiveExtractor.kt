@@ -1,38 +1,46 @@
-package com.lagradost.cloudstream3
+package com.lagradost.cloudstream3.utils
 
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.SubtitleFile
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.FormBody
 
-class VerifiedActiveExtractor {
+// ====================================================================
+// 1. EXTRACTOR: VIDARA (ASYNCHRONOUS_JSON_FETCH)
+// ====================================================================
+class Vidara : ExtractorApi() {
+    override val name = "Vidara"
+    override val mainUrl = "https://vidara.so"
+    override val requiresReferer = true
 
-    private val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-
-    suspend fun extractVidara(embedUrl: String, callback: (ExtractorLink) -> Unit) {
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
-            // Step 1: Validasi Halaman Embed Hulu
-            val landingResponse = app.get(
-                url = embedUrl,
-                headers = mapOf("User-Agent" to userAgent)
-            )
-            val html = landingResponse.text
+            val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+            
+            // Ingesti awal halaman embed untuk memverifikasi keselarasan sirkuit
+            val landingResponse = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
 
-            if (html.contains("/api/stream")) {
-                val fileCode = embedUrl.substringAfter("/e/").substringBefore("?")
-                val baseDomain = embedUrl.substringBefore("/e/")
+            if (landingResponse.contains("/api/stream")) {
+                val fileCode = url.substringAfter("/e/").substringBefore("?")
                 
-                // Step 2: Handshake API POST JSON
+                // Eksekusi POST JSON Handshake kaku ke backend Vidara
                 val jsonPayload = VidaraPayload(filecode = fileCode, device = "android")
                 val apiResponse = app.post(
-                    url = "$baseDomain/api/stream",
+                    url = "$mainUrl/api/stream",
                     json = jsonPayload,
                     headers = mapOf(
                         "User-Agent" to userAgent,
-                        "Referer" to embedUrl,
+                        "Referer" to url,
                         "Content-Type" to "application/json"
                     )
                 ).text
@@ -41,15 +49,14 @@ class VerifiedActiveExtractor {
                 val streamUrl = parsed?.streamingUrl
 
                 if (!streamUrl.isNullOrEmpty()) {
-                    // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                     callback(
                         newExtractorLink(
-                            source = "Vidara",
-                            name = "Vidara - 1080p",
+                            source = this.name,
+                            name = "$name - 1080p",
                             url = streamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
-                            this.referer = "$baseDomain/"
+                            this.referer = "$mainUrl/"
                             this.quality = Qualities.P1080.value
                         }
                     )
@@ -60,32 +67,50 @@ class VerifiedActiveExtractor {
         }
     }
 
-    suspend fun extractVidsST(embedUrl: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            // Step 1: Unduh Landing Page Raw Document
-            val response = app.get(
-                url = embedUrl,
-                headers = mapOf("User-Agent" to userAgent)
-            ).text
+    data class VidaraPayload(
+        @JsonProperty("filecode") val filecode: String,
+        @JsonProperty("device") val device: String
+    )
+    data class VidaraResponse(
+        @JsonProperty("streaming_url") val streamingUrl: String?
+    )
+}
 
-            // Step 2: Normalisasi Karakter Escape DOM Pre-Cleaning
+// ====================================================================
+// 2. EXTRACTOR: VIDSST (STATIC_DOM_EXTRACTION)
+// ====================================================================
+class VidsST : ExtractorApi() {
+    override val name = "VidsST"
+    override val mainUrl = "https://vids.st"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+            
+            val response = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
+            
+            // Pre-cleaning karakter escape backslash (\/) memori sesuai cetak biru V5
             val normalizedHtml = response.replace("\\/", "/")
 
-            // Step 3: Pemanenan Tautan Menggunakan Pola Pencarian Regex Kaku VidsST
+            // Tangkap link MP4 tersembunyi lewat Regex bukti lapangan
             val mp4Regex = Regex("""const\s+url\s*=\s*["'](https?://[^"']+\.mp4)["']""")
             val streamUrl = mp4Regex.find(normalizedHtml)?.groupValues?.get(1)
 
             if (!streamUrl.isNullOrEmpty()) {
-                val baseDomain = embedUrl.substringBefore("/e/")
-                // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                 callback(
                     newExtractorLink(
-                        source = "VidsST",
-                        name = "VidsST - 1080p",
+                        source = this.name,
+                        name = "$name - 1080p",
                         url = streamUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = "$baseDomain/"
+                        this.referer = "$mainUrl/"
                         this.quality = Qualities.P1080.value
                     }
                 )
@@ -94,47 +119,59 @@ class VerifiedActiveExtractor {
             e.printStackTrace()
         }
     }
+}
 
-    suspend fun extractSavefiles(embedUrl: String, referer: String, callback: (ExtractorLink) -> Unit) {
+// ====================================================================
+// 3. EXTRACTOR: SAVEFILES (FORM_POST_DISPATCHER)
+// ====================================================================
+class Savefiles : ExtractorApi() {
+    override val name = "Savefiles"
+    override val mainUrl = "https://savefiles.com"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
-            // Step 1: Isolasi Kode Berkas Dari Alamat Path Iframe
-            val fileCode = embedUrl.substringAfter("/e/").substringBefore("?")
-            val baseDomain = embedUrl.substringBefore("/e/")
+            val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+            val fileCode = url.substringAfter("/e/").substringBefore("?")
+            val actualReferer = referer ?: "https://primesrc.me/"
 
-            // Step 2: Pembangunan Payload Form Tradisional Urlencoded
+            // Rakit FormBody kaku untuk memicu post-action /dl hulu peladen
             val formBody = FormBody.Builder()
                 .add("op", "embed")
                 .add("file_code", fileCode)
                 .add("auto", "1")
-                .add("referer", referer)
+                .add("referer", actualReferer)
                 .build()
 
-            // Step 3: Ambil Respons Pemutar Asli Dari Endpoint /dl
             val dlResponse = app.post(
-                url = "$baseDomain/dl",
+                url = "$mainUrl/dl",
                 requestBody = formBody,
                 headers = mapOf(
                     "User-Agent" to userAgent,
-                    "Referer" to embedUrl,
-                    "Origin" to baseDomain,
+                    "Referer" to url,
+                    "Origin" to mainUrl,
                     "Content-Type" to "application/x-www-form-urlencoded"
                 )
             ).text
 
-            // Step 4: Saring Alamat Master Playlist Menggunakan Regex Bukti Lapangan
+            // Sisir ulang dokumen /dl memakai Regex master m3u8 terverifikasi aktif
             val m3u8Regex = Regex("""https?://[^\s"'<>]+master\.m3u8[^\s"'<>]*""")
             val masterM3u8Url = m3u8Regex.find(dlResponse)?.value
 
             if (!masterM3u8Url.isNullOrEmpty()) {
-                // PERBAIKAN: Properti referer dan quality wajib ditaruh di dalam block { }
                 callback(
                     newExtractorLink(
-                        source = "Savefiles",
-                        name = "Savefiles - 720p",
+                        source = this.name,
+                        name = "$name - 720p",
                         url = masterM3u8Url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = "$baseDomain/"
+                        this.referer = "$mainUrl/"
                         this.quality = Qualities.P720.value
                     }
                 )
@@ -143,14 +180,4 @@ class VerifiedActiveExtractor {
             e.printStackTrace()
         }
     }
-
-    // ===== DATA CLASSES INTERNAL HOSTER =====
-    data class VidaraPayload(
-        @JsonProperty("filecode") val filecode: String,
-        @JsonProperty("device") val device: String
-    )
-
-    data class VidaraResponse(
-        @JsonProperty("streaming_url") val streamingUrl: String?
-    )
 }
