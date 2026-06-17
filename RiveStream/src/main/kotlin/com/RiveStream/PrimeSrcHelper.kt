@@ -28,6 +28,7 @@ class PrimeSrcHelper {
     ): Boolean {
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
+   
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
@@ -42,6 +43,7 @@ class PrimeSrcHelper {
         println("[RIVE_AUDIT] TARGET ID KONTEN: $cleanId | TIPE: ${if (isMovie) "MOVIE" else "TV"}")
 
         TEST_PROVIDERS.forEach { service ->
+          
             // 1. Merakit URL Final
             val finalApiUrl = if (isMovie) {
                 "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$AUDITED_API_KEY"
@@ -92,6 +94,30 @@ class PrimeSrcHelper {
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
 
+                    // ===== INJEKSI INTERSEP ENGINE V5 MANDIRI NYATA DISINI =====
+                    if (streamUrl.contains("vidara.so") || streamUrl.contains("vids.st") || streamUrl.contains("savefiles.com")) {
+                        val vidaraExtractor = com.lagradost.cloudstream3.utils.Vidara()
+                        val vidsStExtractor = com.lagradost.cloudstream3.utils.VidsST()
+                        val savefilesExtractor = com.lagradost.cloudstream3.utils.Savefiles()
+
+                        try {
+                            if (streamUrl.contains("vidara.so")) {
+                                vidaraExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
+                                linksFound++
+                            } else if (streamUrl.contains("vids.st")) {
+                                vidsStExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
+                                linksFound++
+                            } else if (streamUrl.contains("savefiles.com")) {
+                                savefilesExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
+                                linksFound++
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        return@forEach // Skip default mapping karena link sudah diekstraksi secara lurus oleh V5
+                    }
+
+                    // Default Cloudstream mapping bawaan (Jangan di-otak-atik)
                     callback(newExtractorLink(
                         source = providerName,
                         name = displayName,
@@ -129,7 +155,7 @@ data class BackendSource(
     @JsonProperty("source") val source: String?,
     @JsonProperty("format") val format: String?
 )
-data class BackendCaption(
+data class BackendSource(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file") val file: String?
 )
