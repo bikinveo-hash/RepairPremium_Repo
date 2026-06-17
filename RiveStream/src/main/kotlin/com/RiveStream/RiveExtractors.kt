@@ -2,7 +2,6 @@ package com.RiveStream
 
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -10,7 +9,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
-import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -44,7 +42,9 @@ class RiveVidara : ExtractorApi() {
                     headers = mapOf("User-Agent" to userAgent, "Referer" to url)
                 ).text
 
-                val streamUrl = tryParseJson<VidaraResponse>(apiResponse)?.streamingUrl
+                // ✅ FIX: Menggunakan Regex untuk mengekstrak streaming_url agar kebal dari Proguard Obfuscation & ClassLoader Mismatch
+                val streamUrl = Regex("""(?i)"streaming_url"\s*:\s*"([^"]+)"""").find(apiResponse)?.groupValues?.get(1)
+
                 if (!streamUrl.isNullOrEmpty()) {
                     callback(newExtractorLink(
                         source = this.name,
@@ -57,12 +57,10 @@ class RiveVidara : ExtractorApi() {
                     })
                 }
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
     }
-
-    data class VidaraResponse(
-        @JsonProperty("streaming_url") val streamingUrl: String?
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,7 +96,9 @@ class RiveVidsST : ExtractorApi() {
                     this.quality = Qualities.P1080.value
                 })
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
     }
 }
 
@@ -154,12 +154,14 @@ class RiveSavefiles : ExtractorApi() {
                     this.quality = Qualities.P720.value
                 })
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RiveLizer — https://lizer123.site  ← NEW: extractor untuk link yg hilang
+// RiveLizer — https://lizer123.site
 // Flow: GET /getm3u8/{id} → redirect atau JSON → M3U8
 // ─────────────────────────────────────────────────────────────────────────────
 class RiveLizer : ExtractorApi() {
@@ -236,6 +238,8 @@ class RiveLizer : ExtractorApi() {
                 })
             }
 
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
     }
 }
