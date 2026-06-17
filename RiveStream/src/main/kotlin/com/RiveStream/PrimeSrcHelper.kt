@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.utils.loadExtractor
 
 class PrimeSrcHelper {
 
@@ -79,36 +80,26 @@ class PrimeSrcHelper {
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
 
-                    // =================================================================
-                    // FILTER CERDAS V5: JANGAN INTERSEP JIKA SUDAH BERUPA MEDIA MATANG
-                    // =================================================================
                     val isDirectMedia = streamUrl.contains(".m3u8") || streamUrl.contains(".mp4")
 
-                    // HANYA intersep jika dia adalah Iframe mentah (BUKAN direct media)
-                    if (!isDirectMedia && (streamUrl.contains("vidara.so") || streamUrl.contains("vids.st") || streamUrl.contains("savefiles.com"))) {
-                        val vidaraExtractor = com.RiveStream.RiveVidara()
-                        val vidsStExtractor = com.RiveStream.RiveVidsST()
-                        val savefilesExtractor = com.RiveStream.RiveSavefiles()
-
-                        try {
-                            if (streamUrl.contains("vidara.so")) {
-                                vidaraExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
-                                linksFound++
-                            } else if (streamUrl.contains("vids.st")) {
-                                vidsStExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
-                                linksFound++
-                            } else if (streamUrl.contains("savefiles.com")) {
-                                savefilesExtractor.getUrl(streamUrl, "https://primesrc.me/", subtitleCallback, callback)
-                                linksFound++
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                        return@forEach // Lewati default mapping karena ini iframe yang sudah dibongkar
+                    // =================================================================
+                    // MODE MANDIRI: LEMPAR EMBED KE LOAD EXTRACTOR CLOUDSTREAM
+                    // =================================================================
+                    if (!isDirectMedia) {
+                        // Karena extractor sudah berdiri sendiri di Plugin.kt,
+                        // kita serahkan sepenuhnya ke native loader CloudStream!
+                        loadExtractor(
+                            url = streamUrl,
+                            referer = "$mainUrl/",
+                            subtitleCallback = subtitleCallback,
+                            callback = callback
+                        )
+                        linksFound++
+                        return@forEach 
                     }
 
                     // =================================================================
-                    // DEFAULT MAPPING (UNTUK DIRECT MEDIA SEPERTI KASUS GURU DI ATAS)
+                    // DEFAULT MAPPING UNTUK DIRECT MEDIA
                     // =================================================================
                     callback(newExtractorLink(
                         source = providerName,
