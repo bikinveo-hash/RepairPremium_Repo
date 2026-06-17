@@ -53,27 +53,19 @@ class PrimeSrcHelper {
 
             println("[RIVE_AUDIT] ----------------------------------------------------")
             println("[RIVE_AUDIT] EVALUASI TOKEN PROVIDER: ${service.uppercase()}")
-            println("[RIVE_AUDIT] URL REQUEST: $finalApiUrl")
 
             try {
                 val response = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
                 val httpStatus = response.code
                 val rawJsonJsonBody = response.text
 
-                println("[RIVE_AUDIT] HTTP STATUS CODE : $httpStatus")
-                println("[RIVE_AUDIT] RAW JSON BODY     : $rawJsonJsonBody")
-
                 val parsedData = tryParseJson<BackendFetchResponse>(rawJsonJsonBody)
                 if (parsedData == null) {
-                    println("[RIVE_AUDIT] STATUS PARSING    : GAGAL (Bukan format JSON valid)")
                     return@forEach
                 }
 
                 val sources = parsedData.data?.sources
                 val captions = parsedData.data?.captions
-
-                println("[RIVE_AUDIT] JUMLAH SOURCES    : ${sources?.size ?: 0}")
-                println("[RIVE_AUDIT] JUMLAH CAPTIONS   : ${captions?.size ?: 0}")
 
                 captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
@@ -87,8 +79,13 @@ class PrimeSrcHelper {
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
 
-                    // INTERSEP KHUSUS: Mengarahkan rute kaku ke objek kustom com.RiveStream.* agar kebal dari tabrakan core app
-                    if (streamUrl.contains("vidara.so") || streamUrl.contains("vids.st") || streamUrl.contains("savefiles.com")) {
+                    // =================================================================
+                    // FILTER CERDAS V5: JANGAN INTERSEP JIKA SUDAH BERUPA MEDIA MATANG
+                    // =================================================================
+                    val isDirectMedia = streamUrl.contains(".m3u8") || streamUrl.contains(".mp4")
+
+                    // HANYA intersep jika dia adalah Iframe mentah (BUKAN direct media)
+                    if (!isDirectMedia && (streamUrl.contains("vidara.so") || streamUrl.contains("vids.st") || streamUrl.contains("savefiles.com"))) {
                         val vidaraExtractor = com.RiveStream.RiveVidara()
                         val vidsStExtractor = com.RiveStream.RiveVidsST()
                         val savefilesExtractor = com.RiveStream.RiveSavefiles()
@@ -107,9 +104,12 @@ class PrimeSrcHelper {
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
-                        return@forEach
+                        return@forEach // Lewati default mapping karena ini iframe yang sudah dibongkar
                     }
 
+                    // =================================================================
+                    // DEFAULT MAPPING (UNTUK DIRECT MEDIA SEPERTI KASUS GURU DI ATAS)
+                    // =================================================================
                     callback(newExtractorLink(
                         source = providerName,
                         name = displayName,
@@ -124,7 +124,6 @@ class PrimeSrcHelper {
                 }
 
             } catch (e: Exception) {
-                println("[RIVE_AUDIT] EXCEPTION TERJADI : ${e.message}")
                 e.printStackTrace()
             }
         }
