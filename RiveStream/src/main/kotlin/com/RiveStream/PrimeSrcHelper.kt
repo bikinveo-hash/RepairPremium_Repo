@@ -1,6 +1,9 @@
-package com.lagradost.cloudstream3
+package com.RiveStream  // ✅ FIX #1: Package diperbaiki dari com.lagradost.cloudstream3
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.newSubtitleFile  // ✅ FIX #2: Import newSubtitleFile
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -13,14 +16,14 @@ class PrimeSrcHelper {
     companion object {
         private const val SCRAPER_BASE = "https://scrapper.rivestream.app/api/provider"
         private const val AUDITED_API_KEY = "d64117f26031a428449f102ced3aba73"
-        
+
         private val TEST_PROVIDERS = listOf(
             "primevids", "flowcast", "asiacloud", "guru", "ophim", "flow", "speed", "vidsrc"
         )
     }
 
     suspend fun invokePrimeSrc(
-        data: String, 
+        data: String,
         mainUrl: String,
         providerName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -28,7 +31,7 @@ class PrimeSrcHelper {
     ): Boolean {
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
-   
+
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
         var linksFound = 0
 
@@ -43,7 +46,7 @@ class PrimeSrcHelper {
         println("[RIVE_AUDIT] TARGET ID KONTEN: $cleanId | TIPE: ${if (isMovie) "MOVIE" else "TV"}")
 
         TEST_PROVIDERS.forEach { service ->
-          
+
             val finalApiUrl = if (isMovie) {
                 "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$AUDITED_API_KEY"
             } else {
@@ -57,10 +60,9 @@ class PrimeSrcHelper {
 
             try {
                 val response = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
-                val httpStatus = response.code
-                val rawJsonJsonBody = response.text
+                val rawJsonBody = response.text
 
-                val parsedData = tryParseJson<BackendFetchResponse>(rawJsonJsonBody)
+                val parsedData = tryParseJson<BackendFetchResponse>(rawJsonBody)
                 if (parsedData == null) {
                     return@forEach
                 }
@@ -68,10 +70,11 @@ class PrimeSrcHelper {
                 val sources = parsedData.data?.sources
                 val captions = parsedData.data?.captions
 
+                // ✅ FIX #2: Pakai newSubtitleFile (bukan konstruktor langsung yg deprecated)
                 captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
                     val captionLabel = caption.label ?: "Subtitle"
-                    subtitleCallback(SubtitleFile(captionLabel, captionUrl))
+                    subtitleCallback(newSubtitleFile(captionLabel, captionUrl))
                 }
 
                 sources?.forEach { source ->
@@ -86,8 +89,6 @@ class PrimeSrcHelper {
                     // MODE MANDIRI: LEMPAR EMBED KE LOAD EXTRACTOR CLOUDSTREAM
                     // =================================================================
                     if (!isDirectMedia) {
-                        // Karena extractor sudah berdiri sendiri di Plugin.kt,
-                        // kita serahkan sepenuhnya ke native loader CloudStream!
                         loadExtractor(
                             url = streamUrl,
                             referer = "$mainUrl/",
@@ -95,7 +96,7 @@ class PrimeSrcHelper {
                             callback = callback
                         )
                         linksFound++
-                        return@forEach 
+                        return@forEach
                     }
 
                     // =================================================================
@@ -118,7 +119,7 @@ class PrimeSrcHelper {
                 e.printStackTrace()
             }
         }
-        
+
         println("[RIVE_AUDIT] === AUDIT PIPELINE SELESAI (TOTAL LINKS: $linksFound) ===")
         return linksFound > 0
     }
