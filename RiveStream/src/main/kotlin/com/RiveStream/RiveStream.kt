@@ -149,7 +149,6 @@ class RiveStreamProvider : MainAPI() {
     ): Boolean {
         val primeSrcHelper = PrimeSrcHelper()
 
-        // Jalur 1: Mengambil Konten Non-Embed Mode (Lancar bawaan situs)
         val nonEmbedResult = primeSrcHelper.invokePrimeSrc(
             data            = data,
             mainUrl         = mainUrl,
@@ -159,12 +158,11 @@ class RiveStreamProvider : MainAPI() {
             callback        = callback
         )
 
-        // Jalur 2: Mengambil Konten Embed Mode Agregator (Pilihan A)
         val embedResult = primeSrcHelper.invokeEmbedMode(
-            data            = data,
-            mainUrl         = mainUrl,
+            data             = data,
+            mainUrl          = mainUrl,
             subtitleCallback = subtitleCallback,
-            callback        = callback
+            callback         = callback
         )
 
         return nonEmbedResult || embedResult
