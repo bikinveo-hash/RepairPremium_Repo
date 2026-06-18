@@ -28,156 +28,115 @@ class RiveStreamProvider : MainAPI() {
 
     private fun buildUrl(path: String, useProxy: Boolean = true): String {
         val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$TMDB_API_KEY"
-        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "utf-8")}" else fullUrl
+        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
-        val tmdbPath = request.data
-        val tmdbUrl = buildUrl(tmdbPath, useProxy = true)
-        val response = app.get(tmdbUrl).text
-        val results = tryParseJson<TmdbResultsResponse>(response)?.results ?: return null
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val path = "${request.data}?page=$page"
+        val url = buildUrl(path)
+        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
-        val homeItems = results.mapNotNull { item ->
-            val isMovie = item.mediaType == "movie" || tmdbPath.contains("movie")
-            val cleanUrl = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
-            
+        val homeItems = parsed.results?.mapNotNull { item ->
+            val isMovie = item.title != null || request.data.contains("movie")
+            val idAndType = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+
             if (isMovie) {
-                newMovieSearchResponse(
-                    name = item.title ?: item.name ?: "",
-                    url = cleanUrl,
-                    type = TvType.Movie
-                ) {
-                    this.posterUrl = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                }
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
             } else {
-                newTvSeriesSearchResponse(
-                    name = item.title ?: item.name ?: "",
-                    url = cleanUrl,
-                    type = TvType.TvSeries
-                ) {
-                    this.posterUrl = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                }
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
             }
-        }
+        } ?: emptyList()
 
-        return newHomePageResponse(
-            name = request.name,
-            list = homeItems,
-            horizontalImages = false
-        )
+        return newHomePageResponse(request.name, homeItems, hasNext = true)
     }
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        val searchPath = "search/multi?query=${URLEncoder.encode(query, "utf-8")}"
-        val searchUrl = buildUrl(searchPath, useProxy = true)
-        val response = app.get(searchUrl).text
-        val results = tryParseJson<TmdbResultsResponse>(response)?.results ?: return null
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = buildUrl("search/multi?query=$encodedQuery")
+        val response = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val parsed = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
-        return results.mapNotNull { item ->
-            val isMovie = item.mediaType == "movie"
-            val isTv = item.mediaType == "tv"
-            if (!isMovie && !isTv) return@mapNotNull null
-            
-            val cleanUrl = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
-            
-            if (isMovie) {
-                newMovieSearchResponse(
-                    name = item.title ?: item.name ?: "",
-                    url = cleanUrl,
-                    type = TvType.Movie
-                ) {
-                    this.posterUrl = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                }
-            } else {
-                newTvSeriesSearchResponse(
-                    name = item.title ?: item.name ?: "",
-                    url = cleanUrl,
-                    type = TvType.TvSeries
-                ) {
-                    this.posterUrl = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                }
-            }
+        return parsed.results?.mapNotNull { item ->
+            val title = item.title ?: item.name ?: return@mapNotNull null
+            val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+            val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
+            val idAndType = "$mainUrl/$mediaType/${item.id}"
+
+            if (mediaType == "movie") {
+                newMovieSearchResponse(title, idAndType, TvType.Movie) { this.posterUrl = poster }
+            } else if (mediaType == "tv") {
+                newTvSeriesSearchResponse(title, idAndType, TvType.TvSeries) { this.posterUrl = poster }
+            } else null
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val id = url.substringAfter("movie/").substringAfter("tv/").substringBefore("?").substringBefore("/")
-        val type = if (url.contains("/movie/")) TvType.Movie else TvType.TvSeries
+        val cleanPath = url.replace("$mainUrl/", "")
+        val type = cleanPath.substringBefore("/")
+        val id = cleanPath.substringAfter("/")
+        val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
+        val response = app.get(detailsUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+        val item = tryParseJson<TmdbDetailResult>(response) ?: return null
 
-        val tmdbPath = if (type == TvType.Movie) "movie/$id" else "tv/$id"
-        val tmdbUrl = buildUrl(tmdbPath, useProxy = true)
-        
-        println("[RIVE_AUDIT] Loading TMDB URL: $tmdbUrl")
-        val response = app.get(tmdbUrl).text
-        val detail = tryParseJson<TmdbDetailResult>(response) ?: return null
+        val title = item.title ?: item.name ?: return null
+        val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        val overview = item.overview
+        val genres = item.genres?.mapNotNull { it.name }
 
-        if (type == TvType.Movie) {
-            return newMovieLoadResponse(
-                name = detail.title ?: detail.name ?: "",
-                url = url,
-                type = TvType.Movie,
-                dataUrl = url
-            ) {
-                this.posterUrl = detail.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                this.plot = detail.overview
-                this.year = detail.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-                this.tags = detail.genres?.mapNotNull { it.name }
-                this.rating = detail.voteAverage?.times(10)?.toInt()
+        if (type == "movie") {
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = overview
+                this.year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
+                this.tags = genres
+                item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            val episodes = mutableListOf<Episode>()
-            val seasonsCount = detail.seasons?.mapNotNull { it.seasonNumber }?.maxOrNull() ?: 1
-            
-            for (seasonNum in 1..seasonsCount) {
-                val seasonPath = "tv/$id/season/$seasonNum"
-                val seasonUrl = buildUrl(seasonPath, useProxy = true)
+            val episodes = Coroutines.threadSafeListOf<Episode>()
+            item.seasons?.amap { season ->
+                val seasonNum = season.seasonNumber ?: return@amap
+                if (seasonNum == 0) return@amap
                 try {
-                    val seasonRes = app.get(seasonUrl).text
-                    val seasonData = tryParseJson<TmdbSeasonResponse>(seasonRes)
+                    val seasonUrl = buildUrl("$type/$id/season/$seasonNum")
+                    val seasonResponse = app.get(seasonUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")).text
+                    val seasonData = tryParseJson<TmdbSeasonResponse>(seasonResponse)
+
                     seasonData?.episodes?.forEach { ep ->
-                        val epNum = ep.episodeNumber ?: return@forEach
-                        episodes.add(
-                            Episode(
-                                data = "id=$id&type=tv&season=$seasonNum&episode=$epNum",
-                                name = ep.name,
-                                season = seasonNum,
-                                episode = epNum
-                            )
-                        )
+                        episodes.add(newEpisode(url) {
+                            this.name = ep.name
+                            this.season = seasonNum
+                            this.episode = ep.episodeNumber
+                            this.data = "$url?season=$seasonNum&episode=${ep.episodeNumber}"
+                        })
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
 
-            return newTvSeriesLoadResponse(
-                name = detail.title ?: detail.name ?: "",
-                url = url,
-                type = TvType.TvSeries,
-                episodes = episodes
-            ) {
-                this.posterUrl = detail.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                this.plot = detail.overview
-                this.year = detail.firstAirDate?.split("-")?.firstOrNull()?.toIntOrNull()
-                this.tags = detail.genres?.mapNotNull { it.name }
-                this.rating = detail.voteAverage?.times(10)?.toInt()
+            val sortedEpisodes = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+                this.posterUrl = poster
+                this.plot = overview
+                this.year = item.firstAirDate?.substringBefore("-")?.toIntOrNull()
+                this.tags = genres
+                item.voteAverage?.let { this.score = Score.from10(it) }
             }
         }
     }
 
     override suspend fun loadLinks(
         data: String,
-        isCdn: Boolean,
+        isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return PrimeSrcHelper().invokePrimeSrc(
+        val primeSrcHelper = PrimeSrcHelper()
+        return primeSrcHelper.invokePrimeSrc(
             data = data,
             mainUrl = mainUrl,
-            providerName = name,
+            providerName = this.name,
             subtitleCallback = subtitleCallback,
             callback = callback
         )
