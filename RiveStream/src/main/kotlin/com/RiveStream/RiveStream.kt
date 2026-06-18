@@ -12,21 +12,9 @@ class RiveStreamProvider : MainAPI() {
     override var mainUrl = "https://www.rivestream.app"
     override var lang    = "en"
     override val hasMainPage    = true
-
-    // ─────────────────────────────────────────────────────────
-    //  FIX #5 : hasQuickSearch dimatikan karena tidak ada
-    //           implementasi quickSearch() → sebelumnya akan
-    //           melempar NotImplementedError / crash di UI.
-    //           Aktifkan kembali jika sudah diimplementasi.
-    // ─────────────────────────────────────────────────────────
     override val hasQuickSearch = false
 
     companion object {
-        // ─────────────────────────────────────────────────────
-        //  FIX #8 : Satu sumber kebenaran untuk API key.
-        //           PrimeSrcHelper menerima nilai ini via
-        //           parameter, tidak menyimpan duplikat.
-        // ─────────────────────────────────────────────────────
         const val SHARED_API_KEY = "d64117f26031a428449f102ced3aba73"
 
         private const val TMDB_BASE  = "https://api.themoviedb.org/3"
@@ -45,7 +33,6 @@ class RiveStreamProvider : MainAPI() {
         return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
 
-    // Shared header untuk semua request TMDB
     private val tmdbHeaders = mapOf(
         "User-Agent" to USER_AGENT,
         "Referer"    to "$mainUrl/"
@@ -73,13 +60,6 @@ class RiveStreamProvider : MainAPI() {
         return newHomePageResponse(request.name, homeItems, hasNext = true)
     }
 
-    // ─────────────────────────────────────────────────────────
-    //  FIX #7 (opsional) : Override versi paginated search()
-    //                       sehingga hasil lebih dari halaman 1
-    //                       bisa dimuat saat user scroll.
-    //                       Sebelumnya hanya versi non-paginated
-    //                       yang di-override (selalu page 1).
-    // ─────────────────────────────────────────────────────────
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val url          = buildUrl("search/multi?query=$encodedQuery&page=$page")
@@ -123,15 +103,8 @@ class RiveStreamProvider : MainAPI() {
                 item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            // ─────────────────────────────────────────────
-            //  FIX #3 : Ganti Coroutines.threadSafeListOf
-            //           (@InternalAPI) → amap() yang return
-            //           List<List<Episode>?> lalu flatten().
-            //           Thread-safe secara alami karena tiap
-            //           coroutine return nilainya sendiri.
-            // ─────────────────────────────────────────────
             val episodes = item.seasons
-                ?.filter { (it.seasonNumber ?: 0) > 0 }   // buang season 0 (specials/extras)
+                ?.filter { (it.seasonNumber ?: 0) > 0 }
                 ?.amap { season ->
                     val seasonNum = season.seasonNumber ?: return@amap null
                     try {
@@ -141,13 +114,6 @@ class RiveStreamProvider : MainAPI() {
 
                         seasonData?.episodes?.mapNotNull { ep ->
                             val epNum = ep.episodeNumber ?: return@mapNotNull null
-                            // ─────────────────────────────
-                            //  FIX #4 : Bangun data string
-                            //           dulu, baru pass ke
-                            //           newEpisode() — tidak
-                            //           ada override `data`
-                            //           di dalam block lagi.
-                            // ─────────────────────────────
                             val epData = "$url?season=$seasonNum&episode=$epNum"
                             newEpisode(epData) {
                                 this.name    = ep.name
@@ -156,7 +122,7 @@ class RiveStreamProvider : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        logError(e)   // FIX #6 – logError resmi CS3
+                        logError(e)
                         null
                     }
                 }
@@ -182,14 +148,26 @@ class RiveStreamProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val primeSrcHelper = PrimeSrcHelper()
-        return primeSrcHelper.invokePrimeSrc(
+
+        // Jalur 1: Mengambil Konten Non-Embed Mode (Lancar bawaan situs)
+        val nonEmbedResult = primeSrcHelper.invokePrimeSrc(
             data            = data,
             mainUrl         = mainUrl,
             providerName    = this.name,
-            apiKey          = SHARED_API_KEY,   // FIX #8 – satu sumber, tidak duplikat
+            apiKey          = SHARED_API_KEY,
             subtitleCallback = subtitleCallback,
             callback        = callback
         )
+
+        // Jalur 2: Mengambil Konten Embed Mode Agregator (Pilihan A)
+        val embedResult = primeSrcHelper.invokeEmbedMode(
+            data            = data,
+            mainUrl         = mainUrl,
+            subtitleCallback = subtitleCallback,
+            callback        = callback
+        )
+
+        return nonEmbedResult || embedResult
     }
 
     // ===== DATA CLASSES TMDB =====================================================
