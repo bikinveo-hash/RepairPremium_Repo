@@ -2,6 +2,7 @@ package com.RiveStream
 
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -9,6 +10,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
+import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -29,10 +31,7 @@ class RiveVidara : ExtractorApi() {
     ) {
         try {
             val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-            
-            // ✅ OKHTTP ONLY: Menghindari WebView resolver agar tidak terkena trigger Sandbox Checker (new100.js)
             val landingResponse = app.get(url, headers = mapOf("User-Agent" to userAgent)).text
-
             if (landingResponse.contains("/api/stream")) {
                 val fileCode = url.substringAfter("/e/").substringBefore("?")
                 val jsonString = mapOf("filecode" to fileCode, "device" to "android").toJson()
@@ -44,7 +43,7 @@ class RiveVidara : ExtractorApi() {
                     headers = mapOf("User-Agent" to userAgent, "Referer" to url)
                 ).text
 
-                // ✅ REGEX PARSING: Kebal dari Proguard obfuscation & ClassLoader isolation
+                // ✅ FIX: Ganti tryParseJson dengan Regex dinamis agar terhindar dari error ClassLoader / Proguard
                 val streamUrl = Regex("""(?i)"streaming_url"\s*:\s*"([^"]+)"""").find(apiResponse)?.groupValues?.get(1)
 
                 if (!streamUrl.isNullOrEmpty()) {
@@ -59,9 +58,7 @@ class RiveVidara : ExtractorApi() {
                     })
                 }
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 }
 
@@ -98,9 +95,7 @@ class RiveVidsST : ExtractorApi() {
                     this.quality = Qualities.P1080.value
                 })
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 }
 
@@ -156,9 +151,7 @@ class RiveSavefiles : ExtractorApi() {
                     this.quality = Qualities.P720.value
                 })
             }
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 }
 
@@ -193,6 +186,7 @@ class RiveLizer : ExtractorApi() {
             val finalUrl = response.url
             val body = response.text
 
+            // Cek 1: apakah response URL sudah berupa M3U8 langsung (redirect)
             if (finalUrl.contains(".m3u8")) {
                 callback(newExtractorLink(
                     source = this.name,
@@ -206,6 +200,7 @@ class RiveLizer : ExtractorApi() {
                 return
             }
 
+            // Cek 2: body berisi M3U8 URL (JSON atau plain text)
             val m3u8Regex = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""")
             val m3u8Url = m3u8Regex.find(body)?.value
 
@@ -222,6 +217,7 @@ class RiveLizer : ExtractorApi() {
                 return
             }
 
+            // Cek 3: body berisi MP4
             val mp4Regex = Regex("""https?://[^\s"'<>]+\.mp4[^\s"'<>]*""")
             val mp4Url = mp4Regex.find(body)?.value
 
@@ -237,8 +233,11 @@ class RiveLizer : ExtractorApi() {
                 })
             }
 
-        } catch (e: Exception) { 
-            e.printStackTrace() 
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 }
+
+// ===== DATA CLASSES DESERIALISASI UNTUK EXTRACTOR =====
+data class VidaraResponse(
+    @JsonProperty("streaming_url") val streamingUrl: String?
+)
