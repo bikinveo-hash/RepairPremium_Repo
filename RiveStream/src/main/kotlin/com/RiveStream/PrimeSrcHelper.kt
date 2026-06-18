@@ -13,7 +13,6 @@ class PrimeSrcHelper {
         private const val SCRAPER_BASE = "https://scrapper.rivestream.app/api/provider"
         private const val AUDITED_API_KEY = "d64117f26031a428449f102ced3aba73"
         
-        // Menggabungkan token lama dan token asli dari manifestasi JS untuk di-audit massal
         private val TEST_PROVIDERS = listOf(
             "primevids", "flowcast", "asiacloud", "guru", "ophim", "flow", "speed", "vidsrc"
         )
@@ -42,7 +41,6 @@ class PrimeSrcHelper {
         println("[RIVE_AUDIT] TARGET ID KONTEN: $cleanId | TIPE: ${if (isMovie) "MOVIE" else "TV"}")
 
         TEST_PROVIDERS.forEach { service ->
-            // 1. Merakit URL Final
             val finalApiUrl = if (isMovie) {
                 "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$AUDITED_API_KEY"
             } else {
@@ -52,21 +50,17 @@ class PrimeSrcHelper {
             }
 
             println("[RIVE_AUDIT] ----------------------------------------------------")
-            // PERBAIKAN: Menggunakan .uppercase() sesuai regulasi Kotlin terbaru
             println("[RIVE_AUDIT] EVALUASI TOKEN PROVIDER: ${service.uppercase()}")
             println("[RIVE_AUDIT] URL REQUEST: $finalApiUrl")
 
             try {
-                // 2. Eksekusi Jaringan & Tangkap Objek Respon HTTP
                 val response = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
                 val httpStatus = response.code
                 val rawJsonJsonBody = response.text
 
-                // 3. Cetak Fakta Respons Nyata ke Logcat
                 println("[RIVE_AUDIT] HTTP STATUS CODE : $httpStatus")
                 println("[RIVE_AUDIT] RAW JSON BODY     : $rawJsonJsonBody")
 
-                // 4. Proses Parsing Standar
                 val parsedData = tryParseJson<BackendFetchResponse>(rawJsonJsonBody)
                 if (parsedData == null) {
                     println("[RIVE_AUDIT] STATUS PARSING    : GAGAL (Bukan format JSON valid)")
@@ -79,11 +73,11 @@ class PrimeSrcHelper {
                 println("[RIVE_AUDIT] JUMLAH SOURCES    : ${sources?.size ?: 0}")
                 println("[RIVE_AUDIT] JUMLAH CAPTIONS   : ${captions?.size ?: 0}")
 
-                // Aliran pemrosesan data ke Cloudstream player
                 captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
                     val captionLabel = caption.label ?: "Subtitle"
-                    subtitleCallback(SubtitleFile(captionLabel, captionUrl))
+                    // PERBAIKAN: Mengganti constructor usang dengan fungsi factory pembantu baru
+                    [span_6](start_span)subtitleCallback(newSubtitleFile(captionLabel, captionUrl))[span_6](end_span)
                 }
 
                 sources?.forEach { source ->
@@ -92,7 +86,7 @@ class PrimeSrcHelper {
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
 
-                    callback(newExtractorLink(
+                    [span_7](start_span)callback(newExtractorLink([span_7](end_span)
                         source = providerName,
                         name = displayName,
                         url = streamUrl,
