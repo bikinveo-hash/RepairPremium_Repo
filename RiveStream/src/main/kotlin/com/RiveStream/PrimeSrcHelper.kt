@@ -76,8 +76,7 @@ class PrimeSrcHelper {
                 captions?.forEach { caption ->
                     val captionUrl = caption.file ?: return@forEach
                     val captionLabel = caption.label ?: "Subtitle"
-                    // PERBAIKAN: Mengganti constructor usang dengan fungsi factory pembantu baru
-                    [span_6](start_span)subtitleCallback(newSubtitleFile(captionLabel, captionUrl))[span_6](end_span)
+                    subtitleCallback(newSubtitleFile(captionLabel, captionUrl))
                 }
 
                 sources?.forEach { source ->
@@ -86,7 +85,7 @@ class PrimeSrcHelper {
                     val sourceLabel = source.source ?: "RiveStream"
                     val displayName = "$sourceLabel - $qualityName"
 
-                    [span_7](start_span)callback(newExtractorLink([span_7](end_span)
+                    callback(newExtractorLink(
                         source = providerName,
                         name = displayName,
                         url = streamUrl,
