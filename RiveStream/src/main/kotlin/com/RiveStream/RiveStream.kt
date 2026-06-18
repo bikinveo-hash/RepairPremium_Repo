@@ -64,12 +64,9 @@ class RiveStreamProvider : MainAPI() {
         }
 
         return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = homeItems,
-                horizontalImages = false
-            ),
-            hasNext = false
+            name = request.name,
+            list = homeItems,
+            horizontalImages = false
         )
     }
 
@@ -128,11 +125,7 @@ class RiveStreamProvider : MainAPI() {
                 this.plot = detail.overview
                 this.year = detail.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
                 this.tags = detail.genres?.mapNotNull { it.name }
-                
-                // ✅ FIX: Ganti properti rating usang dengan sistem Score dari 100
-                detail.voteAverage?.let {
-                    this.addScore(Score.from10(it.toFloat()))
-                }
+                this.rating = detail.voteAverage?.times(10)?.toInt()
             }
         } else {
             val episodes = mutableListOf<Episode>()
@@ -147,13 +140,12 @@ class RiveStreamProvider : MainAPI() {
                     seasonData?.episodes?.forEach { ep ->
                         val epNum = ep.episodeNumber ?: return@forEach
                         episodes.add(
-                            newEpisode(
-                                data = "id=$id&type=tv&season=$seasonNum&episode=$epNum"
-                            ) {
-                                this.name = ep.name
-                                this.season = seasonNum
-                                this.episode = epNum
-                            }
+                            Episode(
+                                data = "id=$id&type=tv&season=$seasonNum&episode=$epNum",
+                                name = ep.name,
+                                season = seasonNum,
+                                episode = epNum
+                            )
                         )
                     }
                 } catch (e: Exception) {
@@ -165,18 +157,13 @@ class RiveStreamProvider : MainAPI() {
                 name = detail.title ?: detail.name ?: "",
                 url = url,
                 type = TvType.TvSeries,
-                dataUrl = url
+                episodes = episodes
             ) {
                 this.posterUrl = detail.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
                 this.plot = detail.overview
                 this.year = detail.firstAirDate?.split("-")?.firstOrNull()?.toIntOrNull()
                 this.tags = detail.genres?.mapNotNull { it.name }
-                this.addEpisodes(TvType.TvSeries, episodes)
-
-                // ✅ FIX: Ganti properti rating usang dengan sistem Score dari 10
-                detail.voteAverage?.let {
-                    this.addScore(Score.from10(it.toFloat()))
-                }
+                this.rating = detail.voteAverage?.times(10)?.toInt()
             }
         }
     }
