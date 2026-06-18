@@ -92,11 +92,10 @@ class RiveStreamProvider : MainAPI() {
                 this.plot = overview
                 this.year = item.releaseDate?.substringBefore("-")?.toIntOrNull()
                 this.tags = genres
-                [span_2](start_span)item.voteAverage?.let { this.score = Score.from10(it) }[span_2](end_span)
+                item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            // Memperbarui list penampung ke utilitas standar atomicListOf yang thread-safe
-            [span_3](start_span)val episodes = Coroutines.atomicListOf<Episode>()[span_3](end_span)
+            val episodes = Coroutines.atomicListOf<Episode>()
             item.seasons?.amap { season ->
                 val seasonNum = season.seasonNumber ?: return@amap
                 if (seasonNum == 0) return@amap
@@ -106,8 +105,7 @@ class RiveStreamProvider : MainAPI() {
                     val seasonData = tryParseJson<TmdbSeasonResponse>(seasonResponse)
 
                     seasonData?.episodes?.forEach { ep ->
-                        // Mengirimkan modifikasi URL unik langsung ke parameter factory tanpa redundansi internal
-                        [span_4](start_span)episodes.add(newEpisode("$url?season=$seasonNum&episode=${ep.episodeNumber}") {[span_4](end_span)
+                        episodes.add(newEpisode("$url?season=$seasonNum&episode=${ep.episodeNumber}") {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
@@ -122,7 +120,7 @@ class RiveStreamProvider : MainAPI() {
                 this.plot = overview
                 this.year = item.firstAirDate?.substringBefore("-")?.toIntOrNull()
                 this.tags = genres
-                [span_5](start_span)item.voteAverage?.let { this.score = Score.from10(it) }[span_5](end_span)
+                item.voteAverage?.let { this.score = Score.from10(it) }
             }
         }
     }
@@ -147,7 +145,7 @@ class RiveStreamProvider : MainAPI() {
     data class TmdbResultsResponse(@JsonProperty("results") val results: List<TmdbItem>?)
     data class TmdbItem(
         @JsonProperty("id") val id: Int,
-        @JsonProperty("title") val String?,
+        @JsonProperty("title") val title: String?,
         @JsonProperty("name") val name: String?,
         @JsonProperty("poster_path") val posterPath: String?,
         @JsonProperty("media_type") val mediaType: String?
