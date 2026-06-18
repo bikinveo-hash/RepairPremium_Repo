@@ -1,15 +1,10 @@
-package com.lagradost.cloudstream3
+package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.newSubtitleFile
-import com.lagradost.cloudstream3.utils.loadExtractor
 
 class PrimeSrcHelper {
 
@@ -146,7 +141,7 @@ class PrimeSrcHelper {
 
         var linksFound = 0
         try {
-            // 1. Ambal manifes daftar server kunci agregator
+            // 1. Ambil manifes daftar server kunci agregator
             val resS = app.get(urlS, headers = standardHeaders, timeout = 10).text
             val parsedS = tryParseJson<PrimeSrcServerResponse>(resS)
             
