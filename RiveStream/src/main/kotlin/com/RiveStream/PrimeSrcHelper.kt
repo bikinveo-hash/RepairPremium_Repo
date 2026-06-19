@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import java.io.IOException
 
 class PrimeSrcHelper {
 
@@ -115,7 +116,7 @@ class PrimeSrcHelper {
     }
 
     /**
-     * IMPLEMENTASI EMBED MODE AGREGATOR DENGAN DUKUNGAN UPGRADE TURNSTILE & STREAMTAPE
+     * IMPLEMENTASI EMBED MODE DENGAN KOREKSI TOTAL TYPE INFERENCE & PERBAIKAN IMPOR
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -144,7 +145,6 @@ class PrimeSrcHelper {
 
         var linksFound = 0
         try {
-            // 1. Ambil manifes daftar server kunci agregator
             val resS = app.get(urlS, headers = standardHeaders, timeout = 10).text
             val parsedS = tryParseJson<PrimeSrcServerResponse>(resS)
             
@@ -153,25 +153,20 @@ class PrimeSrcHelper {
                 val urlL = "https://primesrc.me/api/v1/l?key=$key"
                 
                 try {
-                    // 2. Jabat Tangan Kriptografi Preemptive untuk /api/v1/l
                     var resL = ""
                     try {
                         val response = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10)
-                        
-                        // Proteksi Deteksi Darurat Interseptor
                         if (response.code == 403 || response.text.contains("window._cf_chl_opt") || response.text.contains("Just a moment...")) {
-                            throw IOException("Cloudflare Turnstile Active")
+                            throw IOException("Cloudflare Challenge Detected")
                         }
                         resL = response.text
                     } catch (challengeException: Exception) {
-                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memulai Rejuvenation Sesi via WebViewResolver...")
+                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
                         
-                        // Gunakan WebViewResolver Terbaru dengan Aturan Mengunci useOkhttp = false
                         val mainEmbedUrl = "https://primesrc.me/embed/movie?tmdb=$cleanId&type=$type"
                         val resolver = WebViewResolver(interceptUrl = Regex(".*api/v1/l.*"), useOkhttp = false)
                         resolver.resolveUsingWebView(mainEmbedUrl, headers = standardHeaders)
                         
-                        // Panen Cookie Paspor dari Sesi WebView Engine
                         val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
                         resL = app.get(
                             urlL, 
@@ -186,32 +181,25 @@ class PrimeSrcHelper {
                     val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
                     val rawLink = parsedL?.link ?: return@forEach
                     
-                    // INTERSEPSI ENGINE ROUTER KHUSUS STREAMTAPE (HILIR EXTRACTION)
                     if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
-                        android.util.Log.d("RiveStream", "[AMANGOKIL] Mengeksekusi Jalur Distribusi Hilir Streamtape: $rawLink")
+                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memproses Rute Hilir Streamtape...")
                         
-                        // A. Ambil halaman HTML embed untuk memicu Set-Cookie: _b=...
                         val embedHtml = app.get(rawLink, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")).text
                         
-                        // B. Pemecahan Obfuskasi Substring DOM via Regex Parser
                         val botlinkRegex = """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
                         val matchResult = botlinkRegex.find(embedHtml)
                         
                         val cleanLink = if (matchResult != null) {
                             val rawString = matchResult.groupValues[1]
                             val index = matchResult.groupValues[2].toInt()
-                            
-                            // Simulasi pemotongan string substring(n) dan injeksi parameter stream
                             "https://streamta" + rawString.substring(index) + "&stream=1"
                         } else {
                             null
                         }
 
                         if (cleanLink != null) {
-                            android.util.Log.d("RiveStream", "[AMANGOKIL] Sukses De-obfuskasi URL /get_video: $cleanLink")
-                            
-                            // C. Intersepsi Lapangan Pengalihan HTTP 302 Found menuju CDN Storage Mentah
-                            val clientWithoutRedirects = app.okhttpClient.newBuilder()
+                            // bypass okhttp automatic redirects secara aman pake klien terisolasi
+                            val clientWithoutRedirects = app.okhttp.newBuilder()
                                 .followRedirects(false)
                                 .followSslRedirects(false)
                                 .build()
@@ -223,12 +211,13 @@ class PrimeSrcHelper {
                                 .build()
                                 
                             withContext(Dispatchers.IO) {
-                                clientWithoutRedirects.newCall(req).execute().use { response ->
+                                try {
+                                    // Pengecekan Eksplisit Tipe Data Biar Lolos dari Masalah Inferensi di GitHub Actions
+                                    val response: okhttp3.Response = clientWithoutRedirects.newCall(req).execute()
                                     val realVideoUrl = response.header("Location")
+                                    response.close() // Tutup koneksi soket manual
+                                    
                                     if (!realVideoUrl.isNullOrEmpty()) {
-                                        android.util.Log.d("RiveStream", "[AMANGOKIL] Sukses Mencegat 302! CDN Terowong: $realVideoUrl")
-                                        
-                                        // Ditiupkan secara Asynchronous Callback Streaming (Aturan Versi Terbaru)
                                         callback(newExtractorLink(
                                             source = "Streamtape",
                                             name   = "Streamtape High Quality",
@@ -239,14 +228,13 @@ class PrimeSrcHelper {
                                         })
                                         linksFound++
                                     }
+                                } catch (err: Exception) {
+                                    logError(err)
                                 }
                             }
                         }
                     } else {
-                        // 3. REWRITE HOST UTK PROVIDER NON-STREAMTAPE ASLI
                         val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
-                        
-                        // 4. DELEGASI CORE EXTRACTOR ASLI
                         val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
                         if (extLoaded) linksFound++
                     }
@@ -264,7 +252,7 @@ class PrimeSrcHelper {
     }
 }
 
-// ─── DATA CLASSES RESPONS BACKEND RIVESTREAM ─────────────────────────────────
+// ─── DATA CLASSES RESPONS BACKEND RIVESTREAM (DIKEMBALIKAN KE SEMULA) ─────────
 
 data class BackendFetchResponse(
     @JsonProperty("data") val data: BackendData?
@@ -275,7 +263,7 @@ data class BackendData(
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 
-data class BackendDataclassSource(
+data class BackendSource(
     @JsonProperty("quality") val quality: Any?,
     @JsonProperty("url")     val url:     String?,
     @JsonProperty("source")  val source:  String?,
