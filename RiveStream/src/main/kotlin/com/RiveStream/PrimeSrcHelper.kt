@@ -231,16 +231,25 @@ class PrimeSrcHelper {
                                 headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")
                             ).text
 
-                            val botlinkRegex =
-                                """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
-                            val matchResult = botlinkRegex.find(embedHtml)
+                            // FIX: gak lagi simulasi chained .substring() yang rapuh dan gampang
+                            // basi tiap kali situs ganti pola obfuskasi (id elemen, jumlah
+                            // .substring(), prefix literal — semua udah kebukti berubah-ubah).
+                            // Parameter id/expires/ip/token TERBUKTI selalu utuh apa adanya di
+                            // dalam string cipher, yang diacak cuma domain/path depannya doang.
+                            // Jadi langsung tarik parameternya, endpoint tujuan tetap konstan.
 
-                            val cleanLink = if (matchResult != null) {
-                                val rawString = matchResult.groupValues[1]
-                                val index = matchResult.groupValues[2].toInt()
-                                "https://streamta" + rawString.substring(index) + "&stream=1"
-                            } else {
-                                null
+                            // Cari baris script yang BENERAN logic deobfuskasi (ada innerHTML +
+                            // substring), biar gak ketuker sama div honeypot statis #ideoolink
+                            // yang isinya cuma teks umpan tanpa pemanggilan substring().
+                            val scriptLineRegex = """innerHTML\s*=.*substring\([^)]*\).*?;""".toRegex()
+                            val scriptLine = scriptLineRegex.find(embedHtml)?.value
+
+                            val paramsRegex =
+                                """id=[^&]+&expires=[^&]+&ip=[^&]+&token=[^'"\s)]+""".toRegex()
+                            val extractedParams = scriptLine?.let { paramsRegex.find(it)?.value }
+
+                            val cleanLink = extractedParams?.let {
+                                "https://streamta.site/get_video?$it&stream=1"
                             }
 
                             if (cleanLink != null) {
