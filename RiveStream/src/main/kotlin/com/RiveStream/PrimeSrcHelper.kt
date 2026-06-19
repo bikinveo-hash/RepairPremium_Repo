@@ -55,9 +55,9 @@ class PrimeSrcHelper {
             android.util.Log.d("RiveStream", "PROVIDER: ${service.uppercase()} | URL: $finalApiUrl")
 
             try {
-                val response     = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
-                val httpStatus   = response.code
-                val rawBody      = response.text
+                val response   = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
+                val httpStatus = response.code
+                val rawBody    = response.text
 
                 android.util.Log.d("RiveStream", "HTTP $httpStatus | BODY: $rawBody")
 
@@ -116,7 +116,11 @@ class PrimeSrcHelper {
     }
 
     /**
-     * IMPLEMENTASI EMBED MODE DENGAN KOREKSI TOTAL ACUAN INTERNAL CLIENT NICEHTTP
+     * Embed-mode fallback lewat primesrc.me.
+     * Kalau endpoint link kena Cloudflare/Turnstile, bypass pakai WebViewResolver
+     * (useOkhttp = false wajib, biar JS challenge-nya jalan murni di WebView engine,
+     * gak ke-split ke OkHttp client), lalu cookie hasil clearance dipakai ulang
+     * buat request manual ke endpoint yang sama.
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -127,9 +131,9 @@ class PrimeSrcHelper {
         val cleanData = data.replace("$mainUrl/", "")
         val isMovie = !cleanData.contains("?season=")
         val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
-        
+
         val type = if (isMovie) "movie" else "tv"
-        
+
         val urlS = if (isMovie) {
             "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$type"
         } else {
@@ -147,50 +151,83 @@ class PrimeSrcHelper {
         try {
             val resS = app.get(urlS, headers = standardHeaders, timeout = 10).text
             val parsedS = tryParseJson<PrimeSrcServerResponse>(resS)
-            
+
             val serversList = parsedS?.servers
             if (serversList != null) {
                 for (server in serversList) {
                     val key = server.key ?: continue
                     val urlL = "https://primesrc.me/api/v1/l?key=$key"
-                    
+
                     try {
                         var resL = ""
                         try {
-                            val response = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10)
-                            if (response.code == 403 || response.text.contains("window._cf_chl_opt") || response.text.contains("Just a moment...")) {
+                            val response = app.get(
+                                urlL,
+                                headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"),
+                                timeout = 10
+                            )
+                            if (response.code == 403 ||
+                                response.text.contains("window._cf_chl_opt") ||
+                                response.text.contains("Just a moment...")
+                            ) {
                                 throw IOException("Cloudflare Challenge Detected")
                             }
                             resL = response.text
                         } catch (challengeException: Exception) {
                             android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
-                            
-                            val mainEmbedUrl = "https://primesrc.me/embed/movie?tmdb=$cleanId&type=$type"
-                            val resolver = WebViewResolver(interceptUrl = Regex(".*api/v1/l.*"), useOkhttp = false)
-                            resolver.resolveUsingWebView(mainEmbedUrl, headers = standardHeaders)
-                            
-                            val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
+
+                            // FIX: path embed harus ikut tipe konten (movie/tv), sebelumnya hardcode "movie"
+                            // sehingga untuk konten TV bakal nge-load embed page yang salah dan WebViewResolver
+                            // kemungkinan besar timeout karena gak ada request ke api/v1/l yang ke-trigger.
+                            val mainEmbedUrl = "https://primesrc.me/embed/$type?tmdb=$cleanId&type=$type"
+                            val resolver = WebViewResolver(
+                                interceptUrl = Regex(".*api/v1/l.*"),
+                                useOkhttp = false
+                            )
+                            val (interceptedRequest, _) = resolver.resolveUsingWebView(
+                                mainEmbedUrl,
+                                headers = standardHeaders
+                            )
+
+                            // FIX: return value resolveUsingWebView() sekarang dicek dulu.
+                            // Sebelumnya dibuang gitu aja, jadi kalau WebView timeout/gagal intercept,
+                            // kode tetap lanjut baca CookieManager (yang bisa aja masih kosong/lama)
+                            // dan request berikutnya gagal tanpa diagnosis yang jelas.
+                            if (interceptedRequest == null) {
+                                android.util.Log.w(
+                                    "RiveStream",
+                                    "[AMANGOKIL] WebViewResolver timeout/gagal intercept untuk key=$key, skip"
+                                )
+                                continue
+                            }
+
+                            val systemCookie = android.webkit.CookieManager.getInstance()
+                                .getCookie("https://primesrc.me")
                             resL = app.get(
-                                urlL, 
+                                urlL,
                                 headers = standardHeaders + mapOf(
                                     "Origin" to "https://primesrc.me",
                                     "Cookie" to (systemCookie ?: "")
-                                ), 
+                                ),
                                 timeout = 10
                             ).text
                         }
 
                         val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
                         val rawLink = parsedL?.link ?: continue
-                        
+
                         if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
                             android.util.Log.d("RiveStream", "[AMANGOKIL] Memproses Rute Hilir Streamtape...")
-                            
-                            val embedHtml = app.get(rawLink, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")).text
-                            
-                            val botlinkRegex = """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
+
+                            val embedHtml = app.get(
+                                rawLink,
+                                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")
+                            ).text
+
+                            val botlinkRegex =
+                                """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
                             val matchResult = botlinkRegex.find(embedHtml)
-                            
+
                             val cleanLink = if (matchResult != null) {
                                 val rawString = matchResult.groupValues[1]
                                 val index = matchResult.groupValues[2].toInt()
@@ -200,24 +237,27 @@ class PrimeSrcHelper {
                             }
 
                             if (cleanLink != null) {
-                                // MENGGUNAKAN app.client (ACUAN VALID NICEHTTP CLOUDSTREAM CORE)
-                                val clientWithoutRedirects = app.client.newBuilder()
+                                // FIX: app.client -> app.baseClient
+                                // NiceHttp's Requests class (yaitu object `app`) expose property
+                                // `baseClient`, bukan `client` — itu sebabnya build gagal dengan
+                                // "Unresolved reference 'client'".
+                                val clientWithoutRedirects = app.baseClient.newBuilder()
                                     .followRedirects(false)
                                     .followSslRedirects(false)
                                     .build()
-                                    
+
                                 val req = Request.Builder()
                                     .url(cleanLink)
                                     .header("User-Agent", USER_AGENT)
                                     .header("Referer", rawLink)
                                     .build()
-                                    
+
                                 withContext(Dispatchers.IO) {
                                     try {
                                         val response: okhttp3.Response = clientWithoutRedirects.newCall(req).execute()
                                         val realVideoUrl = response.header("Location")
                                         response.close()
-                                        
+
                                         if (!realVideoUrl.isNullOrEmpty()) {
                                             callback(newExtractorLink(
                                                 source = "Streamtape",
@@ -239,7 +279,7 @@ class PrimeSrcHelper {
                             val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
                             if (extLoaded) linksFound++
                         }
-                        
+
                     } catch (e: Exception) {
                         logError(e)
                     }
@@ -248,7 +288,7 @@ class PrimeSrcHelper {
         } catch (e: Exception) {
             logError(e)
         }
-        
+
         android.util.Log.d("RiveStream", "=== EMBED PIPELINE SELESAI | LINKS BERHASIL DIDUKUNG: $linksFound ===")
         return linksFound > 0
     }
