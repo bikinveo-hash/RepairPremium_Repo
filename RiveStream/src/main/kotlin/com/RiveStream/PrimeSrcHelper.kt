@@ -5,6 +5,10 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.network.WebViewResolver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 
 class PrimeSrcHelper {
 
@@ -111,8 +115,7 @@ class PrimeSrcHelper {
     }
 
     /**
-     * IMPLEMENTASI EMBED MODE AGREGATOR (PILIHAN A)
-     * Mengambil manifestasi primesrc.me dan melakukan pengalihan langsung ke Core Extractor
+     * IMPLEMENTASI EMBED MODE AGREGATOR DENGAN DUKUNGAN UPGRADE TURNSTILE & STREAMTAPE
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -150,17 +153,103 @@ class PrimeSrcHelper {
                 val urlL = "https://primesrc.me/api/v1/l?key=$key"
                 
                 try {
-                    // 2. Kirim permintaan resolusi tautan pemutar cermin
-                    val resL = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10).text
+                    // 2. Jabat Tangan Kriptografi Preemptive untuk /api/v1/l
+                    var resL = ""
+                    try {
+                        val response = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10)
+                        
+                        // Proteksi Deteksi Darurat Interseptor
+                        if (response.code == 403 || response.text.contains("window._cf_chl_opt") || response.text.contains("Just a moment...")) {
+                            throw IOException("Cloudflare Turnstile Active")
+                        }
+                        resL = response.text
+                    } catch (challengeException: Exception) {
+                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memulai Rejuvenation Sesi via WebViewResolver...")
+                        
+                        // Gunakan WebViewResolver Terbaru dengan Aturan Mengunci useOkhttp = false
+                        val mainEmbedUrl = "https://primesrc.me/embed/movie?tmdb=$cleanId&type=$type"
+                        val resolver = WebViewResolver(interceptUrl = Regex(".*api/v1/l.*"), useOkhttp = false)
+                        resolver.resolveUsingWebView(mainEmbedUrl, headers = standardHeaders)
+                        
+                        // Panen Cookie Paspor dari Sesi WebView Engine
+                        val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
+                        resL = app.get(
+                            urlL, 
+                            headers = standardHeaders + mapOf(
+                                "Origin" to "https://primesrc.me",
+                                "Cookie" to (systemCookie ?: "")
+                            ), 
+                            timeout = 10
+                        ).text
+                    }
+
                     val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
                     val rawLink = parsedL?.link ?: return@forEach
                     
-                    // 3. REWRITE HOST: Alihkan dari domain mirror ke pelayan utama Streamtape
-                    val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
-                    
-                    // 4. DELEGASI CORE EXTRACTOR: Serahkan sisa de-obfuscation halaman ke pustaka inti aplikasi
-                    val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
-                    if (extLoaded) linksFound++
+                    // INTERSEPSI ENGINE ROUTER KHUSUS STREAMTAPE (HILIR EXTRACTION)
+                    if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
+                        android.util.Log.d("RiveStream", "[AMANGOKIL] Mengeksekusi Jalur Distribusi Hilir Streamtape: $rawLink")
+                        
+                        // A. Ambil halaman HTML embed untuk memicu Set-Cookie: _b=...
+                        val embedHtml = app.get(rawLink, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")).text
+                        
+                        // B. Pemecahan Obfuskasi Substring DOM via Regex Parser
+                        val botlinkRegex = """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
+                        val matchResult = botlinkRegex.find(embedHtml)
+                        
+                        val cleanLink = if (matchResult != null) {
+                            val rawString = matchResult.groupValues[1]
+                            val index = matchResult.groupValues[2].toInt()
+                            
+                            // Simulasi pemotongan string substring(n) dan injeksi parameter stream
+                            "https://streamta" + rawString.substring(index) + "&stream=1"
+                        } else {
+                            null
+                        }
+
+                        if (cleanLink != null) {
+                            android.util.Log.d("RiveStream", "[AMANGOKIL] Sukses De-obfuskasi URL /get_video: $cleanLink")
+                            
+                            // C. Intersepsi Lapangan Pengalihan HTTP 302 Found menuju CDN Storage Mentah
+                            val clientWithoutRedirects = app.okhttpClient.newBuilder()
+                                .followRedirects(false)
+                                .followSslRedirects(false)
+                                .build()
+                                
+                            val req = Request.Builder()
+                                .url(cleanLink)
+                                .header("User-Agent", USER_AGENT)
+                                .header("Referer", rawLink)
+                                .build()
+                                
+                            withContext(Dispatchers.IO) {
+                                clientWithoutRedirects.newCall(req).execute().use { response ->
+                                    val realVideoUrl = response.header("Location")
+                                    if (!realVideoUrl.isNullOrEmpty()) {
+                                        android.util.Log.d("RiveStream", "[AMANGOKIL] Sukses Mencegat 302! CDN Terowong: $realVideoUrl")
+                                        
+                                        // Ditiupkan secara Asynchronous Callback Streaming (Aturan Versi Terbaru)
+                                        callback(newExtractorLink(
+                                            source = "Streamtape",
+                                            name   = "Streamtape High Quality",
+                                            url    = realVideoUrl,
+                                            type   = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.referer = "https://streamtape.com/"
+                                        })
+                                        linksFound++
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // 3. REWRITE HOST UTK PROVIDER NON-STREAMTAPE ASLI
+                        val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
+                        
+                        // 4. DELEGASI CORE EXTRACTOR ASLI
+                        val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
+                        if (extLoaded) linksFound++
+                    }
                     
                 } catch (e: Exception) {
                     logError(e)
@@ -186,7 +275,7 @@ data class BackendData(
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 
-data class BackendSource(
+data class BackendDataclassSource(
     @JsonProperty("quality") val quality: Any?,
     @JsonProperty("url")     val url:     String?,
     @JsonProperty("source")  val source:  String?,
