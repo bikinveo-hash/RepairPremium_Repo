@@ -116,7 +116,7 @@ class PrimeSrcHelper {
     }
 
     /**
-     * IMPLEMENTASI EMBED MODE DENGAN PENANGANAN UTUH SINKRONISASI SUSPEND LOOP
+     * IMPLEMENTASI EMBED MODE DENGAN KOREKSI TOTAL ACUAN INTERNAL CLIENT NICEHTTP
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -150,7 +150,6 @@ class PrimeSrcHelper {
             
             val serversList = parsedS?.servers
             if (serversList != null) {
-                // Menggunakan for loop reguler untuk mengizinkan pemanggilan fungsi suspend di dalamnya
                 for (server in serversList) {
                     val key = server.key ?: continue
                     val urlL = "https://primesrc.me/api/v1/l?key=$key"
@@ -201,7 +200,8 @@ class PrimeSrcHelper {
                             }
 
                             if (cleanLink != null) {
-                                val clientWithoutRedirects = app.okhttp.newBuilder()
+                                // MENGGUNAKAN app.client (ACUAN VALID NICEHTTP CLOUDSTREAM CORE)
+                                val clientWithoutRedirects = app.client.newBuilder()
                                     .followRedirects(false)
                                     .followSslRedirects(false)
                                     .build()
