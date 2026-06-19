@@ -180,9 +180,16 @@ class PrimeSrcHelper {
                             // sehingga untuk konten TV bakal nge-load embed page yang salah dan WebViewResolver
                             // kemungkinan besar timeout karena gak ada request ke api/v1/l yang ke-trigger.
                             val mainEmbedUrl = "https://primesrc.me/embed/$type?tmdb=$cleanId&type=$type"
+                            // FIX: userAgent dipaksa null. Default constructor WebViewResolver
+                            // adalah userAgent = USER_AGENT (non-null), yang override
+                            // settings.userAgentString WebView native. Ini bikin navigator.userAgent
+                            // mismatch sama TLS/JS fingerprint asli WebView dan Cloudflare/Turnstile
+                            // jadi gagal/loop terus — sesuai komentar di source CloudStream sendiri:
+                            // "Don't set user agent, setting user agent will make cloudflare break."
                             val resolver = WebViewResolver(
                                 interceptUrl = Regex(".*api/v1/l.*"),
-                                useOkhttp = false
+                                useOkhttp = false,
+                                userAgent = null
                             )
                             val (interceptedRequest, _) = resolver.resolveUsingWebView(
                                 mainEmbedUrl,
