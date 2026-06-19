@@ -176,16 +176,7 @@ class PrimeSrcHelper {
                         } catch (challengeException: Exception) {
                             android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
 
-                            // FIX: path embed harus ikut tipe konten (movie/tv), sebelumnya hardcode "movie"
-                            // sehingga untuk konten TV bakal nge-load embed page yang salah dan WebViewResolver
-                            // kemungkinan besar timeout karena gak ada request ke api/v1/l yang ke-trigger.
                             val mainEmbedUrl = "https://primesrc.me/embed/$type?tmdb=$cleanId&type=$type"
-                            // FIX: userAgent dipaksa null. Default constructor WebViewResolver
-                            // adalah userAgent = USER_AGENT (non-null), yang override
-                            // settings.userAgentString WebView native. Ini bikin navigator.userAgent
-                            // mismatch sama TLS/JS fingerprint asli WebView dan Cloudflare/Turnstile
-                            // jadi gagal/loop terus — sesuai komentar di source CloudStream sendiri:
-                            // "Don't set user agent, setting user agent will make cloudflare break."
                             val resolver = WebViewResolver(
                                 interceptUrl = Regex(".*api/v1/l.*"),
                                 useOkhttp = false,
@@ -196,10 +187,6 @@ class PrimeSrcHelper {
                                 headers = standardHeaders
                             )
 
-                            // FIX: return value resolveUsingWebView() sekarang dicek dulu.
-                            // Sebelumnya dibuang gitu aja, jadi kalau WebView timeout/gagal intercept,
-                            // kode tetap lanjut baca CookieManager (yang bisa aja masih kosong/lama)
-                            // dan request berikutnya gagal tanpa diagnosis yang jelas.
                             if (interceptedRequest == null) {
                                 android.util.Log.w(
                                     "RiveStream",
@@ -231,32 +218,28 @@ class PrimeSrcHelper {
                                 headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")
                             ).text
 
-                            // FIX: gak lagi simulasi chained .substring() yang rapuh dan gampang
-                            // basi tiap kali situs ganti pola obfuskasi (id elemen, jumlah
-                            // .substring(), prefix literal — semua udah kebukti berubah-ubah).
-                            // Parameter id/expires/ip/token TERBUKTI selalu utuh apa adanya di
-                            // dalam string cipher, yang diacak cuma domain/path depannya doang.
-                            // Jadi langsung tarik parameternya, endpoint tujuan tetap konstan.
+                            // ─── REVISI AMANGOKIL PIPELINE ENGINE: ANTI HONGYPOT & ALFANUMERIK KETAT ───
+                            // Lapis 1: Isolasi string cipher mutlak hanya di dalam tanda petik tunggal yang memuat id=
+                            val anchorRegex = """'([^']*[\?&]id=[^']*)'""".toRegex()
+                            val anchorMatch = anchorRegex.find(embedHtml)?.groupValues?.get(1)
 
-                            // Cari baris script yang BENERAN logic deobfuskasi (ada innerHTML +
-                            // substring), biar gak ketuker sama div honeypot statis #ideoolink
-                            // yang isinya cuma teks umpan tanpa pemanggilan substring().
-                            val scriptLineRegex = """innerHTML\s*=.*substring\([^)]*\).*?;""".toRegex()
-                            val scriptLine = scriptLineRegex.find(embedHtml)?.value
+                            val cleanLink = if (anchorMatch != null) {
+                                // Lapis 2: Memanen parameter secara kaku bebas ampas tag HTML </div
+                                val id = """[\?&]id=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
+                                val expires = """[\?&]expires=([0-9]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
+                                val ip = """[\?&]ip=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
+                                val token = """[\?&]token=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
 
-                            val paramsRegex =
-                                """id=[^&]+&expires=[^&]+&ip=[^&]+&token=[^'"\s)]+""".toRegex()
-                            val extractedParams = scriptLine?.let { paramsRegex.find(it)?.value }
-
-                            val cleanLink = extractedParams?.let {
-                                "https://streamta.site/get_video?$it&stream=1"
+                                if (id != null && expires != null && ip != null && token != null) {
+                                    "https://streamta.site/get_video?id=$id&expires=$expires&ip=$ip&token=$token&stream=1"
+                                } else {
+                                    null
+                                }
+                            } else {
+                                null
                             }
 
                             if (cleanLink != null) {
-                                // FIX: app.client -> app.baseClient
-                                // NiceHttp's Requests class (yaitu object `app`) expose property
-                                // `baseClient`, bukan `client` — itu sebabnya build gagal dengan
-                                // "Unresolved reference 'client'".
                                 val clientWithoutRedirects = app.baseClient.newBuilder()
                                     .followRedirects(false)
                                     .followSslRedirects(false)
