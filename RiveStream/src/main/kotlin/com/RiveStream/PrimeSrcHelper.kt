@@ -116,7 +116,7 @@ class PrimeSrcHelper {
     }
 
     /**
-     * IMPLEMENTASI EMBED MODE DENGAN KOREKSI TOTAL TYPE INFERENCE & PERBAIKAN IMPOR
+     * IMPLEMENTASI EMBED MODE DENGAN PENANGANAN UTUH SINKRONISASI SUSPEND LOOP
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -148,99 +148,101 @@ class PrimeSrcHelper {
             val resS = app.get(urlS, headers = standardHeaders, timeout = 10).text
             val parsedS = tryParseJson<PrimeSrcServerResponse>(resS)
             
-            parsedS?.servers?.forEach { server ->
-                val key = server.key ?: return@forEach
-                val urlL = "https://primesrc.me/api/v1/l?key=$key"
-                
-                try {
-                    var resL = ""
-                    try {
-                        val response = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10)
-                        if (response.code == 403 || response.text.contains("window._cf_chl_opt") || response.text.contains("Just a moment...")) {
-                            throw IOException("Cloudflare Challenge Detected")
-                        }
-                        resL = response.text
-                    } catch (challengeException: Exception) {
-                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
-                        
-                        val mainEmbedUrl = "https://primesrc.me/embed/movie?tmdb=$cleanId&type=$type"
-                        val resolver = WebViewResolver(interceptUrl = Regex(".*api/v1/l.*"), useOkhttp = false)
-                        resolver.resolveUsingWebView(mainEmbedUrl, headers = standardHeaders)
-                        
-                        val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
-                        resL = app.get(
-                            urlL, 
-                            headers = standardHeaders + mapOf(
-                                "Origin" to "https://primesrc.me",
-                                "Cookie" to (systemCookie ?: "")
-                            ), 
-                            timeout = 10
-                        ).text
-                    }
-
-                    val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
-                    val rawLink = parsedL?.link ?: return@forEach
+            val serversList = parsedS?.servers
+            if (serversList != null) {
+                // Menggunakan for loop reguler untuk mengizinkan pemanggilan fungsi suspend di dalamnya
+                for (server in serversList) {
+                    val key = server.key ?: continue
+                    val urlL = "https://primesrc.me/api/v1/l?key=$key"
                     
-                    if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
-                        android.util.Log.d("RiveStream", "[AMANGOKIL] Memproses Rute Hilir Streamtape...")
-                        
-                        val embedHtml = app.get(rawLink, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")).text
-                        
-                        val botlinkRegex = """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
-                        val matchResult = botlinkRegex.find(embedHtml)
-                        
-                        val cleanLink = if (matchResult != null) {
-                            val rawString = matchResult.groupValues[1]
-                            val index = matchResult.groupValues[2].toInt()
-                            "https://streamta" + rawString.substring(index) + "&stream=1"
-                        } else {
-                            null
+                    try {
+                        var resL = ""
+                        try {
+                            val response = app.get(urlL, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 10)
+                            if (response.code == 403 || response.text.contains("window._cf_chl_opt") || response.text.contains("Just a moment...")) {
+                                throw IOException("Cloudflare Challenge Detected")
+                            }
+                            resL = response.text
+                        } catch (challengeException: Exception) {
+                            android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
+                            
+                            val mainEmbedUrl = "https://primesrc.me/embed/movie?tmdb=$cleanId&type=$type"
+                            val resolver = WebViewResolver(interceptUrl = Regex(".*api/v1/l.*"), useOkhttp = false)
+                            resolver.resolveUsingWebView(mainEmbedUrl, headers = standardHeaders)
+                            
+                            val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
+                            resL = app.get(
+                                urlL, 
+                                headers = standardHeaders + mapOf(
+                                    "Origin" to "https://primesrc.me",
+                                    "Cookie" to (systemCookie ?: "")
+                                ), 
+                                timeout = 10
+                            ).text
                         }
 
-                        if (cleanLink != null) {
-                            // bypass okhttp automatic redirects secara aman pake klien terisolasi
-                            val clientWithoutRedirects = app.okhttp.newBuilder()
-                                .followRedirects(false)
-                                .followSslRedirects(false)
-                                .build()
-                                
-                            val req = Request.Builder()
-                                .url(cleanLink)
-                                .header("User-Agent", USER_AGENT)
-                                .header("Referer", rawLink)
-                                .build()
-                                
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    // Pengecekan Eksplisit Tipe Data Biar Lolos dari Masalah Inferensi di GitHub Actions
-                                    val response: okhttp3.Response = clientWithoutRedirects.newCall(req).execute()
-                                    val realVideoUrl = response.header("Location")
-                                    response.close() // Tutup koneksi soket manual
+                        val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
+                        val rawLink = parsedL?.link ?: continue
+                        
+                        if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
+                            android.util.Log.d("RiveStream", "[AMANGOKIL] Memproses Rute Hilir Streamtape...")
+                            
+                            val embedHtml = app.get(rawLink, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")).text
+                            
+                            val botlinkRegex = """document\.getElementById\(['"]botlink['"]\)\.innerHTML\s*=\s*['"]//streamta['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)""".toRegex()
+                            val matchResult = botlinkRegex.find(embedHtml)
+                            
+                            val cleanLink = if (matchResult != null) {
+                                val rawString = matchResult.groupValues[1]
+                                val index = matchResult.groupValues[2].toInt()
+                                "https://streamta" + rawString.substring(index) + "&stream=1"
+                            } else {
+                                null
+                            }
+
+                            if (cleanLink != null) {
+                                val clientWithoutRedirects = app.okhttp.newBuilder()
+                                    .followRedirects(false)
+                                    .followSslRedirects(false)
+                                    .build()
                                     
-                                    if (!realVideoUrl.isNullOrEmpty()) {
-                                        callback(newExtractorLink(
-                                            source = "Streamtape",
-                                            name   = "Streamtape High Quality",
-                                            url    = realVideoUrl,
-                                            type   = ExtractorLinkType.VIDEO
-                                        ) {
-                                            this.referer = "https://streamtape.com/"
-                                        })
-                                        linksFound++
+                                val req = Request.Builder()
+                                    .url(cleanLink)
+                                    .header("User-Agent", USER_AGENT)
+                                    .header("Referer", rawLink)
+                                    .build()
+                                    
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val response: okhttp3.Response = clientWithoutRedirects.newCall(req).execute()
+                                        val realVideoUrl = response.header("Location")
+                                        response.close()
+                                        
+                                        if (!realVideoUrl.isNullOrEmpty()) {
+                                            callback(newExtractorLink(
+                                                source = "Streamtape",
+                                                name   = "Streamtape High Quality",
+                                                url    = realVideoUrl,
+                                                type   = ExtractorLinkType.VIDEO
+                                            ) {
+                                                this.referer = "https://streamtape.com/"
+                                            })
+                                            linksFound++
+                                        }
+                                    } catch (err: Exception) {
+                                        logError(err)
                                     }
-                                } catch (err: Exception) {
-                                    logError(err)
                                 }
                             }
+                        } else {
+                            val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
+                            val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
+                            if (extLoaded) linksFound++
                         }
-                    } else {
-                        val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
-                        val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
-                        if (extLoaded) linksFound++
+                        
+                    } catch (e: Exception) {
+                        logError(e)
                     }
-                    
-                } catch (e: Exception) {
-                    logError(e)
                 }
             }
         } catch (e: Exception) {
@@ -252,7 +254,7 @@ class PrimeSrcHelper {
     }
 }
 
-// ─── DATA CLASSES RESPONS BACKEND RIVESTREAM (DIKEMBALIKAN KE SEMULA) ─────────
+// ─── DATA CLASSES RESPONS BACKEND RIVESTREAM ─────────────────────────────────
 
 data class BackendFetchResponse(
     @JsonProperty("data") val data: BackendData?
