@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.SubtitleFile
 import kotlinx.coroutines.delay
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -16,14 +15,14 @@ import java.net.URLEncoder
  * PrimeSrc Helper - bridges RiveStream provider dengan PrimeSrc embed service
  *
  * Flow:
- *  1. /api/v1/s?tmdb=X&season=Y&episode=Z&type=tv  → server list (NO Turnstile)
- *  2. /api/v1/l?key=<key>&token=<turnstile>        → iframe URL (Turnstile-protected)
- *  3. iframe URL on streamcasthub.store            → real stream
+ * 1. /api/v1/s?tmdb=X&season=Y&episode=Z&type=tv  → server list (NO Turnstile)
+ * 2. /api/v1/l?key=<key>&token=<turnstile>        → iframe URL (Turnstile-protected)
+ * 3. iframe URL on streamcasthub.store            → real stream
  *
  * Server domains discovered (dari network capture):
- *  - voe.sx, filelions.to, streamtape.com, dood.li, luluvdoo.com
- *  - streamplay.to, vidnest.io, filemoon.io, streamwish.to
- *  - vidmoly.to, mixdrop.ag, upzur.com, savefiles.com
+ * - voe.sx, filelions.to, streamtape.com, dood.li, luluvdoo.com
+ * - streamplay.to, vidnest.io, filemoon.io, streamwish.to
+ * - vidmoly.to, mixdrop.ag, upzur.com, savefiles.com
  */
 class PrimeSrcHelper {
 
@@ -111,15 +110,15 @@ class PrimeSrcHelper {
     ): Boolean {
         return try {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
-            logError("[$providerName] Embed URL: $embedUrl")
+            logError(Throwable("[$providerName] Embed URL: $embedUrl"))
 
             // Parse embed URL untuk extract params
             val params = parseEmbedParams(embedUrl) ?: return false
-            logError("[$providerName] Parsed params: $params")
+            logError(Throwable("[$providerName] Parsed params: $params"))
 
             // Step 1: Get server list (no Turnstile needed)
             val servers = fetchServerList(params) ?: return false
-            logError("[$providerName] Got ${servers.size} servers from /api/v1/s")
+            logError(Throwable("[$providerName] Got ${servers.size} servers from /api/v1/s"))
 
             if (servers.isEmpty()) return false
 
@@ -135,13 +134,13 @@ class PrimeSrcHelper {
                 )
 
                 if (iframeUrl != null) {
-                    logError("[$providerName] Got iframe for ${server.name}: ${iframeUrl.take(80)}")
+                    logError(Throwable("[$providerName] Got iframe for ${server.name}: ${iframeUrl.take(80)}"))
                     iframeUrls += server.name to iframeUrl
                 }
             }
 
             if (iframeUrls.isEmpty()) {
-                logError("[$providerName] No iframe URLs resolved via API - will try embed mode")
+                logError(Throwable("[$providerName] No iframe URLs resolved via API - will try embed mode"))
                 return false
             }
 
@@ -180,9 +179,9 @@ class PrimeSrcHelper {
     ): Boolean {
         return try {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
-            logError("[PrimeSrc.Embed] Loading: $embedUrl")
+            logError(Throwable("[PrimeSrc.Embed] Loading: $embedUrl"))
 
-            logError("[PrimeSrc.Embed] WebView implementation TODO")
+            logError(Throwable("[PrimeSrc.Embed] WebView implementation TODO"))
             false
         } catch (e: Exception) {
             logError(e)
@@ -244,7 +243,6 @@ class PrimeSrcHelper {
     ) {
         val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return
 
-        // Menggunakan getExtractorApiFromName dan getSafeUrl untuk penanganan ekstraksi yang aman sesuai arsitektur baru
         try {
             getExtractorApiFromName(extractorKey).getSafeUrl(
                 url = iframeUrl,
