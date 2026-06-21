@@ -1,6 +1,7 @@
 package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
@@ -157,10 +158,16 @@ class PrimeSrcHelper {
                 for (server in serversList) {
                     val key = server.key ?: continue
                     val urlL = "https://primesrc.me/api/v1/l?key=$key"
+                    val urlPing = "https://primesrc.me/spiderman?l=$key" // Polymorphic Activation Gate Penjaga Sesi
 
                     try {
                         var resL = ""
                         try {
+                            // Eksekusi Ketukan Ping Latar Belakang Lapis Pertama untuk Aktivasi Token Sesi
+                            try { 
+                                app.get(urlPing, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 5) 
+                            } catch (_: Exception) {}
+
                             val response = app.get(
                                 urlL,
                                 headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"),
@@ -178,7 +185,8 @@ class PrimeSrcHelper {
 
                             val mainEmbedUrl = "https://primesrc.me/embed/$type?tmdb=$cleanId&type=$type"
                             val resolver = WebViewResolver(
-                                interceptUrl = Regex(".*api/v1/l.*"),
+                                // Mengadopsi Dynamic Token Sniffer Universal untuk menjaring mutasi parameter lintas rute
+                                interceptUrl = Regex(".*[a-zA-Z0-9_-]+\\?(key|l)=[a-zA-Z0-9]{5}.*"),
                                 useOkhttp = false,
                                 userAgent = null
                             )
@@ -195,8 +203,20 @@ class PrimeSrcHelper {
                                 continue
                             }
 
-                            val systemCookie = android.webkit.CookieManager.getInstance()
-                                .getCookie("https://primesrc.me")
+                            val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
+                            
+                            // Memicu Ulang Ping Aktivasi Memanfaatkan Kuki Hasil Jaringan WebView Engine
+                            try {
+                                app.get(
+                                    urlPing,
+                                    headers = standardHeaders + mapOf(
+                                        "Origin" to "https://primesrc.me",
+                                        "Cookie" to (systemCookie ?: "")
+                                    ),
+                                    timeout = 5
+                                )
+                            } catch (_: Exception) {}
+
                             resL = app.get(
                                 urlL,
                                 headers = standardHeaders + mapOf(
@@ -218,7 +238,7 @@ class PrimeSrcHelper {
                                 headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")
                             ).text
 
-                            // ─── REVISI AMANGOKIL PIPELINE ENGINE: ANTI HONGYPOT & ALFANUMERIK KETAT ───
+                            // ─── REVISI AMANGOKIL PIPELINE ENGINE: ANTI HONEYPOT & ALFANUMERIK KETAT ───
                             // Lapis 1: Isolasi string cipher mutlak hanya di dalam tanda petik tunggal yang memuat id=
                             val anchorRegex = """'([^']*[\?&]id=[^']*)'""".toRegex()
                             val anchorMatch = anchorRegex.find(embedHtml)?.groupValues?.get(1)
@@ -295,15 +315,18 @@ class PrimeSrcHelper {
 
 // ─── DATA CLASSES RESPONS BACKEND RIVESTREAM ─────────────────────────────────
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BackendFetchResponse(
     @JsonProperty("data") val data: BackendData?
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BackendData(
     @JsonProperty("sources")  val sources:  List<BackendSource>?,
     @JsonProperty("captions") val captions: List<BackendCaption>? = null
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BackendSource(
     @JsonProperty("quality") val quality: Any?,
     @JsonProperty("url")     val url:     String?,
@@ -311,6 +334,7 @@ data class BackendSource(
     @JsonProperty("format")  val format:  String?
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BackendCaption(
     @JsonProperty("label") val label: String?,
     @JsonProperty("file")  val file:  String?
@@ -318,15 +342,18 @@ data class BackendCaption(
 
 // ─── DATA CLASSES RESPONS EMBED AGREGATOR PRIMESRC ───────────────────────────
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class PrimeSrcServerResponse(
     @JsonProperty("servers") val servers: List<PrimeSrcServer>?
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class PrimeSrcServer(
     @JsonProperty("name") val name: String?,
     @JsonProperty("key")  val key:  String?
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class PrimeSrcLinkResponse(
     @JsonProperty("link") val link: String?,
     @JsonProperty("host") val host: String?
