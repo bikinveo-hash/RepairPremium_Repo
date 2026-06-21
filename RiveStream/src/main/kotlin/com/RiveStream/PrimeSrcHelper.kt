@@ -1,27 +1,106 @@
 package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.network.WebViewResolver
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.Request
-import java.io.IOException
+import com.lagradost.cloudstream3.utils.ExtractorApi
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.SubtitleFile
+import kotlinx.coroutines.delay
+import java.net.URLDecoder
+import java.net.URLEncoder
 
+/**
+ * PrimeSrc Helper - bridges RiveStream provider dengan PrimeSrc embed service
+ *
+ * Flow:
+ *  1. /api/v1/s?tmdb=X&season=Y&episode=Z&type=tv  → server list (NO Turnstile)
+ *  2. /api/v1/l?key=<key>&token=<turnstile>        → iframe URL (Turnstile-protected)
+ *  3. iframe URL on streamcasthub.store            → real stream
+ *
+ * Server domains discovered (dari network capture):
+ *  - voe.sx, filelions.to, streamtape.com, dood.li, luluvdoo.com
+ *  - streamplay.to, vidnest.io, filemoon.io, streamwish.to
+ *  - vidmoly.to, mixdrop.ag, upzur.com, savefiles.com
+ */
 class PrimeSrcHelper {
 
     companion object {
-        private const val SCRAPER_BASE = "https://scrapper.rivestream.app/api/provider"
+        private const val PRIMESRC_BASE = "https://primesrc.me"
 
-        private val TEST_PROVIDERS = listOf(
-            "primevids", "flowcast", "asiacloud", "guru", "ophim", "flow", "speed", "vidsrc"
+        // User-Agent yang dipakai untuk semua request PrimeSrc
+        private val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+
+        // Semua server name yang pernah muncul di response PrimeSrc
+        private val KNOWN_SERVERS = setOf(
+            "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
+            "Streamplay", "VidNest", "FileMoon", "Streamwish",
+            "Vidmoly", "Mixdrop", "UpZur", "SaveFiles"
         )
+
+        // Mapping PrimeSrc server name → CloudStream built-in extractor key
+        // CloudStream 3.x udah punya extractors built-in untuk ini
+        private val SERVER_EXTRACTOR_MAP = mapOf(
+            "Voe"       to "Voe",
+            "Filelions" to "Filelions",
+            "Streamtape" to "Streamtape",
+            "Dood"      to "Dood",
+            "Luluvdoo"  to "Luluvdoo",    // might not exist - fallback to WebView
+            "Streamplay" to "Streamplay", // might not exist - fallback to WebView
+            "VidNest"   to "Vidnest",
+            "FileMoon"  to "Filemoon",
+            "Streamwish" to "Streamwish",
+            "Vidmoly"   to "Vidmoly",
+            "Mixdrop"   to "Mixdrop",
+            "UpZur"     to "Upzur",       // might not exist
+            "SaveFiles" to "Savefiles"    // might not exist
+        )
+
+        // Header wajib untuk PrimeSrc API
+        private fun buildHeaders(referer: String = "$PRIMESRC_BASE/") = mapOf(
+            "User-Agent"      to USER_AGENT,
+            "Referer"         to referer,
+            "Accept"          to "*/*",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin"          to PRIMESRC_BASE
+        )
+
+        // Parse URL RiveStream format → PrimeSrc embed URL
+        // Input:  https://www.rivestream.app/tv/219971?season=1&episode=1
+        // Output: https://primesrc.me/embed/tv?tmdb=219971&season=1&episode=1
+        private fun buildEmbedUrl(mainUrl: String, data: String): String? {
+            val path = data.removePrefix("$mainUrl/").takeIf { it.isNotEmpty() } ?: return null
+            val type = path.substringBefore("/")   // "tv" or "movie"
+            val id   = path.substringAfter("/").substringBefore("?")  // tmdb id
+
+            val params = mutableListOf<String>()
+            if (type == "tv") {
+                val query = data.substringAfter("?", "")
+                val qp = query.split("&").associate {
+                    it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8")
+                }
+                qp["season"]?.let  { params += "season=$it" }
+                qp["episode"]?.let { params += "episode=$it" }
+            }
+
+            val qs = if (params.isNotEmpty()) "&" + params.joinToString("&") else ""
+            return "$PRIMESRC_BASE/embed/$type?tmdb=$id$qs"
+        }
     }
 
+    // ========================================================
+    // MAIN API: invokePrimeSrc
+    // ========================================================
+    /**
+     * Strategi 1: Direct API access
+     * - Hit /api/v1/s untuk server list (no Turnstile)
+     * - Untuk tiap server, coba /api/v1/l (akan kena Turnstile)
+     * - Fallback ke WebView extraction kalau /api/v1/l gagal
+     */
     suspend fun invokePrimeSrc(
         data: String,
         mainUrl: String,
@@ -30,98 +109,68 @@ class PrimeSrcHelper {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val cleanData = data.replace("$mainUrl/", "")
-        val isMovie = !cleanData.contains("?season=")
-        val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
-        var linksFound = 0
+        return try {
+            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
+            logError("[$providerName] Embed URL: $embedUrl")
 
-        val standardHeaders = mapOf(
-            "Accept"     to "application/json",
-            "User-Agent" to USER_AGENT,
-            "Origin"     to "https://rivestream.app",
-            "Referer"    to "https://rivestream.app/"
-        )
+            // Parse embed URL untuk extract params
+            val params = parseEmbedParams(embedUrl) ?: return false
+            logError("[$providerName] Parsed params: $params")
 
-        android.util.Log.d("RiveStream", "=== MEMULAI PIPELINE === ID=$cleanId | TIPE=${if (isMovie) "MOVIE" else "TV"}")
+            // Step 1: Get server list (no Turnstile needed)
+            val servers = fetchServerList(params) ?: return false
+            logError("[$providerName] Got ${servers.size} servers from /api/v1/s")
 
-        TEST_PROVIDERS.forEach { service ->
-            val finalApiUrl = if (isMovie) {
-                "$SCRAPER_BASE?provider=$service&id=$cleanId&api_key=$apiKey"
-            } else {
-                val season  = cleanData.substringAfter("?season=").substringBefore("&")
-                val episode = cleanData.substringAfter("&episode=")
-                "$SCRAPER_BASE?provider=$service&id=$cleanId&season=$season&episode=$episode&api_key=$apiKey"
+            if (servers.isEmpty()) return false
+
+            // Step 2: For each server, try to get iframe URL
+            val iframeUrls = mutableListOf<Pair<String, String>>()  // (server_name, iframe_url)
+
+            for (server in servers) {
+                if (server.name !in KNOWN_SERVERS) continue
+
+                val iframeUrl = fetchIframeUrl(
+                    serverKey = server.key,
+                    embedUrl = embedUrl
+                )
+
+                if (iframeUrl != null) {
+                    logError("[$providerName] Got iframe for ${server.name}: ${iframeUrl.take(80)}")
+                    iframeUrls += server.name to iframeUrl
+                }
             }
 
-            android.util.Log.d("RiveStream", "PROVIDER: ${service.uppercase()} | URL: $finalApiUrl")
-
-            try {
-                val response   = app.get(finalApiUrl, headers = standardHeaders, timeout = 10)
-                val httpStatus = response.code
-                val rawBody    = response.text
-
-                android.util.Log.d("RiveStream", "HTTP $httpStatus | BODY: $rawBody")
-
-                val parsedData = tryParseJson<BackendFetchResponse>(rawBody)
-                if (parsedData == null) {
-                    android.util.Log.w("RiveStream", "PARSE GAGAL untuk provider $service")
-                    return@forEach
-                }
-
-                val sources  = parsedData.data?.sources
-                val captions = parsedData.data?.captions
-
-                android.util.Log.d("RiveStream", "SOURCES: ${sources?.size ?: 0} | CAPTIONS: ${captions?.size ?: 0}")
-
-                captions?.forEach { caption ->
-                    val captionUrl   = caption.file  ?: return@forEach
-                    val captionLabel = caption.label ?: "Subtitle"
-                    subtitleCallback(newSubtitleFile(captionLabel, captionUrl))
-                }
-
-                sources?.forEach { source ->
-                    val streamUrl   = source.url     ?: return@forEach
-                    val qualityName = source.quality?.toString() ?: "AUTO"
-                    val sourceLabel = source.source  ?: "RiveStream"
-                    val displayName = "$sourceLabel - $qualityName"
-
-                    val linkType: ExtractorLinkType? = when {
-                        source.format?.contains("hls",  ignoreCase = true) == true -> ExtractorLinkType.M3U8
-                        source.format?.contains("dash", ignoreCase = true) == true -> ExtractorLinkType.DASH
-                        source.format?.contains("mp4",  ignoreCase = true) == true -> ExtractorLinkType.VIDEO
-                        streamUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
-                        streamUrl.contains(".mpd")  -> ExtractorLinkType.DASH
-                        else -> INFER_TYPE
-                    }
-
-                    callback(newExtractorLink(
-                        source = providerName,
-                        name   = displayName,
-                        url    = streamUrl,
-                        type   = linkType
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = getQualityFromName(qualityName)
-                        this.headers = mapOf("Origin" to mainUrl)
-                    })
-                    linksFound++
-                }
-
-            } catch (e: Exception) {
-                logError(e)
+            if (iframeUrls.isEmpty()) {
+                logError("[$providerName] No iframe URLs resolved via API - will try embed mode")
+                return false
             }
+
+            // Step 3: Pass iframe URLs to ExtractorApi
+            for ((serverName, iframeUrl) in iframeUrls) {
+                invokeExtractor(
+                    serverName = serverName,
+                    iframeUrl  = iframeUrl,
+                    subtitleCallback = subtitleCallback,
+                    callback   = callback
+                )
+            }
+
+            true
+        } catch (e: Exception) {
+            logError(e)
+            false
         }
-
-        android.util.Log.d("RiveStream", "=== PIPELINE SELESAI | TOTAL LINKS: $linksFound ===")
-        return linksFound > 0
     }
 
+    // ========================================================
+    // FALLBACK API: invokeEmbedMode
+    // ========================================================
     /**
-     * Embed-mode fallback lewat primesrc.me.
-     * Kalau endpoint link kena Cloudflare/Turnstile, bypass pakai WebViewResolver
-     * (useOkhttp = false wajib, biar JS challenge-nya jalan murni di WebView engine,
-     * gak ke-split ke OkHttp client), lalu cookie hasil clearance dipakai ulang
-     * buat request manual ke endpoint yang sama.
+     * Strategi 2: Embed Mode (WebView-based)
+     * - Load embed URL di WebView
+     * - Tunggu Turnstile auto-solve (CloudStream WebView handles this)
+     * - Extract iframe URL dari rendered DOM
+     * - Pass ke ExtractorApi
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -129,232 +178,166 @@ class PrimeSrcHelper {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val cleanData = data.replace("$mainUrl/", "")
-        val isMovie = !cleanData.contains("?season=")
-        val cleanId = cleanData.substringBefore("?").substringAfterLast("/")
+        return try {
+            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
+            logError("[PrimeSrc.Embed] Loading: $embedUrl")
 
-        val type = if (isMovie) "movie" else "tv"
+            logError("[PrimeSrc.Embed] WebView implementation TODO")
+            false
+        } catch (e: Exception) {
+            logError(e)
+            false
+        }
+    }
 
-        val urlS = if (isMovie) {
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$type"
-        } else {
-            val season  = cleanData.substringAfter("?season=").substringBefore("&")
-            val episode = cleanData.substringAfter("&episode=")
-            "https://primesrc.me/api/v1/s?tmdb=$cleanId&type=$type&season=$season&episode=$episode"
+    // ========================================================
+    // Helper: Hit /api/v1/s (server list)
+    // ========================================================
+    private suspend fun fetchServerList(params: EmbedParams): List<PrimeSrcServer>? {
+        val url = buildString {
+            append("$PRIMESRC_BASE/api/v1/s?")
+            append("tmdb=${params.tmdb}")
+            append("&type=${params.type}")
+            if (params.season != null)  append("&season=${params.season}")
+            if (params.episode != null) append("&episode=${params.episode}")
         }
 
-        val standardHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer"    to "https://www.rivestream.app/"
-        )
+        val referer = buildEmbedUrlFromParams(params)
+        val response = app.get(url, headers = buildHeaders(referer)).text
+        val parsed = tryParseJson<ServerListResponse>(response) ?: return null
 
-        var linksFound = 0
+        return parsed.servers
+    }
+
+    // ========================================================
+    // Helper: Hit /api/v1/l (iframe URL - Turnstile protected)
+    // ========================================================
+    private suspend fun fetchIframeUrl(
+        serverKey: String,
+        embedUrl: String
+    ): String? {
+        return try {
+            val url = "$PRIMESRC_BASE/api/v1/l?key=$serverKey"
+            val response = app.get(
+                url,
+                headers = buildHeaders(embedUrl) + mapOf(
+                    "X-Requested-With" to "XMLHttpRequest"
+                )
+            ).text
+
+            val parsed = tryParseJson<LinkResponse>(response)
+            parsed?.link
+        } catch (e: Exception) {
+            logError(e)
+            null
+        }
+    }
+
+    // ========================================================
+    // Helper: Pass iframe URL ke CloudStream extractor
+    // ========================================================
+    private suspend fun invokeExtractor(
+        serverName: String,
+        iframeUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return
+
+        // Menggunakan getExtractorApiFromName dan getSafeUrl untuk penanganan ekstraksi yang aman sesuai arsitektur baru
         try {
-            val resS = app.get(urlS, headers = standardHeaders, timeout = 10).text
-            val parsedS = tryParseJson<PrimeSrcServerResponse>(resS)
-
-            val serversList = parsedS?.servers
-            if (serversList != null) {
-                for (server in serversList) {
-                    val key = server.key ?: continue
-                    val urlL = "https://primesrc.me/api/v1/l?key=$key"
-                    val urlPing = "https://primesrc.me/spiderman?l=$key" // Polymorphic Activation Gate Penjaga Sesi
-
-                    try {
-                        var resL = ""
-                        try {
-                            // Eksekusi Ketukan Ping Latar Belakang Lapis Pertama untuk Aktivasi Token Sesi
-                            try { 
-                                app.get(urlPing, headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"), timeout = 5) 
-                            } catch (_: Exception) {}
-
-                            val response = app.get(
-                                urlL,
-                                headers = standardHeaders + mapOf("Origin" to "https://primesrc.me"),
-                                timeout = 10
-                            )
-                            if (response.code == 403 ||
-                                response.text.contains("window._cf_chl_opt") ||
-                                response.text.contains("Just a moment...")
-                            ) {
-                                throw IOException("Cloudflare Challenge Detected")
-                            }
-                            resL = response.text
-                        } catch (challengeException: Exception) {
-                            android.util.Log.d("RiveStream", "[AMANGOKIL] Memicu Bypasser Turnstile via WebViewResolver...")
-
-                            val mainEmbedUrl = "https://primesrc.me/embed/$type?tmdb=$cleanId&type=$type"
-                            val resolver = WebViewResolver(
-                                // Mengadopsi Dynamic Token Sniffer Universal untuk menjaring mutasi parameter lintas rute
-                                interceptUrl = Regex(".*[a-zA-Z0-9_-]+\\?(key|l)=[a-zA-Z0-9]{5}.*"),
-                                useOkhttp = false,
-                                userAgent = null
-                            )
-                            val (interceptedRequest, _) = resolver.resolveUsingWebView(
-                                mainEmbedUrl,
-                                headers = standardHeaders
-                            )
-
-                            if (interceptedRequest == null) {
-                                android.util.Log.w(
-                                    "RiveStream",
-                                    "[AMANGOKIL] WebViewResolver timeout/gagal intercept untuk key=$key, skip"
-                                )
-                                continue
-                            }
-
-                            val systemCookie = android.webkit.CookieManager.getInstance().getCookie("https://primesrc.me")
-                            
-                            // Memicu Ulang Ping Aktivasi Memanfaatkan Kuki Hasil Jaringan WebView Engine
-                            try {
-                                app.get(
-                                    urlPing,
-                                    headers = standardHeaders + mapOf(
-                                        "Origin" to "https://primesrc.me",
-                                        "Cookie" to (systemCookie ?: "")
-                                    ),
-                                    timeout = 5
-                                )
-                            } catch (_: Exception) {}
-
-                            resL = app.get(
-                                urlL,
-                                headers = standardHeaders + mapOf(
-                                    "Origin" to "https://primesrc.me",
-                                    "Cookie" to (systemCookie ?: "")
-                                ),
-                                timeout = 10
-                            ).text
-                        }
-
-                        val parsedL = tryParseJson<PrimeSrcLinkResponse>(resL)
-                        val rawLink = parsedL?.link ?: continue
-
-                        if (rawLink.contains("streamta.site") || rawLink.contains("streamtape.com")) {
-                            android.util.Log.d("RiveStream", "[AMANGOKIL] Memproses Rute Hilir Streamtape...")
-
-                            val embedHtml = app.get(
-                                rawLink,
-                                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://primesrc.me/")
-                            ).text
-
-                            // ─── REVISI AMANGOKIL PIPELINE ENGINE: ANTI HONEYPOT & ALFANUMERIK KETAT ───
-                            // Lapis 1: Isolasi string cipher mutlak hanya di dalam tanda petik tunggal yang memuat id=
-                            val anchorRegex = """'([^']*[\?&]id=[^']*)'""".toRegex()
-                            val anchorMatch = anchorRegex.find(embedHtml)?.groupValues?.get(1)
-
-                            val cleanLink = if (anchorMatch != null) {
-                                // Lapis 2: Memanen parameter secara kaku bebas ampas tag HTML </div
-                                val id = """[\?&]id=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
-                                val expires = """[\?&]expires=([0-9]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
-                                val ip = """[\?&]ip=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
-                                val token = """[\?&]token=([a-zA-Z0-9_-]+)""".toRegex().find(anchorMatch)?.groupValues?.get(1)
-
-                                if (id != null && expires != null && ip != null && token != null) {
-                                    "https://streamta.site/get_video?id=$id&expires=$expires&ip=$ip&token=$token&stream=1"
-                                } else {
-                                    null
-                                }
-                            } else {
-                                null
-                            }
-
-                            if (cleanLink != null) {
-                                val clientWithoutRedirects = app.baseClient.newBuilder()
-                                    .followRedirects(false)
-                                    .followSslRedirects(false)
-                                    .build()
-
-                                val req = Request.Builder()
-                                    .url(cleanLink)
-                                    .header("User-Agent", USER_AGENT)
-                                    .header("Referer", rawLink)
-                                    .build()
-
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        val response: okhttp3.Response = clientWithoutRedirects.newCall(req).execute()
-                                        val realVideoUrl = response.header("Location")
-                                        response.close()
-
-                                        if (!realVideoUrl.isNullOrEmpty()) {
-                                            callback(newExtractorLink(
-                                                source = "Streamtape",
-                                                name   = "Streamtape High Quality",
-                                                url    = realVideoUrl,
-                                                type   = ExtractorLinkType.VIDEO
-                                            ) {
-                                                this.referer = "https://streamtape.com/"
-                                            })
-                                            linksFound++
-                                        }
-                                    } catch (err: Exception) {
-                                        logError(err)
-                                    }
-                                }
-                            }
-                        } else {
-                            val rewrittenUrl = rawLink.replace("streamta.site", "streamtape.com")
-                            val extLoaded = loadExtractor(rewrittenUrl, subtitleCallback, callback)
-                            if (extLoaded) linksFound++
-                        }
-
-                    } catch (e: Exception) {
-                        logError(e)
-                    }
-                }
-            }
+            getExtractorApiFromName(extractorKey).getSafeUrl(
+                url = iframeUrl,
+                referer = null,
+                subtitleCallback = subtitleCallback,
+                callback = callback
+            )
         } catch (e: Exception) {
             logError(e)
         }
-
-        android.util.Log.d("RiveStream", "=== EMBED PIPELINE SELESAI | LINKS BERHASIL DIDUKUNG: $linksFound ===")
-        return linksFound > 0
     }
+
+    // ========================================================
+    // Utility: Parse embed URL parameters
+    // ========================================================
+    private data class EmbedParams(
+        val type: String,        // "tv" or "movie"
+        val tmdb: Int,
+        val season: Int? = null,
+        val episode: Int? = null
+    )
+
+    private fun parseEmbedParams(embedUrl: String): EmbedParams? {
+        val typePart = embedUrl.substringAfter("/embed/").substringBefore("?")
+        val query = embedUrl.substringAfter("?", "")
+
+        val qp = query.split("&").associate {
+            val key = it.substringBefore("=")
+            val value = it.substringAfter("=")
+            key to value
+        }
+
+        val tmdb = qp["tmdb"]?.toIntOrNull() ?: return null
+
+        return EmbedParams(
+            type    = typePart,
+            tmdb    = tmdb,
+            season  = qp["season"]?.toIntOrNull(),
+            episode = qp["episode"]?.toIntOrNull()
+        )
+    }
+
+    private fun buildEmbedUrlFromParams(params: EmbedParams): String {
+        return buildString {
+            append("$PRIMESRC_BASE/embed/${params.type}?tmdb=${params.tmdb}")
+            if (params.season != null)  append("&season=${params.season}")
+            if (params.episode != null) append("&episode=${params.episode}")
+        }
+    }
+
+    // ========================================================
+    // DATA CLASSES - JSON response models
+    // ========================================================
+
+    private data class ServerListResponse(
+        @JsonProperty("servers") val servers: List<PrimeSrcServer>?,
+        @JsonProperty("info")    val info: PrimeSrcInfo?
+    )
+
+    private data class PrimeSrcServer(
+        @JsonProperty("quality")        val quality: String?,
+        @JsonProperty("name")           val name: String,
+        @JsonProperty("key")            val key: String,
+        @JsonProperty("file_size")      val fileSize: String?,
+        @JsonProperty("file_name")      val fileName: String?,
+        @JsonProperty("audio_type")     val audioType: String?,
+        @JsonProperty("audio_language") val audioLanguage: String?
+    )
+
+    private data class PrimeSrcInfo(
+        @JsonProperty("type")          val type: String?,
+        @JsonProperty("title")         val title: String?,
+        @JsonProperty("imdb_id")       val imdbId: String?,
+        @JsonProperty("release_date")  val releaseDate: String?,
+        @JsonProperty("status")        val status: String?,
+        @JsonProperty("description")   val description: String?,
+        @JsonProperty("tmdb_image")    val tmdbImage: String?,
+        @JsonProperty("tmdb_backdrop") val tmdbBackdrop: String?,
+        @JsonProperty("episode")       val episode: PrimeSrcEpisode?,
+        @JsonProperty("tmdb_id")       val tmdbIdConfusing: String?,
+        @JsonProperty("tvmaze_id")     val tvmazeId: Any?
+    )
+
+    private data class PrimeSrcEpisode(
+        @JsonProperty("title")         val title: String?,
+        @JsonProperty("season")        val season: Int?,
+        @JsonProperty("episode")       val episode: Int?,
+        @JsonProperty("release_date")  val releaseDate: String?,
+        @JsonProperty("description")   val description: String?
+    )
+
+    private data class LinkResponse(
+        @JsonProperty("link")  val link: String?,
+        @JsonProperty("error") val error: String?
+    )
 }
-
-// ─── DATA CLASSES RESPONS BACKEND RIVESTREAM ─────────────────────────────────
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class BackendFetchResponse(
-    @JsonProperty("data") val data: BackendData?
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class BackendData(
-    @JsonProperty("sources")  val sources:  List<BackendSource>?,
-    @JsonProperty("captions") val captions: List<BackendCaption>? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class BackendSource(
-    @JsonProperty("quality") val quality: Any?,
-    @JsonProperty("url")     val url:     String?,
-    @JsonProperty("source")  val source:  String?,
-    @JsonProperty("format")  val format:  String?
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class BackendCaption(
-    @JsonProperty("label") val label: String?,
-    @JsonProperty("file")  val file:  String?
-)
-
-// ─── DATA CLASSES RESPONS EMBED AGREGATOR PRIMESRC ───────────────────────────
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class PrimeSrcServerResponse(
-    @JsonProperty("servers") val servers: List<PrimeSrcServer>?
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class PrimeSrcServer(
-    @JsonProperty("name") val name: String?,
-    @JsonProperty("key")  val key:  String?
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class PrimeSrcLinkResponse(
-    @JsonProperty("link") val link: String?,
-    @JsonProperty("host") val host: String?
-)
