@@ -7,59 +7,43 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import kotlinx.coroutines.delay
 import java.net.URLDecoder
-import java.net.URLEncoder
+import java.util.Collections
 
 /**
  * PrimeSrc Helper - bridges RiveStream provider dengan PrimeSrc embed service
- *
- * Flow:
- * 1. /api/v1/s?tmdb=X&season=Y&episode=Z&type=tv  → server list (NO Turnstile)
- * 2. /api/v1/l?key=<key>&token=<turnstile>        → iframe URL (Turnstile-protected)
- * 3. iframe URL on streamcasthub.store            → real stream
- *
- * Server domains discovered (dari network capture):
- * - voe.sx, filelions.to, streamtape.com, dood.li, luluvdoo.com
- * - streamplay.to, vidnest.io, filemoon.io, streamwish.to
- * - vidmoly.to, mixdrop.ag, upzur.com, savefiles.com
  */
 class PrimeSrcHelper {
 
     companion object {
         private const val PRIMESRC_BASE = "https://primesrc.me"
 
-        // User-Agent yang dipakai untuk semua request PrimeSrc
         private val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
 
-        // Semua server name yang pernah muncul di response PrimeSrc
         private val KNOWN_SERVERS = setOf(
             "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
             "Streamplay", "VidNest", "FileMoon", "Streamwish",
             "Vidmoly", "Mixdrop", "UpZur", "SaveFiles"
         )
 
-        // Mapping PrimeSrc server name → CloudStream built-in extractor key
-        // CloudStream 3.x udah punya extractors built-in untuk ini
         private val SERVER_EXTRACTOR_MAP = mapOf(
             "Voe"       to "Voe",
             "Filelions" to "Filelions",
             "Streamtape" to "Streamtape",
             "Dood"      to "Dood",
-            "Luluvdoo"  to "Luluvdoo",    // might not exist - fallback to WebView
-            "Streamplay" to "Streamplay", // might not exist - fallback to WebView
+            "Luluvdoo"  to "Luluvdoo",    
+            "Streamplay" to "Streamplay", 
             "VidNest"   to "Vidnest",
             "FileMoon"  to "Filemoon",
             "Streamwish" to "Streamwish",
             "Vidmoly"   to "Vidmoly",
             "Mixdrop"   to "Mixdrop",
-            "UpZur"     to "Upzur",       // might not exist
-            "SaveFiles" to "Savefiles"    // might not exist
+            "UpZur"     to "Upzur",       
+            "SaveFiles" to "Savefiles"    
         )
 
-        // Header wajib untuk PrimeSrc API
         private fun buildHeaders(referer: String = "$PRIMESRC_BASE/") = mapOf(
             "User-Agent"      to USER_AGENT,
             "Referer"         to referer,
@@ -68,13 +52,10 @@ class PrimeSrcHelper {
             "Origin"          to PRIMESRC_BASE
         )
 
-        // Parse URL RiveStream format → PrimeSrc embed URL
-        // Input:  https://www.rivestream.app/tv/219971?season=1&episode=1
-        // Output: https://primesrc.me/embed/tv?tmdb=219971&season=1&episode=1
         private fun buildEmbedUrl(mainUrl: String, data: String): String? {
             val path = data.removePrefix("$mainUrl/").takeIf { it.isNotEmpty() } ?: return null
-            val type = path.substringBefore("/")   // "tv" or "movie"
-            val id   = path.substringAfter("/").substringBefore("?")  // tmdb id
+            val type = path.substringBefore("/")   
+            val id   = path.substringAfter("/").substringBefore("?")  
 
             val params = mutableListOf<String>()
             if (type == "tv") {
@@ -89,17 +70,20 @@ class PrimeSrcHelper {
             val qs = if (params.isNotEmpty()) "&" + params.joinToString("&") else ""
             return "$PRIMESRC_BASE/embed/$type?tmdb=$id$qs"
         }
+
+        // Helper untuk memformat subdomain streamcasthub.store agar sesuai dengan target player rrr
+        private fun fixStreamCastHubUrl(url: String): String {
+            return if (url.contains("streamcasthub.store")) {
+                url.replace(Regex("https://[^/]+\\.streamcasthub\\.store"), "https://rrr.streamcasthub.store")
+            } else {
+                url
+            }
+        }
     }
 
     // ========================================================
     // MAIN API: invokePrimeSrc
     // ========================================================
-    /**
-     * Strategi 1: Direct API access
-     * - Hit /api/v1/s untuk server list (no Turnstile)
-     * - Untuk tiap server, coba /api/v1/l (akan kena Turnstile)
-     * - Fallback ke WebView extraction kalau /api/v1/l gagal
-     */
     suspend fun invokePrimeSrc(
         data: String,
         mainUrl: String,
@@ -112,18 +96,15 @@ class PrimeSrcHelper {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
             logError(Throwable("[$providerName] Embed URL: $embedUrl"))
 
-            // Parse embed URL untuk extract params
             val params = parseEmbedParams(embedUrl) ?: return false
             logError(Throwable("[$providerName] Parsed params: $params"))
 
-            // Step 1: Get server list (no Turnstile needed)
             val servers = fetchServerList(params) ?: return false
             logError(Throwable("[$providerName] Got ${servers.size} servers from /api/v1/s"))
 
             if (servers.isEmpty()) return false
 
-            // Step 2: For each server, try to get iframe URL
-            val iframeUrls = mutableListOf<Pair<String, String>>()  // (server_name, iframe_url)
+            val iframeUrls = mutableListOf<Pair<String, String>>()  
 
             for (server in servers) {
                 if (server.name !in KNOWN_SERVERS) continue
@@ -144,7 +125,6 @@ class PrimeSrcHelper {
                 return false
             }
 
-            // Step 3: Pass iframe URLs to ExtractorApi
             for ((serverName, iframeUrl) in iframeUrls) {
                 invokeExtractor(
                     serverName = serverName,
@@ -162,15 +142,8 @@ class PrimeSrcHelper {
     }
 
     // ========================================================
-    // FALLBACK API: invokeEmbedMode
+    // FALLBACK API: invokeEmbedMode (WebView-based)
     // ========================================================
-    /**
-     * Strategi 2: Embed Mode (WebView-based)
-     * - Load embed URL di WebView
-     * - Tunggu Turnstile auto-solve (CloudStream WebView handles this)
-     * - Extract iframe URL dari rendered DOM
-     * - Pass ke ExtractorApi
-     */
     suspend fun invokeEmbedMode(
         data: String,
         mainUrl: String,
@@ -181,8 +154,83 @@ class PrimeSrcHelper {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
             logError(Throwable("[PrimeSrc.Embed] Loading: $embedUrl"))
 
-            logError(Throwable("[PrimeSrc.Embed] WebView implementation TODO"))
-            false
+            var isExtractorInvoked = false
+            val interceptedUrls = Collections.synchronizedList(mutableListOf<String>())
+
+            // Menggunakan WebviewResolver untuk memecahkan Turnstile secara otomatis
+            val resolver = WebviewResolver { request ->
+                val requestUrl = request.url.toString()
+                if (requestUrl.contains("api/v1/l") || requestUrl.contains("streamcasthub.store")) {
+                    interceptedUrls.add(requestUrl)
+                }
+                true 
+            }
+
+            // Membuka halaman embed di latar belakang untuk memicu pemecahan Turnstile
+            val response = app.get(embedUrl, interceptor = resolver)
+            val html = response.text
+
+            // Strategi 1: Ekstraksi dari URL pemuter yang berhasil dicegat oleh Webview Interceptor
+            val uniqueUrls = interceptedUrls.toList().distinct()
+            for (url in uniqueUrls) {
+                val fixedUrl = fixStreamCastHubUrl(url)
+                if (fixedUrl.contains("api/v1/l?key=")) {
+                    val key = fixedUrl.substringAfter("key=").substringBefore("&")
+                    val iframeSrc = fetchIframeUrl(key, embedUrl)
+                    if (iframeSrc != null) {
+                        val fixedIframe = fixStreamCastHubUrl(iframeSrc)
+                        if (loadExtractor(fixedIframe, subtitleCallback, callback)) {
+                            isExtractorInvoked = true
+                        }
+                    }
+                } else if (fixedUrl.contains("streamcasthub.store")) {
+                    if (loadExtractor(fixedUrl, subtitleCallback, callback)) {
+                        isExtractorInvoked = true
+                    }
+                }
+            }
+
+            // Strategi 2: Jika pencegatan jaringan luput, parsing rendered DOM HTML untuk mencari iframe
+            val document = org.jsoup.Jsoup.parse(html)
+            document.select("iframe").forEach { iframe ->
+                var src = iframe.attr("src")
+                if (src.isNotEmpty()) {
+                    if (src.startsWith("//")) src = "https:$src"
+                    val fixedSrc = fixStreamCastHubUrl(src)
+                    if (loadExtractor(fixedSrc, subtitleCallback, callback)) {
+                        isExtractorInvoked = true
+                    }
+                }
+            }
+
+            // Strategi 3: Setelah WebView sukses dimuat, cookie sesi (cf_clearance) otomatis tersimpan.
+            // Jalankan ulang pemanggilan direct API menggunakan kredensial cookie baru tersebut.
+            if (!isExtractorInvoked) {
+                val params = parseEmbedParams(embedUrl)
+                if (params != null) {
+                    val servers = fetchServerList(params)
+                    if (!servers.isNullOrEmpty()) {
+                        for (server in servers) {
+                            val iframeUrl = fetchIframeUrl(server.key, embedUrl)
+                            if (iframeUrl != null) {
+                                val fixedUrl = fixStreamCastHubUrl(iframeUrl)
+                                val extractorKey = SERVER_EXTRACTOR_MAP[server.name]
+                                if (extractorKey != null) {
+                                    getExtractorApiFromName(extractorKey).getSafeUrl(
+                                        url = fixedUrl,
+                                        referer = embedUrl,
+                                        subtitleCallback = subtitleCallback,
+                                        callback = callback
+                                    )
+                                    isExtractorInvoked = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            isExtractorInvoked
         } catch (e: Exception) {
             logError(e)
             false
@@ -209,7 +257,7 @@ class PrimeSrcHelper {
     }
 
     // ========================================================
-    // Helper: Hit /api/v1/l (iframe URL - Turnstile protected)
+    // Helper: Hit /api/v1/l (iframe URL)
     // ========================================================
     private suspend fun fetchIframeUrl(
         serverKey: String,
@@ -235,18 +283,19 @@ class PrimeSrcHelper {
     // ========================================================
     // Helper: Pass iframe URL ke CloudStream extractor
     // ========================================================
-    private suspend fun invokeExtractor(
+    private fun invokeExtractor(
         serverName: String,
         iframeUrl: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return
+        val fixedUrl = fixStreamCastHubUrl(iframeUrl)
 
         try {
             getExtractorApiFromName(extractorKey).getSafeUrl(
-                url = iframeUrl,
-                referer = null,
+                url = fixedUrl,
+                referer = "$PRIMESRC_BASE/",
                 subtitleCallback = subtitleCallback,
                 callback = callback
             )
@@ -259,7 +308,7 @@ class PrimeSrcHelper {
     // Utility: Parse embed URL parameters
     // ========================================================
     private data class EmbedParams(
-        val type: String,        // "tv" or "movie"
+        val type: String,        
         val tmdb: Int,
         val season: Int? = null,
         val episode: Int? = null
@@ -323,7 +372,7 @@ class PrimeSrcHelper {
         @JsonProperty("tmdb_backdrop") val tmdbBackdrop: String?,
         @JsonProperty("episode")       val episode: PrimeSrcEpisode?,
         @JsonProperty("tmdb_id")       val tmdbIdConfusing: String?,
-        @JsonProperty("tvmaze_id")     val tvmazeId: Any?
+        @JsonProperty("tvmaze_id")     val tvmazeId: Any?  
     )
 
     private data class PrimeSrcEpisode(
