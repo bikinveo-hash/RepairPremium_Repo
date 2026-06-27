@@ -5,8 +5,6 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.adixtream.AdiXtreamExtractor.invokeMovieBox
 import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
@@ -36,10 +34,9 @@ open class AdiXtream : MainAPI() {
         "discover/movie?with_genres=27&with_original_language=id" to "Horror Indonesia"
     )
 
-    // FIX #7: return null jika response gagal, bukan newHomePageResponse(emptyList())
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = "https://api.themoviedb.org/3/${request.data}&api_key=$tmdbApiKey&language=en-US&page=$page"
-        val response = app.get(url).parsedSafe<TmdbResponse>() ?: return null
+        val response = app.get(url).parsedSafe<TmdbResponse>() ?: return newHomePageResponse(emptyList())
 
         val isTvSeries = request.data.contains("discover/tv")
         val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
@@ -125,13 +122,11 @@ open class AdiXtream : MainAPI() {
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
 
-                // FIX #3: Trailer null-safe — hanya panggil addTrailer() jika key tidak null
-                val trailerKey = tvDetail.videos?.results?.firstOrNull {
-                    it.type == "Trailer" && it.site == "YouTube"
-                }?.key
-                if (trailerKey != null) {
-                    addTrailer("https://www.youtube.com/watch?v=$trailerKey")
-                }
+                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
+                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
+                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
+                val trailerVideo = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
+                addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
 
                 this.recommendations = tvDetail.recommendations?.results?.map { rec ->
                     newTvSeriesSearchResponse(rec.name ?: rec.title ?: "Tanpa Judul", "$mainUrl/tv/${rec.id}", TvType.TvSeries) {
@@ -156,13 +151,11 @@ open class AdiXtream : MainAPI() {
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
 
-                // FIX #3: Trailer null-safe — hanya panggil addTrailer() jika key tidak null
-                val trailerKey = movieDetail.videos?.results?.firstOrNull {
-                    it.type == "Trailer" && it.site == "YouTube"
-                }?.key
-                if (trailerKey != null) {
-                    addTrailer("https://www.youtube.com/watch?v=$trailerKey")
-                }
+                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
+                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
+                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
+                val trailerVideo = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
+                addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
 
                 this.recommendations = movieDetail.recommendations?.results?.map { rec ->
                     newMovieSearchResponse(rec.title ?: rec.name ?: "Tanpa Judul", "$mainUrl/movie/${rec.id}", TvType.Movie) {
@@ -203,19 +196,10 @@ open class AdiXtream : MainAPI() {
             }
         } catch (e: Exception) { }
 
-        // FIX #5: Ganti runAllAsync (tidak ada di API standar) dengan coroutineScope + async
-        coroutineScope {
-            val job1 = async {
-                invokeMovieBox(tmdbId, title, originalTitle, year, season, episode, isTvSeries, subtitleCallback, callback)
-            }
-            val job2 = async {
-                if (title.isNotEmpty()) {
-                    invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle)
-                }
-            }
-            job1.await()
-            job2.await()
-        }
+        runAllAsync(
+            { invokeMovieBox(tmdbId, title, originalTitle, year, season, episode, isTvSeries, subtitleCallback, callback) },
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+        )
         return true
     }
 }

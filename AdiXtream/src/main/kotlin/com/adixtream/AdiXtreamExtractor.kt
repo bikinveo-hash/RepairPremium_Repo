@@ -15,15 +15,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.annotation.SuppressLint
 
-// FIX #1: Ubah dari `object AdiXtreamExtractor : AdiXtream()` menjadi object biasa.
-// AdiXtreamExtractor bukan provider/MainAPI — dia hanya kumpulan fungsi helper.
-// Extend AdiXtream() salah secara arsitektur karena:
-//   - Membuat instance MainAPI kedua yang bisa terdaftar sebagai duplikat provider
-//   - Mewarisi mainUrl, mainPage, search, dll. yang tidak relevan
-// Akses ke `app` dan fungsi cloudstream3 tetap tersedia via import * dari cloudstream3.
-object AdiXtreamExtractor {
-
-    private const val SOURCE_NAME = "AdiXtream"
+object AdiXtreamExtractor : AdiXtream() {
 
     // ================== EKSTRAKTOR MOVIEBOX (Smart Search) ==================
     suspend fun invokeMovieBox(
@@ -63,17 +55,14 @@ object AdiXtreamExtractor {
             val playResText = app.get(playUrl, headers = reqHeaders).text
             val streams = tryParseJson<MovieBoxPlayResponse>(playResText)?.data?.streams ?: return
 
-            // FIX #2 & #6: Ganti `this.name` (salah reference) dengan SOURCE_NAME konstanta.
-            // FIX #6: Gunakan INFER_TYPE secara konsisten — biarkan Cloudstream deteksi
-            //         otomatis dari ekstensi URL (.m3u8 → M3U8, .mpd → DASH, dll.)
-            //         Tidak perlu lagi conditional `if (url.contains(".m3u8"))` manual.
+            // Emit streams
             streams.forEach { stream ->
                 val streamUrl = stream.url ?: return@forEach
+                val streamType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
-                    newExtractorLink(SOURCE_NAME, "Moviebox ${stream.resolutions ?: "?"}p", streamUrl) {
+                    newExtractorLink(this.name, "Moviebox ${stream.resolutions ?: "?"}p", streamUrl, streamType) {
                         this.referer = mainUrl
                         this.quality = getQualityFromName(stream.resolutions)
-                        // type otomatis diinfer dari URL via INFER_TYPE (default)
                     }
                 )
             }
@@ -84,7 +73,7 @@ object AdiXtreamExtractor {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${firstStream.format}&id=${firstStream.id}&subjectId=$subjectId&detailPath=$detailPath"
                 app.get(captionUrl, headers = reqHeaders).parsedSafe<MovieBoxCaptionResponse>()?.data?.captions?.forEach { cap ->
                     subtitleCallback.invoke(
-                        newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: return@forEach)
+                        newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: "")
                     )
                 }
             }
@@ -191,7 +180,7 @@ object AdiXtreamExtractor {
 
         // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
-
+        
         // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to searchKeyword).toJson()
@@ -204,30 +193,30 @@ object AdiXtreamExtractor {
         val matchedSubject = searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
             val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             val cleanSubjectTitle = subject.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
-
+            
             val isYearMatch = year == null || subjectYear == year
-
+            
             // Pencocokan dua arah seperti di V1
-            val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() &&
-                    (cleanSubjectTitle == cleanSearchTitle ||
+            val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
+                    (cleanSubjectTitle == cleanSearchTitle || 
                     ((cleanSubjectTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanSubjectTitle)) && isYearMatch))
-
-            val isOriginalTitleMatch = cleanOrigTitle != null && cleanSubjectTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() &&
-                    (cleanSubjectTitle == cleanOrigTitle ||
+            
+            val isOriginalTitleMatch = cleanOrigTitle != null && cleanSubjectTitle.isNotEmpty() && cleanOrigTitle.isNotEmpty() && 
+                    (cleanSubjectTitle == cleanOrigTitle || 
                     ((cleanSubjectTitle.contains(cleanOrigTitle) || cleanOrigTitle.contains(cleanSubjectTitle)) && isYearMatch))
-
+            
             val isTypeMatch = if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
-
+            
             (isTitleMatch || isOriginalTitleMatch) && isTypeMatch
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
-
+        
         // 2. Mengambil Detail dan Audio (Dubs)
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
-
+        
         val subjectList = mutableListOf<Pair<String, String>>()
         try {
             val json = org.json.JSONObject(detailRes)
@@ -266,12 +255,8 @@ object AdiXtreamExtractor {
                 if (!signCookie.isNullOrEmpty()) baseHeaders["Cookie"] = signCookie
 
                 val sourceName = "Adimoviebox2 ($languageName)"
-                // FIX #2: Ganti `this.name` dengan SOURCE_NAME konstanta
-                // FIX #6: Gunakan INFER_TYPE secara konsisten (hilangkan conditional manual)
-                callback.invoke(newExtractorLink(SOURCE_NAME, sourceName, streamUrl) {
-                    this.quality = quality
-                    this.headers = baseHeaders
-                    // type otomatis diinfer dari URL via INFER_TYPE (default)
+                callback.invoke(newExtractorLink(this.name, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
+                    this.quality = quality; this.headers = baseHeaders
                 })
 
                 if (stream.id != null) {
@@ -282,7 +267,7 @@ object AdiXtreamExtractor {
                         val lang = cap.language ?: cap.lanName ?: cap.lan ?: "Unknown"
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
-
+                    
                     // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
@@ -296,14 +281,8 @@ object AdiXtreamExtractor {
     }
 
     private object Adimoviebox2Helper {
-        // FIX #8: Simpan secret key langsung sebagai ByteArray — decode SEKALI saja.
-        // Sebelumnya: decode ke String (base64Decode), lalu decode lagi ke ByteArray (base64DecodeArray)
-        //             → double decode yang salah dan rawan error pada byte non-ASCII.
-        // Sekarang:   decode langsung ke ByteArray via base64DecodeArray dari cloudstream3.
-        // FIX #4:     Hapus fungsi `base64DecodeArray` lokal yang pakai android.util.Base64.
-        //             Gunakan base64DecodeArray() dari cloudstream3 (sudah tersedia via import *).
-        private val secretKeyBytes: ByteArray = base64DecodeArray("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
-        private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("")
+        private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
+        private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("") 
 
         fun randomBrandModel(): Pair<String, String> {
             val brandModels = mapOf(
@@ -319,51 +298,30 @@ object AdiXtreamExtractor {
         fun getHeaders(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
             val timestamp = System.currentTimeMillis()
             val xClientToken = generateXClientToken(timestamp)
-            val xTrSignature = generateXTrSignature(method, "application/json", if (method == "POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
+            val xTrSignature = generateXTrSignature(method, "application/json", if(method=="POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
             return mapOf(
                 "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
-                "accept" to "application/json",
-                "content-type" to "application/json",
-                "x-client-token" to xClientToken,
-                "x-tr-signature" to xTrSignature,
+                "accept" to "application/json", "content-type" to "application/json", "x-client-token" to xClientToken, "x-tr-signature" to xTrSignature,
                 "x-client-info" to """{"package_name":"com.community.mbox.in","version_name":"3.0.03.0529.03","version_code":50020042,"os":"android","os_version":"16","device_id":"$deviceId","install_store":"ps","gaid":"d7578036d13336cc","brand":"$brand","model":"$model","system_language":"en","net":"NETWORK_WIFI","region":"IN","timezone":"Asia/Calcutta","sp_code":""}""",
                 "x-client-status" to "0"
             )
         }
-
-        private fun md5(input: ByteArray): String {
-            return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) }
-        }
-
-        private fun generateXClientToken(timestamp: Long): String {
-            val reversed = timestamp.toString().reversed()
-            val hash = md5(reversed.toByteArray())
-            return "$timestamp,$hash"
-        }
-
+        
+        private fun md5(input: ByteArray): String { return MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) } }
+        
+        private fun generateXClientToken(timestamp: Long): String { val reversed = timestamp.toString().reversed(); val hash = md5(reversed.toByteArray()); return "$timestamp,$hash" }
+        
         @SuppressLint("UseKtx")
-        private fun generateXTrSignature(
-            method: String, accept: String?, contentType: String?,
-            url: String, body: String?, timestamp: Long
-        ): String {
-            val parsed = Uri.parse(url)
-            val path = parsed.path ?: ""
-            val query = if (parsed.queryParameterNames.isNotEmpty()) {
-                parsed.queryParameterNames.sorted().joinToString("&") { key ->
-                    parsed.getQueryParameters(key).joinToString("&") { "$key=$it" }
-                }
-            } else ""
-            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
-            val bodyBytes = body?.toByteArray(Charsets.UTF_8)
-            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""
-            val bodyLength = bodyBytes?.size?.toString() ?: ""
+        private fun generateXTrSignature(method: String, accept: String?, contentType: String?, url: String, body: String?, timestamp: Long): String {
+            val parsed = Uri.parse(url); val path = parsed.path ?: ""; 
+            val query = if (parsed.queryParameterNames.isNotEmpty()) { parsed.queryParameterNames.sorted().joinToString("&") { key -> parsed.getQueryParameters(key).joinToString("&") { "$key=$it" } } } else ""
+            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path; val bodyBytes = body?.toByteArray(Charsets.UTF_8); 
+            val bodyHash = if (bodyBytes != null) md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes) else ""; val bodyLength = bodyBytes?.size?.toString() ?: ""
             val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
-
-            val mac = Mac.getInstance("HmacMD5")
-            // FIX #8: Pakai secretKeyBytes (ByteArray langsung) — tidak perlu decode lagi
-            mac.init(SecretKeySpec(secretKeyBytes, "HmacMD5"))
+            val secretBytes = base64DecodeArray(secretKeyDefault); val mac = Mac.getInstance("HmacMD5"); mac.init(SecretKeySpec(secretBytes, "HmacMD5")); 
             val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
+        private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
     }
 }
