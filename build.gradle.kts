@@ -14,7 +14,7 @@ buildscript {
 
     dependencies {
         classpath("com.android.tools.build:gradle:9.1.1")
-        classpath("com.github.recloudstream:gradle:1.0.3")
+        classpath("com.github.recloudstream.gradle:gradle:81b1d424d")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0")
     }
 }
@@ -27,8 +27,7 @@ allprojects {
     }
 }
 
-fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) =
-    extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
+fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
 
 fun Project.android(configuration: LibraryExtension.() -> Unit) {
     extensions.getByName<LibraryExtension>("android").apply {
@@ -57,29 +56,25 @@ subprojects {
 
         defaultConfig {
             minSdk = 21
-            targetSdk = 36
         }
 
         lint {
-            warningsAsErrors = false
-            abortOnError = false
-            checkReleaseBuilds = false
+            targetSdk = 36
         }
 
         compileOptions {
-            sourceCompatibility = JavaVersion.VERSION_17
-            targetCompatibility = JavaVersion.VERSION_17
+            sourceCompatibility = JavaVersion.VERSION_1_8
+            targetCompatibility = JavaVersion.VERSION_1_8
         }
 
         //noinspection WrongGradleMethod
         tasks.withType<KotlinJvmCompile> {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_17)
+                jvmTarget.set(JvmTarget.JVM_1_8)
                 freeCompilerArgs.addAll(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
                     "-Xno-receiver-assertions",
-                    "-opt-in=kotlin.RequiresOptIn",
                 )
             }
         }
@@ -90,36 +85,24 @@ subprojects {
         val cloudstream by configurations
         cloudstream("com.lagradost:cloudstream3:pre-release")
 
-        // ===== Core Kotlin =====
-        implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
-
-        // Nullability annotations for Kotlin 2.4.0 strict checking
+        // Fix for Kotlin 2.4.0 strict type annotation checking
         implementation("org.jspecify:jspecify:1.0.0")
 
-        // ===== HTTP & Network =====
+        // Other dependencies
+        implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.18")
-        implementation(platform("com.squareup.okhttp3:okhttp-bom:4.12.0"))
-        implementation("com.squareup.okhttp3:okhttp")
-
-        // ===== JSON Parsing =====
-        implementation("com.fasterxml.jackson.core:jackson-databind:2.13.1")
-        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
-        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-
-        // ===== Coroutines =====
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-
-        // ===== JavaScript Engine =====
-        implementation("org.mozilla:rhino:1.8.1")
-
-        // ===== String Matching =====
-        implementation("me.xdrop:fuzzywuzzy:1.4.0")
-
-        // ===== Crypto (untuk Adimoviebox HMAC signing) =====
-        implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
-
-        // ===== AndroidX =====
+        implementation("org.jsoup:jsoup:1.22.2")
         implementation("androidx.annotation:annotation:1.10.0")
+        // Do not bump above 2.13.1
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.13.1")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+        // Do not bump above 1.8.1
+        implementation("org.mozilla:rhino:1.8.1")
+        implementation("me.xdrop:fuzzywuzzy:1.4.0")
+        implementation("com.google.code.gson:gson:2.14.0")
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+        implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
     }
 }
 
