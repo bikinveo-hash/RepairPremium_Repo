@@ -1,6 +1,8 @@
 package com.AdiDrakor
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.AdiDrakor.AdiDrakorExtractor.invokeAdimoviebox
 import com.AdiDrakor.AdiDrakorExtractor.invokeAdimoviebox2
@@ -43,7 +45,8 @@ open class AdiDrakor : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         // Menggabungkan URL kategori yang sudah memuat api_key dengan parameter tambahan
         val url = "${request.data}&language=en-US&page=$page"
-        val response = app.get(url).parsedSafe<TmdbResponse>() ?: return newHomePageResponse(emptyList())
+        val response = app.get(url).parsedSafe<TmdbResponse>()
+            ?: return newHomePageResponse(request, emptyList())
 
         val isTvSeries = request.data.contains("discover/tv")
         val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
@@ -52,7 +55,7 @@ open class AdiDrakor : MainAPI() {
         val filmList = response.results.map { movie ->
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
             val targetUrl = "$mainUrl/$urlPrefix/${movie.id}"
-            
+
             if (isTvSeries) {
                 newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
                     this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -65,20 +68,22 @@ open class AdiDrakor : MainAPI() {
                 }
             }
         }
-        return newHomePageResponse(listOf(HomePageList(request.name, filmList)))
+        // Pakai overload newHomePageResponse(MainPageRequest, list) sesuai builder terbaru,
+        // daripada membungkus manual ke HomePageList.
+        return newHomePageResponse(request, filmList)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "https://api.themoviedb.org/3/search/multi?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
+        val url = "$tmdbAPI/search/multi?api_key=$tmdbApiKey&query=${query.replace(" ", "%20")}&language=en-US"
         val response = app.get(url).parsedSafe<TmdbResponse>() ?: return emptyList()
-        
+
         return response.results.filter { it.mediaType == "movie" || it.mediaType == "tv" }.map { movie ->
             val isTvSeries = movie.mediaType == "tv"
             val tvType = if (isTvSeries) TvType.TvSeries else TvType.Movie
             val urlPrefix = if (isTvSeries) "tv" else "movie"
             val targetUrl = "$mainUrl/$urlPrefix/${movie.id}"
             val titleText = movie.title ?: movie.name ?: "Tanpa Judul"
-            
+
             if (isTvSeries) {
                 newTvSeriesSearchResponse(titleText, targetUrl, tvType) {
                     this.posterUrl = "https://image.tmdb.org/t/p/w500${movie.posterPath}"
@@ -97,14 +102,19 @@ open class AdiDrakor : MainAPI() {
         val isTvSeries = url.contains("/tv/")
         if (isTvSeries) {
             val tmdbId = url.substringAfter("/tv/").substringBefore("/")
-            val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbTvDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal mengambil data Series dari TMDB")
+            val tvDetail =
+                app.get("$tmdbAPI/tv/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations")
+                    .parsedSafe<TmdbTvDetailResponse>()
+                    ?: throw ErrorLoadingException("Gagal mengambil data Series dari TMDB")
 
             val episodes = mutableListOf<Episode>()
             tvDetail.seasons?.forEach { season ->
                 if (season.seasonNumber > 0) {
-                    val seasonDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId/season/${season.seasonNumber}?api_key=$tmdbApiKey").parsedSafe<TmdbSeasonDetail>()
+                    val seasonDetail =
+                        app.get("$tmdbAPI/tv/$tmdbId/season/${season.seasonNumber}?api_key=$tmdbApiKey")
+                            .parsedSafe<TmdbSeasonDetail>()
                     seasonDetail?.episodes?.forEach { ep ->
+                        // data = URL lengkap, dipakai konsisten dengan parsing di loadLinks()
                         episodes.add(newEpisode("$mainUrl/tv/$tmdbId/${season.seasonNumber}/${ep.episodeNumber}") {
                             this.name = ep.name ?: "Episode ${ep.episodeNumber}"
                             this.season = season.seasonNumber
@@ -112,7 +122,7 @@ open class AdiDrakor : MainAPI() {
                             this.posterUrl = ep.stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
                             this.description = ep.overview
                             this.score = Score.from10(ep.voteAverage)
-                            ep.airDate?.let { addDate(it) } 
+                            ep.airDate?.let { addDate(it) }
                         })
                     }
                 }
@@ -126,17 +136,15 @@ open class AdiDrakor : MainAPI() {
                 this.score = Score.from10(tvDetail.voteAverage)
                 this.tags = tvDetail.genres?.map { it.name }
                 this.actors = tvDetail.credits?.cast?.map { cast ->
-                    ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
+                    ActorData(
+                        Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }),
+                        roleString = cast.character
+                    )
                 }
-                
+
                 val trailer = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
-                        referer = null,
-                        raw = false
-                    ))
-                }
+                trailer?.let { addTrailer("https://www.youtube.com/watch?v=${it.key}") }
+
                 this.recommendations = tvDetail.recommendations?.results?.map { rec ->
                     newTvSeriesSearchResponse(rec.name ?: rec.title ?: "Tanpa Judul", "$mainUrl/tv/${rec.id}", TvType.TvSeries) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -145,10 +153,13 @@ open class AdiDrakor : MainAPI() {
             }
         } else {
             val tmdbId = url.substringAfter("/movie/").substringBefore("/")
-            val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations").parsedSafe<TmdbDetailResponse>() 
-            ?: throw ErrorLoadingException("Gagal mengambil data Movie dari TMDB")
+            val movieDetail =
+                app.get("$tmdbAPI/movie/$tmdbId?api_key=$tmdbApiKey&append_to_response=credits,videos,recommendations")
+                    .parsedSafe<TmdbDetailResponse>()
+                    ?: throw ErrorLoadingException("Gagal mengambil data Movie dari TMDB")
 
-            return newMovieLoadResponse(movieDetail.title ?: "Tanpa Judul", url, TvType.Movie, tmdbId) {
+            // data = url lengkap (bukan tmdbId mentah), supaya konsisten dengan parsing di loadLinks()
+            return newMovieLoadResponse(movieDetail.title ?: "Tanpa Judul", url, TvType.Movie, url) {
                 this.posterUrl = "https://image.tmdb.org/t/p/w500${movieDetail.posterPath}"
                 this.backgroundPosterUrl = "https://image.tmdb.org/t/p/w1280${movieDetail.backdropPath}"
                 this.year = movieDetail.releaseDate?.take(4)?.toIntOrNull()
@@ -157,17 +168,15 @@ open class AdiDrakor : MainAPI() {
                 this.score = Score.from10(movieDetail.voteAverage)
                 this.tags = movieDetail.genres?.map { it.name }
                 this.actors = movieDetail.credits?.cast?.map { cast ->
-                    ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
+                    ActorData(
+                        Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }),
+                        roleString = cast.character
+                    )
                 }
-                
+
                 val trailer = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
-                if (trailer != null) {
-                    this.trailers.add(TrailerData(
-                        extractorUrl = "https://www.youtube.com/watch?v=${trailer.key}",
-                        referer = null,
-                        raw = false
-                    ))
-                }
+                trailer?.let { addTrailer("https://www.youtube.com/watch?v=${it.key}") }
+
                 this.recommendations = movieDetail.recommendations?.results?.map { rec ->
                     newMovieSearchResponse(rec.title ?: rec.name ?: "Tanpa Judul", "$mainUrl/movie/${rec.id}", TvType.Movie) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -183,6 +192,8 @@ open class AdiDrakor : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // `data` sekarang selalu berupa URL lengkap (baik movie maupun tv series),
+        // jadi pola parsing di bawah konsisten untuk kedua tipe.
         val isTvSeries = data.contains("/tv/")
         val parts = data.split("/")
 
@@ -193,23 +204,32 @@ open class AdiDrakor : MainAPI() {
 
         var title = ""
         var originalTitle: String? = null
-        var year: Int? = null
 
         try {
             if (isTvSeries) {
-                val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
+                val tvDetail = app.get("$tmdbAPI/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
                 title = tvDetail?.name ?: ""
                 originalTitle = tvDetail?.originalName
-                year = tvDetail?.firstAirDate?.take(4)?.toIntOrNull()
             } else {
-                val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()
+                val movieDetail = app.get("$tmdbAPI/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()
                 title = movieDetail?.title ?: ""
                 originalTitle = movieDetail?.originalTitle
-                year = movieDetail?.releaseDate?.take(4)?.toIntOrNull()
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            logError(e)
+        }
 
-        // Catatan: Extractor Adicinemax21 menerima (title, orgTitle, altTitle, year, season, episode, ...).
+        val year = if (isTvSeries) {
+            (try { app.get("$tmdbAPI/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>() } catch (e: Exception) {
+                logError(e); null
+            })?.firstAirDate?.take(4)?.toIntOrNull()
+        } else {
+            (try { app.get("$tmdbAPI/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>() } catch (e: Exception) {
+                logError(e); null
+            })?.releaseDate?.take(4)?.toIntOrNull()
+        }
+
+        // Catatan: Extractor menerima (title, orgTitle, altTitle, year, season, episode, ...).
         // AdiDrakor tidak punya data altTitle, jadi kita pass null untuk altTitle.
         runAllAsync(
             { if (title.isNotEmpty()) invokeAdimoviebox(title, originalTitle, null, year, season, episode, subtitleCallback, callback) },
