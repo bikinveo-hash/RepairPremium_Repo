@@ -96,11 +96,22 @@ object Adicinemax21Extractor : Adicinemax21() {
         year: Int?, season: Int?, episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
     ) {
-        val apiUrl = "https://filmboom.top"
+        val mainUrl = "https://moviebox.ph"
+        val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+        val bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc4MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
+
+        val commonHeaders = mapOf(
+            "origin" to mainUrl,
+            "referer" to "$mainUrl/",
+            "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
+            "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "authorization" to "Bearer $bearerToken"
+        )
+
         suspend fun search(query: String): AdimovieboxItem? {
-            val searchUrl = "$apiUrl/wefeed-h5-bff/web/subject/search"
-            val searchBody = mapOf("keyword" to query, "page" to "1", "perPage" to "0", "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-            val searchRes = app.post(searchUrl, requestBody = searchBody).text
+            val searchUrl = "$apiBaseUrl/subject/search"
+            val searchBody = mapOf("keyword" to query, "page" to 1, "perPage" to 10, "subjectType" to 0).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+            val searchRes = app.post(searchUrl, headers = commonHeaders, requestBody = searchBody).text
             val items = tryParseJson<AdimovieboxResponse>(searchRes)?.data?.items ?: return null
             
             val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
@@ -110,38 +121,44 @@ object Adicinemax21Extractor : Adicinemax21() {
                 val cleanItemTitle = item.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
                 
                 cleanItemTitle.isNotEmpty() && cleanQuery.isNotEmpty() && 
-                (cleanItemTitle == cleanQuery || (cleanItemTitle.contains(cleanQuery) && itemYear == year))
+                (cleanItemTitle == cleanQuery || (cleanItemTitle.contains(cleanQuery) && (year == null || itemYear == null || Math.abs(itemYear - year) <= 1)))
             }
         }
         
-        var matchedMedia = search(title)
+        var matchedMedia = search(title.substringBefore(":").trim())
         if (matchedMedia == null && orgTitle != null) {
-            matchedMedia = search(orgTitle)
+            matchedMedia = search(orgTitle.substringBefore(":").trim())
         }
         if (matchedMedia == null && altTitle != null) {
-            matchedMedia = search(altTitle)
+            matchedMedia = search(altTitle.substringBefore(":").trim())
         }
         if (matchedMedia == null) return
 
         val subjectId = matchedMedia.subjectId ?: return
-        val detailPath = matchedMedia.detailPath
+        val detailPath = matchedMedia.detailPath ?: subjectId
         val se = season ?: 0
         val ep = episode ?: 0
-        val playUrl = "$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=$subjectId&se=$se&ep=$ep"
-        val validReferer = "$apiUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
-        val playRes = app.get(playUrl, referer = validReferer).text
+        
+        val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
+        val validReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
+        val reqHeaders = commonHeaders + mapOf("referer" to validReferer)
+
+        val playRes = app.get(playUrl, headers = reqHeaders).text
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
+        
         streams.reversed().distinctBy { it.url }.forEach { source ->
-             callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox", source.url ?: return@forEach, INFER_TYPE) {
-                    this.referer = "$apiUrl/"; this.quality = getQualityFromName(source.resolutions)
+             callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p", source.url ?: return@forEach, INFER_TYPE) {
+                    this.referer = mainUrl
+                    this.quality = getQualityFromName(source.resolutions)
              })
         }
      
-        val id = streams.firstOrNull()?.id
-        val format = streams.firstOrNull()?.format
+        val firstStream = streams.firstOrNull()
+        val id = firstStream?.id
+        val format = firstStream?.format
         if (id != null) {
-            val subUrl = "$apiUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=$subjectId"
-            app.get(subUrl, referer = validReferer).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
+            val subUrl = "$apiBaseUrl/subject/caption?format=$format&id=$id&subjectId=$subjectId&detailPath=$detailPath"
+            app.get(subUrl, headers = reqHeaders).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
                 subtitleCallback.invoke(newSubtitleFile(sub.lanName ?: "Unknown", sub.url ?: return@forEach))
             }
         }
