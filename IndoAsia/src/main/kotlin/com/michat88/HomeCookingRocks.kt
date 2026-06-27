@@ -1,4 +1,4 @@
-package com.michat88
+package com.michat8
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
