@@ -38,8 +38,7 @@ object AdiXtreamExtractor : AdiXtream() {
             val mainUrl = "https://lok-lok.cc"
             val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
 
-            // WAJIB: Samakan persis dengan Adimoviebox.kt.txt.
-            // Jangan gunakan User-Agent desktop agar terhindar dari blokir Cloudflare (TLS mismatch).
+            // Header WAJIB identik dengan Adimoviebox.kt.txt (Tanpa User-Agent custom)
             val commonHeaders = mapOf(
                 "origin" to mainUrl,
                 "referer" to "$mainUrl/",
@@ -51,7 +50,7 @@ object AdiXtreamExtractor : AdiXtream() {
             val e = episode ?: 0
             val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$s&ep=$e&detailPath=$detailPath"
             
-            // Referer khusus untuk play, hardcoded type=/movie/detail sama seperti provider aslinya
+            // Referer khusus untuk play (meniru persis yang ada di versi asli)
             val specificReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
             val reqHeaders = commonHeaders + mapOf("referer" to specificReferer)
 
@@ -69,7 +68,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 )
             }
 
-            // Ambil subtitle dari stream pertama saja (avoid duplicate)
+            // Ambil subtitle dari stream pertama saja
             val firstStream = streams.firstOrNull()
             if (firstStream != null) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${firstStream.format}&id=${firstStream.id}&subjectId=$subjectId&detailPath=$detailPath"
@@ -91,18 +90,14 @@ object AdiXtreamExtractor : AdiXtream() {
         year: Int?,
         isTvSeries: Boolean
     ): MovieBoxSubject? {
-        val mainUrl = "https://lok-lok.cc"
         val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
-        
-        // Header disamakan persis dengan provider asli
         val commonHeaders = mapOf(
-            "origin" to mainUrl,
-            "referer" to "$mainUrl/",
+            "origin" to "https://lok-lok.cc",
+            "referer" to "https://lok-lok.cc/",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
             "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
-        // Kumpulkan kandidat query: title (English display) + originalTitle (kalau beda)
         val candidatesList = mutableListOf<String>()
         val baseKeyword = title.substringBefore(":").trim()
         if (baseKeyword.isNotEmpty()) candidatesList.add(baseKeyword)
@@ -113,9 +108,8 @@ object AdiXtreamExtractor : AdiXtream() {
 
         var allCandidates: List<MovieBoxSubject> = emptyList()
 
-        // Pass 1-3: coba tiap kandidat, filter dengan smart matching
         for (keyword in candidatesList) {
-            // PERBAIKAN: Gunakan format String "0" alih-alih Integer 0 agar parser server tidak melempar error
+            // Parameter perPage dan subjectType menggunakan String "0" meniru Adimoviebox.kt asli
             val payload = mapOf(
                 "keyword" to keyword,
                 "page" to "1",
@@ -134,12 +128,13 @@ object AdiXtreamExtractor : AdiXtream() {
             }
         }
 
-        // Pass 4: loose fallback — ambil top result yang type match
+        // SMART FALLBACK: Jika tidak ada kecocokan 100%, ambil yang tipenya sesuai. 
+        // Jika API tidak mereturn tipe, ambil saja hasil paling pertama agar tidak null.
         return allCandidates.firstOrNull { subject ->
-            val typeOk = isTvSeries && subject.subjectType == 2 ||
-                         !isTvSeries && (subject.subjectType == 1 || subject.subjectType == 3)
-            typeOk
-        }
+            subject.subjectType == null ||
+            (isTvSeries && subject.subjectType == 2) ||
+            (!isTvSeries && (subject.subjectType == 1 || subject.subjectType == 3))
+        } ?: allCandidates.firstOrNull()
     }
 
     // ================== MOVIEBOX ACCURACY VALIDATOR ==================
@@ -154,10 +149,12 @@ object AdiXtreamExtractor : AdiXtream() {
         if (cleanSubject.isEmpty() || cleanQuery.isEmpty()) return false
 
         val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-        val yearOk = year == null || subjectYear == year
+        // Toleransi selisih rilis 1 tahun antara TMDB dan LokLok agar tetap match
+        val yearOk = year == null || subjectYear == null || Math.abs(subjectYear - year) <= 1
 
-        val typeOk = isTvSeries && subject.subjectType == 2 ||
-                     !isTvSeries && (subject.subjectType == 1 || subject.subjectType == 3)
+        val typeOk = subject.subjectType == null ||
+                     (isTvSeries && subject.subjectType == 2) ||
+                     (!isTvSeries && (subject.subjectType == 1 || subject.subjectType == 3))
         if (!typeOk) return false
 
         val exactMatch = cleanSubject == cleanQuery
@@ -182,10 +179,7 @@ object AdiXtreamExtractor : AdiXtream() {
         val apiUrl = "https://api3.aoneroom.com"
         val (brand, model) = Adimoviebox2Helper.randomBrandModel()
 
-        // 1. Pencarian
         val searchUrl = "$apiUrl/wefeed-mobile-bff/subject-api/search/v2"
-        
-        // Memotong judul sebelum tanda titik dua agar pencarian ke API lebih aman dan akurat
         val searchKeyword = title.substringBefore(":").trim()
         val jsonBody = mapOf("page" to 1, "perPage" to 10, "keyword" to searchKeyword).toJson()
         val headersSearch = Adimoviebox2Helper.getHeaders(searchUrl, jsonBody, "POST", brand, model)
@@ -198,7 +192,7 @@ object AdiXtreamExtractor : AdiXtream() {
             val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             val cleanSubjectTitle = subject.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
             
-            val isYearMatch = year == null || subjectYear == year
+            val isYearMatch = year == null || subjectYear == null || Math.abs(subjectYear - year) <= 1
             
             val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
                     (cleanSubjectTitle == cleanSearchTitle || 
@@ -208,14 +202,13 @@ object AdiXtreamExtractor : AdiXtream() {
                     (cleanSubjectTitle == cleanOrigTitle || 
                     ((cleanSubjectTitle.contains(cleanOrigTitle) || cleanOrigTitle.contains(cleanSubjectTitle)) && isYearMatch))
             
-            val isTypeMatch = if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3)
+            val isTypeMatch = subject.subjectType == null || (if (season != null) subject.subjectType == 2 else (subject.subjectType == 1 || subject.subjectType == 3))
             
             (isTitleMatch || isOriginalTitleMatch) && isTypeMatch
         } ?: return
 
         val mainSubjectId = matchedSubject.subjectId ?: return
         
-        // 2. Mengambil Detail dan Audio (Dubs)
         val detailUrl = "$apiUrl/wefeed-mobile-bff/subject-api/get?subjectId=$mainSubjectId"
         val detailHeaders = Adimoviebox2Helper.getHeaders(detailUrl, null, "GET", brand, model)
         val detailRes = app.get(detailUrl, headers = detailHeaders).text
@@ -243,7 +236,6 @@ object AdiXtreamExtractor : AdiXtream() {
         val s = season ?: 0
         val e = episode ?: 0
 
-        // 3. Mengambil Link Video
         subjectList.forEach { (currentSubjectId, languageName) ->
             val playUrl = "$apiUrl/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSubjectId&se=$s&ep=$e"
             val headersPlay = Adimoviebox2Helper.getHeaders(playUrl, null, "GET", brand, model)
@@ -263,7 +255,6 @@ object AdiXtreamExtractor : AdiXtream() {
                 })
 
                 if (stream.id != null) {
-                    // Internal Subtitles
                     val subUrlInternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$currentSubjectId&streamId=${stream.id}"
                     val headersSubInternal = Adimoviebox2Helper.getHeaders(subUrlInternal, null, "GET", brand, model)
                     app.get(subUrlInternal, headers = headersSubInternal).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
@@ -271,7 +262,6 @@ object AdiXtreamExtractor : AdiXtream() {
                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageName)", cap.url ?: return@forEach))
                     }
                     
-                    // External Subtitles
                     val subUrlExternal = "$apiUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$currentSubjectId&resourceId=${stream.id}&episode=0"
                     val subHeaders = Adimoviebox2Helper.getHeaders(subUrlExternal, null, "GET", brand, model)
                     app.get(subUrlExternal, headers = subHeaders).parsedSafe<Adimoviebox2SubtitleResponse>()?.data?.extCaptions?.forEach { cap ->
