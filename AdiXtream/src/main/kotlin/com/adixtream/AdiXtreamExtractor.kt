@@ -49,11 +49,15 @@ object AdiXtreamExtractor : AdiXtream() {
         // Memakai parameter json= dari NiceHttp yang sudah di-wrap oleh CloudStream,
         // identik dengan cara yang dipakai MovieboxProvider.
         val searchUrl = "$apiBaseUrl/subject/search"
+        // PENTING: perPage dan subjectType harus Int, bukan String.
+        // API MovieBox menolak nilai String untuk field numerik ini dan mengembalikan
+        // hasil kosong. Referensi: MovieboxProvider asli memakai perPage=28 (Int) dan
+        // subjectType=0 (Int). page="1" sebagai String sudah sesuai dengan provider asli.
         val searchPayload = mapOf(
             "keyword"     to searchKeyword,
             "page"        to "1",
-            "perPage"     to "20",
-            "subjectType" to "0"
+            "perPage"     to 20,
+            "subjectType" to 0
         )
 
         val searchRes = try {
