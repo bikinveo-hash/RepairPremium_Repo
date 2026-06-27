@@ -3,9 +3,7 @@ package com.adixtream
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.adixtream.AdiXtreamExtractor.invokeVidSrc
-import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox
-import com.adixtream.AdiXtreamExtractor.invokeAdimoviebox2
+import com.adixtream.AdiXtreamExtractor.invokeMovieBox
 
 open class AdiXtream : MainAPI() {
     override var name = "AdiXtream"
@@ -122,13 +120,8 @@ open class AdiXtream : MainAPI() {
                 this.actors = tvDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
-
-                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
-                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
-                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
                 val trailerVideo = tvDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
                 addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
-
                 this.recommendations = tvDetail.recommendations?.results?.map { rec ->
                     newTvSeriesSearchResponse(rec.name ?: rec.title ?: "Tanpa Judul", "$mainUrl/tv/${rec.id}", TvType.TvSeries) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -151,13 +144,8 @@ open class AdiXtream : MainAPI() {
                 this.actors = movieDetail.credits?.cast?.map { cast ->
                     ActorData(Actor(cast.name, cast.profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }), roleString = cast.character)
                 }
-
-                // ✅ DIPERBAIKI: Gunakan addTrailer() sesuai aturan MainAPI
-                // addTrailer() sudah menangani isTrailersEnabled check, null check, dan
-                // pembuatan TrailerData secara otomatis (raw=false agar Cloudstream extract via loadExtractor)
                 val trailerVideo = movieDetail.videos?.results?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }
                 addTrailer("https://www.youtube.com/watch?v=${trailerVideo?.key}")
-
                 this.recommendations = movieDetail.recommendations?.results?.map { rec ->
                     newMovieSearchResponse(rec.title ?: rec.name ?: "Tanpa Judul", "$mainUrl/movie/${rec.id}", TvType.Movie) {
                         this.posterUrl = "https://image.tmdb.org/t/p/w500${rec.posterPath}"
@@ -176,32 +164,42 @@ open class AdiXtream : MainAPI() {
         val isTvSeries = data.contains("/tv/")
         val parts = data.split("/")
 
-        val tmdbId = if (isTvSeries) parts[parts.size - 3] else data.substringAfter("/movie/").substringBefore("/")
-        val season = if (isTvSeries) parts[parts.size - 2].toIntOrNull() else null
+        val tmdbId  = if (isTvSeries) parts[parts.size - 3] else data.substringAfter("/movie/").substringBefore("/")
+        val season  = if (isTvSeries) parts[parts.size - 2].toIntOrNull() else null
         val episode = if (isTvSeries) parts.last().toIntOrNull() else null
 
-        var title = ""
+        var title         = ""
         var originalTitle: String? = null
-        var year: Int? = null
+        var year: Int?    = null
+
         try {
             if (isTvSeries) {
                 val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
-                title = tvDetail?.name ?: ""
+                title         = tvDetail?.name ?: ""
                 originalTitle = tvDetail?.originalName
-                year = tvDetail?.firstAirDate?.take(4)?.toIntOrNull()
+                year          = tvDetail?.firstAirDate?.take(4)?.toIntOrNull()
             } else {
                 val movieDetail = app.get("https://api.themoviedb.org/3/movie/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetailResponse>()
-                title = movieDetail?.title ?: ""
+                title         = movieDetail?.title ?: ""
                 originalTitle = movieDetail?.originalTitle
-                year = movieDetail?.releaseDate?.take(4)?.toIntOrNull()
+                year          = movieDetail?.releaseDate?.take(4)?.toIntOrNull()
             }
         } catch (e: Exception) { }
 
-        runAllAsync(
-            { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
-            { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+        if (title.isEmpty()) return false
+
+        invokeMovieBox(
+            tmdbId        = tmdbId,
+            title         = title,
+            originalTitle = originalTitle,
+            year          = year,
+            season        = season,
+            episode       = episode,
+            isTvSeries    = isTvSeries,
+            subtitleCallback = subtitleCallback,
+            callback      = callback
         )
+
         return true
     }
 }
