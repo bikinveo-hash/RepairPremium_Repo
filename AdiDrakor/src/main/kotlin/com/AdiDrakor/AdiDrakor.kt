@@ -2,9 +2,10 @@ package com.AdiDrakor
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.AdiDrakor.AdiDrakorExtractor.invokeVidSrc
 import com.AdiDrakor.AdiDrakorExtractor.invokeAdimoviebox
 import com.AdiDrakor.AdiDrakorExtractor.invokeAdimoviebox2
+import com.AdiDrakor.AdiDrakorExtractor.invokeKisskh
+import com.AdiDrakor.AdiDrakorExtractor.invokeVidlink
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -20,6 +21,12 @@ open class AdiDrakor : MainAPI() {
     private val tmdbAPI = "https://api.themoviedb.org/3"
     private val apiKey = tmdbApiKey
     private val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
+    /** Endpoint Vidlink (dipakai oleh invokeVidlink). Konstanta ini setara dengan
+     *  Adicinemax21.vidlinkAPI, dideklarasikan lokal supaya package AdiDrakor tetap self-contained. */
+    companion object {
+        const val vidlinkAPI = "https://vidlink.pro"
+    }
 
     override val mainPage = mainPageOf(
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=first_air_date.desc&first_air_date.lte=$today&vote_count.gte=1" to "Drama Korea Terbaru",
@@ -178,15 +185,16 @@ open class AdiDrakor : MainAPI() {
     ): Boolean {
         val isTvSeries = data.contains("/tv/")
         val parts = data.split("/")
-        
+
         val tmdbId = if (isTvSeries) parts[parts.size - 3] else data.substringAfter("/movie/").substringBefore("/")
         val season = if (isTvSeries) parts[parts.size - 2].toIntOrNull() else null
         val episode = if (isTvSeries) parts.last().toIntOrNull() else null
+        val tmdbIdInt = tmdbId.toIntOrNull()
 
         var title = ""
         var originalTitle: String? = null
         var year: Int? = null
-        
+
         try {
             if (isTvSeries) {
                 val tvDetail = app.get("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbTvDetailResponse>()
@@ -201,12 +209,15 @@ open class AdiDrakor : MainAPI() {
             }
         } catch (e: Exception) { }
 
+        // Catatan: Extractor Adicinemax21 menerima (title, orgTitle, altTitle, year, season, episode, ...).
+        // AdiDrakor tidak punya data altTitle, jadi kita pass null untuk altTitle.
         runAllAsync(
-            { invokeVidSrc(tmdbId, season, episode, isTvSeries, subtitleCallback, callback) },
-            { if (title.isNotEmpty()) invokeAdimoviebox(title, year, season, episode, subtitleCallback, callback, originalTitle) },
-            { if (title.isNotEmpty()) invokeAdimoviebox2(title, year, season, episode, subtitleCallback, callback, originalTitle) }
+            { if (title.isNotEmpty()) invokeAdimoviebox(title, originalTitle, null, year, season, episode, subtitleCallback, callback) },
+            { if (title.isNotEmpty()) invokeAdimoviebox2(title, originalTitle, null, year, season, episode, subtitleCallback, callback) },
+            { if (title.isNotEmpty()) invokeKisskh(title, originalTitle, null, year, season, episode, subtitleCallback, callback) },
+            { if (tmdbIdInt != null) invokeVidlink(tmdbIdInt, season, episode, callback) }
         )
-        
+
         return true
     }
 }
