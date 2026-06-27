@@ -35,8 +35,9 @@ object AdiXtreamExtractor : AdiXtream() {
             val subjectId = subject.subjectId ?: return
             val detailPath = subject.detailPath ?: return
 
-            val mainUrl = "https://netfilm.world"
-            val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+            // PERBAIKAN: Ganti domain ke lok-lok.cc
+            val mainUrl = "https://lok-lok.cc"
+            val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
 
             val commonHeaders = mapOf(
                 "Accept" to "application/json",
@@ -48,7 +49,7 @@ object AdiXtreamExtractor : AdiXtream() {
 
             val s = season ?: 0
             val e = episode ?: 0
-            val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$s&ep=$e&detailPath=$detailPath"
+            val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$s&ep=$e&detailPath=$detailPath"
             val specificReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&detailSe=&detailEp=&lang=en"
             val reqHeaders = commonHeaders + mapOf("referer" to specificReferer)
 
@@ -58,9 +59,9 @@ object AdiXtreamExtractor : AdiXtream() {
             // Emit streams
             streams.forEach { stream ->
                 val streamUrl = stream.url ?: return@forEach
-                val streamType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                // PERBAIKAN: Menggunakan INFER_TYPE sesuai aturan baru ExtractorAPI
                 callback.invoke(
-                    newExtractorLink(this.name, "Moviebox ${stream.resolutions ?: "?"}p", streamUrl, streamType) {
+                    newExtractorLink(this.name, "Moviebox ${stream.resolutions ?: "?"}p", streamUrl, INFER_TYPE) {
                         this.referer = mainUrl
                         this.quality = getQualityFromName(stream.resolutions)
                     }
@@ -89,13 +90,14 @@ object AdiXtreamExtractor : AdiXtream() {
         year: Int?,
         isTvSeries: Boolean
     ): MovieBoxSubject? {
-        val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+        // PERBAIKAN: Endpoint dan Header baru lok-lok.cc
+        val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
         val headers = mapOf(
             "Accept" to "application/json",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
             "x-request-lang" to "en",
-            "Origin" to "https://netfilm.world",
-            "Referer" to "https://netfilm.world/",
+            "Origin" to "https://lok-lok.cc",
+            "Referer" to "https://lok-lok.cc/",
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
@@ -255,7 +257,7 @@ object AdiXtreamExtractor : AdiXtream() {
                 if (!signCookie.isNullOrEmpty()) baseHeaders["Cookie"] = signCookie
 
                 val sourceName = "Adimoviebox2 ($languageName)"
-                callback.invoke(newExtractorLink(this.name, sourceName, streamUrl, if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
+                callback.invoke(newExtractorLink(this.name, sourceName, streamUrl, INFER_TYPE) {
                     this.quality = quality; this.headers = baseHeaders
                 })
 
