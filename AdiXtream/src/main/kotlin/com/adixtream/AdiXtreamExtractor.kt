@@ -2,7 +2,6 @@ package com.adixtream
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.mvvm.logError
 
@@ -20,7 +19,7 @@ object AdiXtreamExtractor : AdiXtream() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+        val apiBaseUrl  = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
         val playBaseUrl = "https://netfilm.world"
 
         val apiHeaders = mapOf(
@@ -32,35 +31,34 @@ object AdiXtreamExtractor : AdiXtream() {
             "User-Agent"     to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
-        // ── Helper: normalisasi judul ──────────────────────────────────────────
-        // Strip semua karakter non-alphanumeric lalu lowercase.
-        // Identik dengan teknik yang dipakai AdiMovieBox V1 & V2.
+        // ── Helper normalisasi judul ───────────────────────────────────────────
+        // Strip semua karakter non-alphanumeric lalu lowercase — identik dengan
+        // teknik di AdiMovieBox V1 & V2.
         fun normalize(s: String?): String =
             s?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
 
         // ── Step 1: Persiapan keyword ─────────────────────────────────────────
-        // Potong sebelum ":" agar subtitle panjang tidak mengganggu pencarian.
+        // Potong sebelum ":" supaya subtitle judul panjang tidak mengganggu.
         // Contoh: "Avengers: Endgame" → "Avengers"
         val searchKeyword = title.substringBefore(":").trim()
 
         val cleanTitle    = normalize(title)
-        val cleanOriginal = normalize(originalTitle)   // judul bahasa Indonesia / Korea / dll
+        val cleanOriginal = normalize(originalTitle)   // judul ID / KO / dll dari TMDB
 
-        // ── Step 2: Search ────────────────────────────────────────────────────
-        val searchUrl  = "$apiBaseUrl/subject/search"
-        val searchBody = mapOf(
+        // ── Step 2: Search (json= param — tidak butuh manual RequestBody) ─────
+        // Memakai parameter json= dari NiceHttp yang sudah di-wrap oleh CloudStream,
+        // identik dengan cara yang dipakai MovieboxProvider.
+        val searchUrl = "$apiBaseUrl/subject/search"
+        val searchPayload = mapOf(
             "keyword"     to searchKeyword,
             "page"        to "1",
             "perPage"     to "20",
             "subjectType" to "0"
-        ).toJson()
+        )
 
         val searchRes = try {
-            app.post(
-                searchUrl,
-                headers     = apiHeaders,
-                requestBody = searchBody.toRequestBody()
-            ).parsedSafe<MovieboxSearchResponse>()
+            app.post(searchUrl, headers = apiHeaders, json = searchPayload)
+                .parsedSafe<MovieboxSearchResponse>()
         } catch (e: Exception) {
             logError(e)
             return
@@ -69,12 +67,12 @@ object AdiXtreamExtractor : AdiXtream() {
         val candidates: List<MovieboxSubject> =
             searchRes?.data?.items ?: searchRes?.data?.subjectList ?: return
 
-        // ── Step 3: Smart matching (adaptasi V1 + V2) ─────────────────────────
+        // ── Step 3: Smart matching (adaptasi AdiMovieBox V1 + V2) ────────────
         //
         // Urutan pengecekan:
-        //   A. Type filter: movie vs series
-        //   B. Title match (EN): exact → dua-arah contains (butuh year)
-        //   C. Original title match (ID/KO/dll): exact → dua-arah contains (butuh year)
+        //   A. Type filter  : movie vs series
+        //   B. Title EN     : exact → dua-arah contains (wajib year agar tidak false positive)
+        //   C. Original title (ID/KO/dll): exact → dua-arah contains (wajib year)
         //   D. Lulus jika (B || C) && A
         //
         val matched: MovieboxSubject = candidates.find { subject ->
@@ -83,23 +81,23 @@ object AdiXtreamExtractor : AdiXtream() {
             val isYearMatch  = year == null || subjectYear == year
 
             // Type: series = subjectType 2, movie = 1 atau 3
-            val isTypeMatch = if (isTvSeries) subject.subjectType == 2
-                              else (subject.subjectType == 1 || subject.subjectType == 3)
+            val isTypeMatch  = if (isTvSeries) subject.subjectType == 2
+                               else (subject.subjectType == 1 || subject.subjectType == 3)
 
-            // Title EN match
+            // Title bahasa Inggris
             val isTitleMatch = cleanSubject.isNotEmpty() && cleanTitle.isNotEmpty() && (
                 cleanSubject == cleanTitle ||
                 ((cleanSubject.contains(cleanTitle) || cleanTitle.contains(cleanSubject)) && isYearMatch)
             )
 
-            // Original title match (bahasa Indonesia / bahasa lain)
-            val isOrigMatch = cleanOriginal.isNotEmpty() && cleanSubject.isNotEmpty() && (
+            // Judul asli (bahasa Indonesia / Korea / dll)
+            val isOrigMatch  = cleanOriginal.isNotEmpty() && cleanSubject.isNotEmpty() && (
                 cleanSubject == cleanOriginal ||
                 ((cleanSubject.contains(cleanOriginal) || cleanOriginal.contains(cleanSubject)) && isYearMatch)
             )
 
             (isTitleMatch || isOrigMatch) && isTypeMatch
-        } ?: return   // tidak ada hasil yang cocok → keluar
+        } ?: return   // tidak ada hasil cocok → keluar
 
         val subjectId  = matched.subjectId  ?: return
         val detailPath = matched.detailPath ?: return
@@ -125,8 +123,10 @@ object AdiXtreamExtractor : AdiXtream() {
         } ?: return
 
         // ── Step 5: Callback stream ───────────────────────────────────────────
-        streams.forEach { stream ->
-            val streamUrl = stream.url ?: return@forEach
+        // Gunakan for-loop (bukan forEach lambda) karena newExtractorLink adalah
+        // suspend fun — tidak bisa dipanggil dari dalam lambda biasa.
+        for (stream in streams) {
+            val streamUrl = stream.url ?: continue
             val quality   = when {
                 stream.resolutions?.contains("1080") == true -> Qualities.P1080.value
                 stream.resolutions?.contains("720")  == true -> Qualities.P720.value
@@ -134,17 +134,17 @@ object AdiXtreamExtractor : AdiXtream() {
                 else                                          -> Qualities.P360.value
             }
 
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name   = "Moviebox ${stream.resolutions ?: ""}p",
-                    url    = streamUrl,
-                    type   = ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = quality
-                    this.referer = playBaseUrl
-                }
-            )
+            // newExtractorLink adalah suspend → assign ke val dulu, lalu pass ke callback
+            val link = newExtractorLink(
+                source = this.name,
+                name   = "Moviebox ${stream.resolutions ?: ""}p",
+                url    = streamUrl,
+                type   = ExtractorLinkType.VIDEO
+            ) {
+                this.quality = quality
+                this.referer = playBaseUrl
+            }
+            callback(link)
         }
 
         // ── Step 6: Subtitle (dari stream pertama saja) ───────────────────────
@@ -156,20 +156,18 @@ object AdiXtreamExtractor : AdiXtream() {
                              "?format=${firstStream.format}&id=${firstStream.id}" +
                              "&subjectId=$subjectId&detailPath=$detailPath"
 
-            app.get(captionUrl, headers = playHeaders)
+            val captions = app.get(captionUrl, headers = playHeaders)
                 .parsedSafe<MovieboxCaptionResponse>()
-                ?.data?.captions
-                ?.forEach { cap ->
-                    subtitleCallback.invoke(
-                        newSubtitleFile(cap.lanName ?: "Unknown", cap.url ?: return@forEach)
-                    )
-                }
+                ?.data?.captions ?: return
+
+            // Sama: for-loop karena newSubtitleFile adalah suspend fun
+            for (cap in captions) {
+                val capUrl = cap.url ?: continue
+                val sub = newSubtitleFile(cap.lanName ?: "Unknown", capUrl)
+                subtitleCallback(sub)
+            }
         } catch (e: Exception) {
             logError(e)
         }
     }
-
-    // ── Helper: buat RequestBody dari String JSON ──────────────────────────────
-    private fun String.toRequestBody() =
-        toRequestBody(okhttp3.MediaType.Companion.toMediaTypeOrNull("application/json"))
 }
