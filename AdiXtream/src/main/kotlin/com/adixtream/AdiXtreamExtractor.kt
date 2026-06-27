@@ -17,6 +17,9 @@ import android.annotation.SuppressLint
 
 object AdiXtreamExtractor : AdiXtream() {
 
+    // TOKEN OTENTIKASI (Dari hasil intercept, valid hingga Juli 2026)
+    private const val BEARER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc4MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
+
     // ================== EKSTRAKTOR MOVIEBOX (Smart Search) ==================
     suspend fun invokeMovieBox(
         tmdbId: String,
@@ -35,29 +38,29 @@ object AdiXtreamExtractor : AdiXtream() {
             val subjectId = subject.subjectId ?: return
             val detailPath = subject.detailPath ?: return
 
-            val mainUrl = "https://lok-lok.cc"
-            val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
+            // PERBAIKAN: Gunakan domain moviebox.ph sesuai penemuan terbaru
+            val mainUrl = "https://moviebox.ph"
+            val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
 
-            // Header WAJIB identik dengan Adimoviebox.kt.txt (Tanpa User-Agent custom)
+            // PERBAIKAN: Tambahkan Bearer Token ke dalam header
             val commonHeaders = mapOf(
                 "origin" to mainUrl,
                 "referer" to "$mainUrl/",
                 "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-                "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+                "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "authorization" to "Bearer $BEARER_TOKEN"
             )
 
             val s = season ?: 0
             val e = episode ?: 0
             val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$s&ep=$e&detailPath=$detailPath"
             
-            // Referer khusus untuk play (meniru persis yang ada di versi asli)
             val specificReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
             val reqHeaders = commonHeaders + mapOf("referer" to specificReferer)
 
             val playResText = app.get(playUrl, headers = reqHeaders).text
             val streams = tryParseJson<MovieBoxPlayResponse>(playResText)?.data?.streams ?: return
 
-            // Emit streams
             streams.forEach { stream ->
                 val streamUrl = stream.url ?: return@forEach
                 callback.invoke(
@@ -68,7 +71,6 @@ object AdiXtreamExtractor : AdiXtream() {
                 )
             }
 
-            // Ambil subtitle dari stream pertama saja
             val firstStream = streams.firstOrNull()
             if (firstStream != null) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${firstStream.format}&id=${firstStream.id}&subjectId=$subjectId&detailPath=$detailPath"
@@ -90,12 +92,13 @@ object AdiXtreamExtractor : AdiXtream() {
         year: Int?,
         isTvSeries: Boolean
     ): MovieBoxSubject? {
-        val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
+        val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
         val commonHeaders = mapOf(
-            "origin" to "https://lok-lok.cc",
-            "referer" to "https://lok-lok.cc/",
+            "origin" to "https://moviebox.ph",
+            "referer" to "https://moviebox.ph/",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-            "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+            "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "authorization" to "Bearer $BEARER_TOKEN"
         )
 
         val candidatesList = mutableListOf<String>()
@@ -109,12 +112,12 @@ object AdiXtreamExtractor : AdiXtream() {
         var allCandidates: List<MovieBoxSubject> = emptyList()
 
         for (keyword in candidatesList) {
-            // Parameter perPage dan subjectType menggunakan String "0" meniru Adimoviebox.kt asli
+            // Payload disesuaikan dengan respon log yang sukses
             val payload = mapOf(
                 "keyword" to keyword,
-                "page" to "1",
-                "perPage" to "0",
-                "subjectType" to "0"
+                "page" to 1,
+                "perPage" to 10,
+                "subjectType" to 0
             ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
             val res = app.post("$apiBaseUrl/subject/search", headers = commonHeaders, requestBody = payload).text
@@ -128,8 +131,6 @@ object AdiXtreamExtractor : AdiXtream() {
             }
         }
 
-        // SMART FALLBACK: Jika tidak ada kecocokan 100%, ambil yang tipenya sesuai. 
-        // Jika API tidak mereturn tipe, ambil saja hasil paling pertama agar tidak null.
         return allCandidates.firstOrNull { subject ->
             subject.subjectType == null ||
             (isTvSeries && subject.subjectType == 2) ||
@@ -149,7 +150,6 @@ object AdiXtreamExtractor : AdiXtream() {
         if (cleanSubject.isEmpty() || cleanQuery.isEmpty()) return false
 
         val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
-        // Toleransi selisih rilis 1 tahun antara TMDB dan LokLok agar tetap match
         val yearOk = year == null || subjectYear == null || Math.abs(subjectYear - year) <= 1
 
         val typeOk = subject.subjectType == null ||
@@ -166,7 +166,6 @@ object AdiXtreamExtractor : AdiXtream() {
         return exactMatch || containsMatch
     }
 
-    // ================== SMART SEARCH UTILITIES ==================
     private fun normalizeTitle(title: String): String =
         title.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
 
