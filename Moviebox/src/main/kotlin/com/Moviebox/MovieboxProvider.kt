@@ -5,21 +5,27 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.nicehttp.RequestBodyTypes
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class MovieboxProvider : MainAPI() {
     override var name = "Moviebox"
     
-    // Domain Utama (Digunakan untuk API Pemutar Video)
-    override var mainUrl = "https://netfilm.world"
+    // Domain Utama (Digunakan untuk Origin dan Referer)
+    override var mainUrl = "https://moviebox.ph"
     
-    // Domain Khusus API (Digunakan untuk Home, Search, Detail, dan Subtitle)
+    // Domain Khusus API (Terpusat)
     private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff" 
     
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Header dengan penyamaran Browser dan Referer dinamis
+    // TOKEN OTENTIKASI (Dari hasil intercept, valid hingga Juli 2026)
+    private val bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc4MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
+
+    // Header dengan perlindungan anti-Cloudflare (Tanpa custom User-Agent) dan otorisasi Bearer
     private fun getApiHeaders(customReferer: String = "$mainUrl/"): Map<String, String> {
         return mapOf(
             "Accept" to "application/json",
@@ -27,50 +33,51 @@ class MovieboxProvider : MainAPI() {
             "x-request-lang" to "en",
             "Origin" to mainUrl,
             "Referer" to customReferer,
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Authorization" to "Bearer $bearerToken"
         )
     }
 
     // --- DATA CLASSES ---
-    data class HomeResponse(@JsonProperty("data") val data: HomeData?)
-    data class HomeData(@JsonProperty("operatingList") val operatingList: List<OperatingList>?)
-    data class OperatingList(@JsonProperty("title") val title: String?, @JsonProperty("subjects") val subjects: List<Subject>?, @JsonProperty("banner") val banner: Banner?)
-    data class Banner(@JsonProperty("items") val items: List<BannerItem>?)
-    data class BannerItem(@JsonProperty("subject") val subject: Subject?)
+    // Diperbarui dengan @param:JsonProperty agar aman saat di-compile / minify (R8/ProGuard)
+    data class HomeResponse(@param:JsonProperty("data") val data: HomeData?)
+    data class HomeData(@param:JsonProperty("operatingList") val operatingList: List<OperatingList>?)
+    data class OperatingList(@param:JsonProperty("title") val title: String?, @param:JsonProperty("subjects") val subjects: List<Subject>?, @param:JsonProperty("banner") val banner: Banner?)
+    data class Banner(@param:JsonProperty("items") val items: List<BannerItem>?)
+    data class BannerItem(@param:JsonProperty("subject") val subject: Subject?)
     
-    data class SearchApiResponse(@JsonProperty("data") val data: SearchData?)
-    data class SearchData(@JsonProperty("subjectList") val subjectList: List<Subject>?, @JsonProperty("items") val items: List<Subject>?, @JsonProperty("list") val list: List<Subject>?)
-    data class Subject(@JsonProperty("title") val title: String?, @JsonProperty("subjectId") val subjectId: String?, @JsonProperty("subjectType") val subjectType: Int?, @JsonProperty("detailPath") val detailPath: String?, @JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("cover") val cover: ImageInfo?)
-    data class ImageInfo(@JsonProperty("url") val url: String?)
+    data class SearchApiResponse(@param:JsonProperty("data") val data: SearchData?)
+    data class SearchData(@param:JsonProperty("subjectList") val subjectList: List<Subject>?, @param:JsonProperty("items") val items: List<Subject>?, @param:JsonProperty("list") val list: List<Subject>?)
+    data class Subject(@param:JsonProperty("title") val title: String?, @param:JsonProperty("subjectId") val subjectId: String?, @param:JsonProperty("subjectType") val subjectType: Int?, @param:JsonProperty("detailPath") val detailPath: String?, @param:JsonProperty("releaseDate") val releaseDate: String?, @param:JsonProperty("cover") val cover: ImageInfo?)
+    data class ImageInfo(@param:JsonProperty("url") val url: String?)
     
-    data class DetailResponse(@JsonProperty("data") val data: DetailDataWrapper?)
-    data class DetailDataWrapper(@JsonProperty("subject") val subject: DetailData?, @JsonProperty("stars") val stars: List<Star>?, @JsonProperty("resource") val resource: ResourceData?)
-    data class DetailData(@JsonProperty("subjectId") val subjectId: String?, @JsonProperty("title") val title: String?, @JsonProperty("description") val description: String?, @JsonProperty("releaseDate") val releaseDate: String?, @JsonProperty("cover") val cover: ImageInfo?, @JsonProperty("imdbRatingValue") val imdbRatingValue: String?, @JsonProperty("subjectType") val subjectType: Int?, @JsonProperty("episodes") val episodes: List<EpisodeInfo>?)
-    data class Star(@JsonProperty("name") val name: String?, @JsonProperty("avatarUrl") val avatarUrl: String?, @JsonProperty("character") val character: String?)
-    data class ResourceData(@JsonProperty("seasons") val seasons: List<SeasonDataApi>?)
-    data class SeasonDataApi(@JsonProperty("se") val se: Int?, @JsonProperty("maxEp") val maxEp: Int?)
-    data class EpisodeInfo(@JsonProperty("episodeId") val episodeId: String?, @JsonProperty("title") val title: String?, @JsonProperty("episodeNum") val episodeNum: Int?, @JsonProperty("seasonNum") val seasonNum: Int?)
+    data class DetailResponse(@param:JsonProperty("data") val data: DetailDataWrapper?)
+    data class DetailDataWrapper(@param:JsonProperty("subject") val subject: DetailData?, @param:JsonProperty("stars") val stars: List<Star>?, @param:JsonProperty("resource") val resource: ResourceData?)
+    data class DetailData(@param:JsonProperty("subjectId") val subjectId: String?, @param:JsonProperty("title") val title: String?, @param:JsonProperty("description") val description: String?, @param:JsonProperty("releaseDate") val releaseDate: String?, @param:JsonProperty("cover") val cover: ImageInfo?, @param:JsonProperty("imdbRatingValue") val imdbRatingValue: String?, @param:JsonProperty("subjectType") val subjectType: Int?, @param:JsonProperty("episodes") val episodes: List<EpisodeInfo>?)
+    data class Star(@param:JsonProperty("name") val name: String?, @param:JsonProperty("avatarUrl") val avatarUrl: String?, @param:JsonProperty("character") val character: String?)
+    data class ResourceData(@param:JsonProperty("seasons") val seasons: List<SeasonDataApi>?)
+    data class SeasonDataApi(@param:JsonProperty("se") val se: Int?, @param:JsonProperty("maxEp") val maxEp: Int?)
+    data class EpisodeInfo(@param:JsonProperty("episodeId") val episodeId: String?, @param:JsonProperty("title") val title: String?, @param:JsonProperty("episodeNum") val episodeNum: Int?, @param:JsonProperty("seasonNum") val seasonNum: Int?)
     
-    data class RecResponse(@JsonProperty("data") val data: RecData?)
-    data class RecData(@JsonProperty("items") val items: List<Subject>?)
+    data class RecResponse(@param:JsonProperty("data") val data: RecData?)
+    data class RecData(@param:JsonProperty("items") val items: List<Subject>?)
     
     data class LinkData(
-        @JsonProperty("subjectId") val subjectId: String, 
-        @JsonProperty("detailPath") val detailPath: String, 
-        @JsonProperty("season") val season: Int = 0, 
-        @JsonProperty("episode") val episode: Int = 0
+        @param:JsonProperty("subjectId") val subjectId: String, 
+        @param:JsonProperty("detailPath") val detailPath: String, 
+        @param:JsonProperty("season") val season: Int = 0, 
+        @param:JsonProperty("episode") val episode: Int = 0
     )
     
-    data class PlayResponse(@JsonProperty("data") val data: PlayData?)
-    data class PlayData(@JsonProperty("streams") val streams: List<StreamItem>?)
-    data class StreamItem(@JsonProperty("id") val id: String?, @JsonProperty("url") val url: String?, @JsonProperty("resolutions") val resolutions: String?, @JsonProperty("format") val format: String?)
-    data class CaptionResponse(@JsonProperty("data") val data: CaptionData?)
-    data class CaptionData(@JsonProperty("captions") val captions: List<CaptionItem>?)
-    data class CaptionItem(@JsonProperty("lanName") val lanName: String?, @JsonProperty("url") val url: String?)
+    data class PlayResponse(@param:JsonProperty("data") val data: PlayData?)
+    data class PlayData(@param:JsonProperty("streams") val streams: List<StreamItem>?)
+    data class StreamItem(@param:JsonProperty("id") val id: String?, @param:JsonProperty("url") val url: String?, @param:JsonProperty("resolutions") val resolutions: String?, @param:JsonProperty("format") val format: String?)
+    data class CaptionResponse(@param:JsonProperty("data") val data: CaptionData?)
+    data class CaptionData(@param:JsonProperty("captions") val captions: List<CaptionItem>?)
+    data class CaptionItem(@param:JsonProperty("lanName") val lanName: String?, @param:JsonProperty("url") val url: String?)
 
     // --- FUNGSI UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val apiUrl = "$apiBaseUrl/home?host=netfilm.world"
+        val apiUrl = "$apiBaseUrl/home?host=moviebox.ph"
         val response = app.get(apiUrl, headers = getApiHeaders()).parsedSafe<HomeResponse>()
         
         val homeItems = mutableListOf<HomePageList>()
@@ -87,15 +94,15 @@ class MovieboxProvider : MainAPI() {
         val apiUrl = "$apiBaseUrl/subject/search"
         val payload = mapOf(
             "keyword" to query,
-            "page" to "1",
+            "page" to 1,
             "perPage" to 28,
             "subjectType" to 0
-        )
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         
         val response = app.post(
             apiUrl, 
             headers = getApiHeaders(), 
-            json = payload 
+            requestBody = payload 
         ).parsedSafe<SearchApiResponse>()
         
         val list = response?.data?.items ?: response?.data?.subjectList ?: emptyList()
@@ -117,14 +124,13 @@ class MovieboxProvider : MainAPI() {
         }
         
         return if (res.subjectType == 1) { 
-            // FINAL FIX: Movie (Type 1) SELALU menggunakan 0, 0 sesuai hasil Termux
             newMovieLoadResponse(res.title ?: "", url, TvType.Movie, LinkData(res.subjectId ?: "", slug, 0, 0).toJson()) {
                 this.posterUrl = res.cover?.url
                 this.plot = res.description
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
                 this.recommendations = recs
                 this.actors = castList
-                res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
+                this.score = Score.from10(res.imdbRatingValue)
             }
         } else {
             val episodesList = mutableListOf<Episode>()
@@ -164,7 +170,7 @@ class MovieboxProvider : MainAPI() {
                 this.year = res.releaseDate?.take(4)?.toIntOrNull()
                 this.recommendations = recs
                 this.actors = castList
-                res.imdbRatingValue?.let { this.score = Score.from(it, 10) }
+                this.score = Score.from10(res.imdbRatingValue)
             }
         }
     }
@@ -172,10 +178,8 @@ class MovieboxProvider : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val linkData = tryParseJson<LinkData>(data) ?: return false
         
-        // FINAL FIX: API Play ditembak ke mainUrl (netfilm.world)
-        val playUrl = "$mainUrl/wefeed-h5api-bff/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
+        val playUrl = "$apiBaseUrl/subject/play?subjectId=${linkData.subjectId}&se=${linkData.season}&ep=${linkData.episode}&detailPath=${linkData.detailPath}"
         
-        // FINAL FIX: Menggunakan Referer spesifik yang panjang agar server tidak menolak
         val specificReferer = "$mainUrl/spa/videoPlayPage/movies/${linkData.detailPath}?id=${linkData.subjectId}&type=/movie/detail&detailSe=&detailEp=&lang=en"
         val reqHeaders = getApiHeaders(specificReferer)
         
@@ -190,16 +194,15 @@ class MovieboxProvider : MainAPI() {
             callback(
                 newExtractorLink(
                     source = this.name,
-                    name = "${this.name} ${stream.resolutions}p",
+                    name = "${this.name} ${stream.resolutions ?: "?"}p",
                     url = stream.url ?: "",
-                    type = ExtractorLinkType.VIDEO
+                    type = INFER_TYPE
                 ) {
                     this.quality = streamQuality
                     this.referer = mainUrl
                 }
             )
             
-            // Subtitle tetap di apiBaseUrl (aoneroom)
             if (stream == streams.firstOrNull()) {
                 val captionUrl = "$apiBaseUrl/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${linkData.subjectId}&detailPath=${linkData.detailPath}"
                 app.get(captionUrl, headers = reqHeaders).parsedSafe<CaptionResponse>()?.data?.captions?.forEach { cap ->
