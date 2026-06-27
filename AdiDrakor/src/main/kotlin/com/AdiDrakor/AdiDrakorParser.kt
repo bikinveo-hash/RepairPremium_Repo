@@ -57,7 +57,7 @@ data class Adimoviebox2Subject(
     @JsonProperty("subjectId") val subjectId: String? = null,
     @JsonProperty("title") val title: String? = null,
     @JsonProperty("releaseDate") val releaseDate: String? = null,
-    @JsonProperty("subjectType") val subjectType: Int? = null 
+    @JsonProperty("subjectType") val subjectType: Int? = null
 )
 data class Adimoviebox2PlayResponse(
     @JsonProperty("data") val data: Adimoviebox2PlayData? = null
@@ -70,7 +70,7 @@ data class Adimoviebox2Stream(
     @JsonProperty("url") val url: String? = null,
     @JsonProperty("format") val format: String? = null,
     @JsonProperty("resolutions") val resolutions: String? = null,
-    @JsonProperty("signCookie") val signCookie: String? = null 
+    @JsonProperty("signCookie") val signCookie: String? = null
 )
 data class Adimoviebox2SubtitleResponse(
     @JsonProperty("data") val data: Adimoviebox2SubtitleData? = null
@@ -84,3 +84,12 @@ data class Adimoviebox2Caption(
     @JsonProperty("lanName") val lanName: String? = null,
     @JsonProperty("lan") val lan: String? = null
 )
+
+// ================== VIDLINK DATA CLASSES (dari Adicinemax21) ==================
+data class VidlinkSources(
+    @JsonProperty("stream") val stream: VidlinkStream? = null,
+) {
+    data class VidlinkStream(
+        @JsonProperty("playlist") val playlist: String? = null,
+    )
+}
