@@ -17,42 +17,109 @@ data class TmdbSeason(@JsonProperty("season_number") val seasonNumber: Int, @Jso
 data class TmdbSeasonDetail(@JsonProperty("episodes") val episodes: List<TmdbEpisodeDetail>)
 data class TmdbEpisodeDetail(@JsonProperty("episode_number") val episodeNumber: Int, @JsonProperty("name") val name: String?, @JsonProperty("overview") val overview: String?, @JsonProperty("still_path") val stillPath: String?, @JsonProperty("air_date") val airDate: String?, @JsonProperty("vote_average") val voteAverage: Double?)
 
+// ================== ADIMOVIEBOX (OLD/V1) DATA CLASSES ==================
+data class AdimovieboxResponse(
+    @JsonProperty("data") val data: AdimovieboxData? = null,
+)
+data class AdimovieboxData(
+    @JsonProperty("items") val items: ArrayList<AdimovieboxItem>? = arrayListOf(),
+    @JsonProperty("streams") val streams: ArrayList<AdimovieboxStreamItem>? = arrayListOf(),
+    @JsonProperty("captions") val captions: ArrayList<AdimovieboxCaptionItem>? = arrayListOf(),
+)
+data class AdimovieboxItem(
+    @JsonProperty("subjectId") val subjectId: String? = null,
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("releaseDate") val releaseDate: String? = null,
+    @JsonProperty("detailPath") val detailPath: String? = null,
+    @JsonProperty("subjectType") val subjectType: Int? = null // DITAMBAHKAN SESUAI AUDIT
+)
+data class AdimovieboxStreamItem(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("format") val format: String? = null,
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("resolutions") val resolutions: String? = null,
+)
+data class AdimovieboxCaptionItem(
+    @JsonProperty("lanName") val lanName: String? = null,
+    @JsonProperty("url") val url: String? = null,
+)
+
+// ================== ADIMOVIEBOX 2 (NEW) DATA CLASSES ==================
+data class Adimoviebox2SearchResponse(
+    @JsonProperty("data") val data: Adimoviebox2SearchData? = null
+)
+data class Adimoviebox2SearchData(
+    @JsonProperty("results") val results: ArrayList<Adimoviebox2SearchResult>? = arrayListOf()
+)
+data class Adimoviebox2SearchResult(
+    @JsonProperty("subjects") val subjects: ArrayList<Adimoviebox2Subject>? = arrayListOf()
+)
+data class Adimoviebox2Subject(
+    @JsonProperty("subjectId") val subjectId: String? = null,
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("releaseDate") val releaseDate: String? = null,
+    @JsonProperty("subjectType") val subjectType: Int? = null 
+)
+data class Adimoviebox2PlayResponse(
+    @JsonProperty("data") val data: Adimoviebox2PlayData? = null
+)
+data class Adimoviebox2PlayData(
+    @JsonProperty("streams") val streams: ArrayList<Adimoviebox2Stream>? = arrayListOf()
+)
+data class Adimoviebox2Stream(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("format") val format: String? = null,
+    @JsonProperty("resolutions") val resolutions: String? = null,
+    @JsonProperty("signCookie") val signCookie: String? = null 
+)
+data class Adimoviebox2SubtitleResponse(
+    @JsonProperty("data") val data: Adimoviebox2SubtitleData? = null
+)
+data class Adimoviebox2SubtitleData(
+    @JsonProperty("extCaptions") val extCaptions: ArrayList<Adimoviebox2Caption>? = arrayListOf()
+)
+data class Adimoviebox2Caption(
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("language") val language: String? = null,
+    @JsonProperty("lanName") val lanName: String? = null,
+    @JsonProperty("lan") val lan: String? = null
+)
+
 // ================== MOVIEBOX DATA CLASSES ==================
-data class MovieboxSearchResponse(
-    @JsonProperty("data") val data: MovieboxSearchData? = null
+data class MovieBoxSearchResponse(
+    @JsonProperty("data") val data: MovieBoxSearchData? = null
 )
-data class MovieboxSearchData(
-    @JsonProperty("items")       val items:       List<MovieboxSubject>? = null,
-    @JsonProperty("subjectList") val subjectList: List<MovieboxSubject>? = null
+data class MovieBoxSearchData(
+    @JsonProperty("subjectList") val subjectList: List<MovieBoxSubject>? = null,
+    @JsonProperty("items") val items: List<MovieBoxSubject>? = null
 )
-data class MovieboxSubject(
-    @JsonProperty("subjectId")   val subjectId:   String? = null,
-    @JsonProperty("title")       val title:       String? = null,
-    @JsonProperty("subjectType") val subjectType: Int?    = null,
-    @JsonProperty("detailPath")  val detailPath:  String? = null,
+data class MovieBoxSubject(
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("subjectId") val subjectId: String? = null,
+    @JsonProperty("subjectType") val subjectType: Int? = null,
+    @JsonProperty("detailPath") val detailPath: String? = null,
     @JsonProperty("releaseDate") val releaseDate: String? = null
 )
-
-data class MovieboxPlayResponse(
-    @JsonProperty("data") val data: MovieboxPlayData? = null
+data class MovieBoxPlayResponse(
+    @JsonProperty("data") val data: MovieBoxPlayData? = null
 )
-data class MovieboxPlayData(
-    @JsonProperty("streams") val streams: List<MovieboxStreamItem>? = null
+data class MovieBoxPlayData(
+    @JsonProperty("streams") val streams: List<MovieBoxStreamItem>? = null
 )
-data class MovieboxStreamItem(
-    @JsonProperty("id")          val id:          String? = null,
-    @JsonProperty("url")         val url:         String? = null,
+data class MovieBoxStreamItem(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("url") val url: String? = null,
     @JsonProperty("resolutions") val resolutions: String? = null,
-    @JsonProperty("format")      val format:      String? = null
+    @JsonProperty("format") val format: String? = null
 )
-
-data class MovieboxCaptionResponse(
-    @JsonProperty("data") val data: MovieboxCaptionData? = null
+data class MovieBoxCaptionResponse(
+    @JsonProperty("data") val data: MovieBoxCaptionData? = null
 )
-data class MovieboxCaptionData(
-    @JsonProperty("captions") val captions: List<MovieboxCaptionItem>? = null
+data class MovieBoxCaptionData(
+    @JsonProperty("captions") val captions: List<MovieBoxCaptionItem>? = null
 )
-data class MovieboxCaptionItem(
+data class MovieBoxCaptionItem(
     @JsonProperty("lanName") val lanName: String? = null,
-    @JsonProperty("url")     val url:     String? = null
+    @JsonProperty("url") val url: String? = null
 )
