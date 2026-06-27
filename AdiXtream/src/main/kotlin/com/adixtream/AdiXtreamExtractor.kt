@@ -35,22 +35,24 @@ object AdiXtreamExtractor : AdiXtream() {
             val subjectId = subject.subjectId ?: return
             val detailPath = subject.detailPath ?: return
 
-            // PERBAIKAN: Ganti domain ke lok-lok.cc
             val mainUrl = "https://lok-lok.cc"
             val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
 
+            // WAJIB: Samakan persis dengan Adimoviebox.kt.txt.
+            // Jangan gunakan User-Agent desktop agar terhindar dari blokir Cloudflare (TLS mismatch).
             val commonHeaders = mapOf(
-                "Accept" to "application/json",
+                "origin" to mainUrl,
+                "referer" to "$mainUrl/",
                 "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-                "x-request-lang" to "en",
-                "Origin" to mainUrl,
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
             )
 
             val s = season ?: 0
             val e = episode ?: 0
             val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$s&ep=$e&detailPath=$detailPath"
-            val specificReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&detailSe=&detailEp=&lang=en"
+            
+            // Referer khusus untuk play, hardcoded type=/movie/detail sama seperti provider aslinya
+            val specificReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
             val reqHeaders = commonHeaders + mapOf("referer" to specificReferer)
 
             val playResText = app.get(playUrl, headers = reqHeaders).text
@@ -59,7 +61,6 @@ object AdiXtreamExtractor : AdiXtream() {
             // Emit streams
             streams.forEach { stream ->
                 val streamUrl = stream.url ?: return@forEach
-                // PERBAIKAN: Menggunakan INFER_TYPE sesuai aturan baru ExtractorAPI
                 callback.invoke(
                     newExtractorLink(this.name, "Moviebox ${stream.resolutions ?: "?"}p", streamUrl, INFER_TYPE) {
                         this.referer = mainUrl
@@ -90,15 +91,15 @@ object AdiXtreamExtractor : AdiXtream() {
         year: Int?,
         isTvSeries: Boolean
     ): MovieBoxSubject? {
-        // PERBAIKAN: Endpoint dan Header baru lok-lok.cc
+        val mainUrl = "https://lok-lok.cc"
         val apiBaseUrl = "https://lok-lok.cc/wefeed-h5api-bff"
-        val headers = mapOf(
-            "Accept" to "application/json",
+        
+        // Header disamakan persis dengan provider asli
+        val commonHeaders = mapOf(
+            "origin" to mainUrl,
+            "referer" to "$mainUrl/",
             "x-client-info" to """{"timezone":"Asia/Jakarta"}""",
-            "x-request-lang" to "en",
-            "Origin" to "https://lok-lok.cc",
-            "Referer" to "https://lok-lok.cc/",
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
         // Kumpulkan kandidat query: title (English display) + originalTitle (kalau beda)
@@ -114,14 +115,15 @@ object AdiXtreamExtractor : AdiXtream() {
 
         // Pass 1-3: coba tiap kandidat, filter dengan smart matching
         for (keyword in candidatesList) {
+            // PERBAIKAN: Gunakan format String "0" alih-alih Integer 0 agar parser server tidak melempar error
             val payload = mapOf(
                 "keyword" to keyword,
                 "page" to "1",
-                "perPage" to 28,
-                "subjectType" to 0
+                "perPage" to "0",
+                "subjectType" to "0"
             ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-            val res = app.post("$apiBaseUrl/subject/search", headers = headers, requestBody = payload).text
+            val res = app.post("$apiBaseUrl/subject/search", headers = commonHeaders, requestBody = payload).text
             val parsed = tryParseJson<MovieBoxSearchResponse>(res)
             val items = parsed?.data?.items ?: parsed?.data?.subjectList ?: emptyList()
 
@@ -198,7 +200,6 @@ object AdiXtreamExtractor : AdiXtream() {
             
             val isYearMatch = year == null || subjectYear == year
             
-            // Pencocokan dua arah seperti di V1
             val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanSearchTitle.isNotEmpty() && 
                     (cleanSubjectTitle == cleanSearchTitle || 
                     ((cleanSubjectTitle.contains(cleanSearchTitle) || cleanSearchTitle.contains(cleanSubjectTitle)) && isYearMatch))
