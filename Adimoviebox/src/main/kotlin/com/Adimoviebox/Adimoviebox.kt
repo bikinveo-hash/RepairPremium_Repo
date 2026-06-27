@@ -11,14 +11,11 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class Adimoviebox : MainAPI() {
-    // UPDATED: Main URL baru sesuai log
-    override var mainUrl = "https://lok-lok.cc"
+    // UPDATED: Main URL baru menggunakan moviebox.ph
+    override var mainUrl = "https://moviebox.ph"
     
-    // UPDATED: API untuk Playback (lok-lok.cc)
-    private val apiUrl = "https://lok-lok.cc" 
-    
-    // UPDATED: API untuk Detail dan Home (aoneroom)
-    private val homeApiUrl = "https://h5-api.aoneroom.com"
+    // UPDATED: Menggunakan satu Base API URL yang terpusat
+    private val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
 
     override val instantLinkLoading = true
     override var name = "Adimoviebox"
@@ -32,12 +29,16 @@ class Adimoviebox : MainAPI() {
         TvType.AsianDrama
     )
 
-    // Header khusus agar request diterima server
+    // TOKEN OTENTIKASI (Berlaku hingga Juli 2026)
+    private val bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc4MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
+
+    // Header disempurnakan dengan otorisasi Bearer Token
     private val commonHeaders = mapOf(
         "origin" to mainUrl,
         "referer" to "$mainUrl/",
         "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}",
-        "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+        "accept-language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "authorization" to "Bearer $bearerToken"
     )
 
     // --- BAGIAN KATEGORI LENGKAP ---
@@ -60,8 +61,7 @@ class Adimoviebox : MainAPI() {
     ): HomePageResponse {
         val id = request.data 
         
-        // UPDATED: Path baru 'wefeed-h5api-bff'
-        val targetUrl = "$homeApiUrl/wefeed-h5api-bff/ranking-list/content?id=$id&page=$page&perPage=12"
+        val targetUrl = "$apiBaseUrl/ranking-list/content?id=$id&page=$page&perPage=12"
 
         val responseData = app.get(targetUrl, headers = commonHeaders).parsedSafe<Media>()?.data
         val listFilm = responseData?.subjectList ?: responseData?.items
@@ -76,9 +76,8 @@ class Adimoviebox : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // UPDATED: Path baru 'wefeed-h5api-bff' dan menghapus '/web'
         return app.post(
-            "$apiUrl/wefeed-h5api-bff/subject/search", 
+            "$apiBaseUrl/subject/search", 
             headers = commonHeaders,
             requestBody = mapOf(
                 "keyword" to query,
@@ -91,21 +90,14 @@ class Adimoviebox : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val id = url.substringAfterLast("?id=") // Mengambil ID jika format URL berubah
-            .ifEmpty { url.substringAfterLast("/") } // Fallback ke cara lama
+        val id = url.substringAfterLast("?id=")
+            .ifEmpty { url.substringAfterLast("/") }
         
-        // UPDATED: Menggunakan API Detail baru
-        // Kita coba fetch detail menggunakan subjectId atau detailPath jika tersedia
-        val detailUrl = "$homeApiUrl/wefeed-h5api-bff/detail?detailPath=$id" // Coba pakai slug dulu
-        
-        // Logika fallback: Kadang ID di URL adalah numeric, kadang slug.
-        // API logs menunjukkan penggunaan parameter 'detailPath' tapi juga 'subjectId' di situasi lain.
-        // Kita coba request ke endpoint detail.
+        val detailUrl = "$apiBaseUrl/detail?detailPath=$id" 
         
         val response = app.get(detailUrl, headers = commonHeaders).parsedSafe<MediaDetail>()
         
-        // Jika gagal dengan detailPath, coba endpoint subject/detail lama dengan path baru
-        val document = response?.data ?: app.get("$apiUrl/wefeed-h5api-bff/subject/detail?subjectId=$id", headers = commonHeaders)
+        val document = response?.data ?: app.get("$apiBaseUrl/subject/detail?subjectId=$id", headers = commonHeaders)
             .parsedSafe<MediaDetail>()?.data
             ?: throw ErrorLoadingException("Gagal memuat detail konten.")
         
@@ -119,11 +111,10 @@ class Adimoviebox : MainAPI() {
         val description = subject?.description
         val trailer = subject?.trailer?.videoAddress?.url
         
-        // FIX: Menghapus .toString() yang redundant
         val score = Score.from10(subject?.imdbRatingValue) 
         
         val realId = subject?.subjectId ?: id
-        val detailPath = subject?.detailPath ?: id // Penting untuk link load
+        val detailPath = subject?.detailPath ?: id
 
         val actors = document.stars?.mapNotNull { cast ->
             ActorData(
@@ -136,7 +127,7 @@ class Adimoviebox : MainAPI() {
         }?.distinctBy { it.actor }
 
         val recommendations =
-            app.get("$apiUrl/wefeed-h5api-bff/subject/detail-rec?subjectId=$realId&page=1&perPage=12", headers = commonHeaders)
+            app.get("$apiBaseUrl/subject/detail-rec?subjectId=$realId&page=1&perPage=12", headers = commonHeaders)
                 .parsedSafe<Media>()?.data?.items?.map {
                     it.toSearchResponse(this)
                 }
@@ -151,7 +142,7 @@ class Adimoviebox : MainAPI() {
                                 realId,
                                 seasons.se,
                                 episode,
-                                detailPath // Kirim detailPath untuk loadLinks
+                                detailPath 
                             ).toJson()
                         ) {
                             this.season = seasons.se
@@ -196,13 +187,12 @@ class Adimoviebox : MainAPI() {
     ): Boolean {
 
         val media = parseJson<LoadData>(data)
-        // UPDATED: Referer harus sesuai log
+        
         val referer = "$mainUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
         val specificHeaders = commonHeaders + ("referer" to referer)
 
-        // UPDATED: Endpoint play baru memerlukan detailPath
         val streams = app.get(
-            "$apiUrl/wefeed-h5api-bff/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}&detailPath=${media.detailPath}",
+            "$apiBaseUrl/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}&detailPath=${media.detailPath}",
             headers = specificHeaders
         ).parsedSafe<Media>()?.data?.streams
 
@@ -224,9 +214,8 @@ class Adimoviebox : MainAPI() {
         val format = streams?.firstOrNull()?.format
 
         if (id != null && format != null) {
-            // UPDATED: Endpoint caption path baru
             app.get(
-                "$apiUrl/wefeed-h5api-bff/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+                "$apiBaseUrl/subject/caption?format=$format&id=$id&subjectId=${media.id}",
                 headers = specificHeaders
             ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
                 subtitleCallback.invoke(
@@ -242,7 +231,7 @@ class Adimoviebox : MainAPI() {
     }
 }
 
-// --- DATA CLASSES (Diperbaiki dengan @param:JsonProperty) ---
+// --- DATA CLASSES ---
 
 data class LoadData(
     val id: String? = null,
@@ -316,7 +305,6 @@ data class Items(
     @param:JsonProperty("detailPath") val detailPath: String? = null,
 ) {
     fun toSearchResponse(provider: Adimoviebox): SearchResponse {
-        // Link detail sekarang menggunakan path
         val url = "${provider.mainUrl}/detail/${detailPath ?: subjectId}"
         
         val posterImage = cover?.url
@@ -328,7 +316,6 @@ data class Items(
             false
         ) {
             this.posterUrl = posterImage
-            // FIX TERAKHIR: Menghapus .toString() karena imdbRatingValue sudah String?
             this.score = Score.from10(imdbRatingValue)
             this.year = releaseDate?.substringBefore("-")?.toIntOrNull()
         }
