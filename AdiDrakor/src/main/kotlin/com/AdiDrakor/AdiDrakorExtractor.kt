@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.nicehttp.RequestBodyTypes
-import kotlinx.coroutines.coroutineScope
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -17,23 +16,16 @@ import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.annotation.SuppressLint
-import android.util.Base64
 
-// ================== Base64 helpers (lokal, supaya extractor Adicinemax21 bisa jalan di package AdiDrakor) ==================
-fun base64Decode(string: String): String {
-    val bytes = Base64.decode(string, Base64.DEFAULT)
-    return bytes.toString(Charsets.ISO_8859_1)
-}
-
-fun base64Encode(array: ByteArray): String {
-    return Base64.encodeToString(array, Base64.DEFAULT)
-}
-
-fun base64DecodeArray(string: String): ByteArray {
-    return Base64.decode(string, Base64.DEFAULT)
-}
-
-object AdiDrakorExtractor : AdiDrakor() {
+// Catatan refactor:
+// - Tidak lagi mewarisi `AdiDrakor()`. Object ini hanyalah kumpulan helper "invoke" yang
+//   dipanggil manual dari MainAPI.loadLinks(), BUKAN implementasi ExtractorApi() resmi.
+//   Konstanta `vidlinkAPI` diakses langsung lewat `AdiDrakor.vidlinkAPI` (companion object publik),
+//   sehingga inheritance ke MainAPI sama sekali tidak diperlukan.
+// - Helper base64 lokal (yang sebelumnya duplikat 3x di file ini) dihapus. Sekarang memakai
+//   base64Decode/base64Encode/base64DecodeArray bawaan dari com.lagradost.cloudstream3
+//   (sudah tersedia lewat wildcard import di atas), sesuai standar MainAPI.kt terbaru.
+object AdiDrakorExtractor {
 
     // ================== KISSKH SOURCE ==================
     suspend fun invokeKisskh(
@@ -48,13 +40,13 @@ object AdiDrakorExtractor : AdiDrakor() {
         val KISSKH_SUB_API = "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
 
         suspend fun searchAndMatch(query: String): KisskhMedia? {
-            try {
+            return try {
                 val searchRes = app.get("$mainUrl/api/DramaList/Search?q=$query&type=0").text
                 val searchList = tryParseJson<ArrayList<KisskhMedia>>(searchRes) ?: return null
 
                 val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
 
-                return searchList.find {
+                searchList.find {
                     val cleanItemTitle = it.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
                     cleanItemTitle.contains(cleanQuery)
                 } ?: searchList.firstOrNull {
@@ -62,7 +54,8 @@ object AdiDrakorExtractor : AdiDrakor() {
                     cleanItemTitle.contains(cleanQuery)
                 }
             } catch (e: Exception) {
-                return null
+                logError(e)
+                null
             }
         }
 
@@ -96,7 +89,7 @@ object AdiDrakorExtractor : AdiDrakor() {
         }
     }
 
-    // Data class Kisskh dideklarasikan private di dalam object extractor (sesuai Adicinemax21)
+    // Data class Kisskh dideklarasikan private di dalam object extractor
     private data class KisskhMedia(@JsonProperty("id") val id: Int?, @JsonProperty("title") val title: String?)
     private data class KisskhDetail(@JsonProperty("episodes") val episodes: ArrayList<KisskhEpisode>?)
     private data class KisskhEpisode(@JsonProperty("id") val id: Int?, @JsonProperty("number") val number: Double?)
@@ -254,6 +247,7 @@ object AdiDrakorExtractor : AdiDrakor() {
                 }
             }
         } catch (e: Exception) {
+            logError(e)
             subjectList.add(mainSubjectId to "Original Audio")
         }
 
@@ -275,7 +269,7 @@ object AdiDrakorExtractor : AdiDrakor() {
                 if (!signCookie.isNullOrEmpty()) {
                     videoHeaders["Cookie"] = signCookie
                 }
-                videoHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+                videoHeaders["User-Agent"] = USER_AGENT
 
                 val sourceName = "Adimoviebox2 ($languageName)"
                 callback.invoke(
@@ -310,6 +304,8 @@ object AdiDrakorExtractor : AdiDrakor() {
     }
 
     private object Adimoviebox2Helper {
+        // Memakai base64Decode/base64DecodeArray bawaan com.lagradost.cloudstream3
+        // (lihat MainAPI.kt) — tidak ada lagi implementasi lokal yang duplikat.
         private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
         private val deviceId = (1..16).map { "0123456789abcdef".random() }.joinToString("")
 
@@ -327,7 +323,7 @@ object AdiDrakorExtractor : AdiDrakor() {
         fun getHeaders(url: String, body: String? = null, method: String = "POST", brand: String, model: String): Map<String, String> {
             val timestamp = System.currentTimeMillis()
             val xClientToken = generateXClientToken(timestamp)
-            val xTrSignature = generateXTrSignature(method, "application/json", if(method=="POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
+            val xTrSignature = generateXTrSignature(method, "application/json", if (method == "POST") "application/json; charset=utf-8" else "application/json", url, body, timestamp)
             return mapOf(
                 "user-agent" to "com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $model; Build/BP22.250325.006; Cronet/133.0.6876.3)",
                 "accept" to "application/json", "content-type" to "application/json", "x-client-token" to xClientToken, "x-tr-signature" to xTrSignature,
@@ -351,6 +347,5 @@ object AdiDrakorExtractor : AdiDrakor() {
             val signature = base64Encode(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)))
             return "$timestamp|2|$signature"
         }
-        private fun base64DecodeArray(str: String): ByteArray { return android.util.Base64.decode(str, android.util.Base64.DEFAULT) }
     }
 }
