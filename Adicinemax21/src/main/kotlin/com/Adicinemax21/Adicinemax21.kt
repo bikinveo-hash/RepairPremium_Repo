@@ -5,6 +5,7 @@ import com.Adicinemax21.Adicinemax21Extractor.invokeKisskh
 import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox
 import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox2 
 import com.Adicinemax21.Adicinemax21Extractor.invokeVidlink
+import com.Adicinemax21.Adicinemax21Extractor.invokeIdlix
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -298,6 +299,7 @@ open class Adicinemax21 : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
+            { invokeIdlix(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeKisskh(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
             { invokeAdimoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
@@ -331,7 +333,6 @@ open class Adicinemax21 : TmdbProvider() {
         val isCartoon: Boolean = false,
     )
 
-    // Data class lainnya tetap dengan penambahan @param:
     data class Data(
         val id: Int? = null,
         val type: String? = null,
