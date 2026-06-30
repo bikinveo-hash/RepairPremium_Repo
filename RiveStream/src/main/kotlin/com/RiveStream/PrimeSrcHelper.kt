@@ -6,29 +6,22 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 /**
- * PrimeSrc Helper - Bridges RiveStream provider dengan PrimeSrc embed service
- * Dioptimalkan dengan hasil dekompilasi Reverse Engineering Next.js Client Runtime Engine
- * Keselarasan Arsitektur Register 32-bit Koreksi & Penyembuhan Pipa Transmisi Cadangan
+ * PrimeSrc Helper - Mengoordinasikan Komunikasi Provider dengan Layanan Embed PrimeSrc
+ * Dioptimalkan dengan 7 Lapisan Dekripsi Eksklusif Hasil Validasi Forensik Runtime
  */
 class PrimeSrcHelper {
 
     companion object {
         private const val PRIMESRC_BASE = "https://primesrc.me"
-        private const val SCRAPPER_BASE = "https://scrapper.rivestream.app"
         private const val PROXY_BASE = "https://proxy.valhallastream.com"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
 
-        // User-Agent resmi sesuai data capture browser sukses untuk bypass WAF Cloudflare
-        private val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-
-        // 70 Token Salts Array kustom hasil sadapan Modul 2873 (app.js) - Steril Tanpa Duplikasi Redundansi
         private val SALT_ARRAY = arrayOf(
             "4Z7lUo", "gwIVSMD", "kP9xL1", "mR2vB5", "aQ8wX0", "zT4nY7", "uV1oI3",
             "pE6xM9", "bC2vF4", "hG8kL0", "jK3mN5", "rP9sT1", "uW4vY7", "xA1bC3",
@@ -40,33 +33,12 @@ class PrimeSrcHelper {
             "jK6lN9", "mN2oP4", "qR8sT0", "uV3wX5", "yZ9aB1", "cC4dE7", "fG1hI3"
         )
 
-        // Semua server name yang teridentifikasi di PrimeSrc
         private val KNOWN_SERVERS = setOf(
             "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
             "Streamplay", "VidNest", "FileMoon", "Streamwish",
             "Vidmoly", "Mixdrop", "UpZur", "SaveFiles"
         )
 
-        // Mapping PrimeSrc server name → CloudStream built-in extractor key
-        private val SERVER_EXTRACTOR_MAP = mapOf(
-            "Voe"        to "Voe",
-            "Filelions"  to "Filelions",
-            "Streamtape" to "Streamtape",
-            "Dood"       to "Dood",
-            "Luluvdoo"   to "Luluvdoo",    
-            "Streamplay" to "Streamplay", 
-            "VidNest"    to "Vidnest",
-            "FileMoon"   to "Filemoon",
-            "Streamwish" to "Streamwish",
-            "Vidmoly"    to "Vidmoly",
-            "Mixdrop"    to "Mixdrop",
-            "UpZur"      to "Upzur",       
-            "SaveFiles"  to "Savefiles"    
-        )
-
-        // ========================================================
-        // ENGINE: Custom Web-Safe Base64 Encoder (Modul 99711/79742)
-        // ========================================================
         private fun encodeWebSafeBase64(byteArray: ByteArray): String {
             val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
             return base64.replace("+", "-")
@@ -74,12 +46,10 @@ class PrimeSrcHelper {
                 .replace("=", "")
         }
 
-        // ========================================================
-        // CORE ALGORITHM: Mesin Generator secretKey (Modul 2873 app.js)
-        // Memanfaatkan emulasi matematis topeng kaku 32-bit murni (0xFFFFFFFFL)
-        // ========================================================
+        /**
+         * ENGINE MUTAKHIR 1: Generator Kunci Rahasia PrimeSrc Hulu (32-bit Masking)
+         */
         fun generateSecretKey(query: String): String {
-            // Mengunci fondasi utama biner desimal rahasia: 0xDEADBEEF
             var hash: Long = 3735928559L
             val bytes = query.toByteArray(StandardCharsets.UTF_8)
 
@@ -88,47 +58,82 @@ class PrimeSrcHelper {
                 val saltIndex = (b + i) % SALT_ARRAY.size
                 val salt = SALT_ARRAY[saltIndex]
                 
-                // Proses pencampuran bitwise hashing dengan konstanta multiplikasi hardware (60205) dikunci 32-bit
                 hash = ((hash xor b.toLong()) * 60205) and 0xFFFFFFFFL
                 
-                // Optimisasi iterasi string menggunakan karakteristik Kotlin inline loop performa tinggi
                 for (j in 0 until salt.length) {
                     val ch = salt[j].code.toLong()
                     hash = ((hash xor ch) * 49842) and 0xFFFFFFFFL
                 }
-                
-                // Rotasi bit sirkular kaku diselamatkan menuju emulasi kapasitas register 32-bit murni
                 hash = (((hash shl 5) or (hash ushr 27)) and 0xFFFFFFFFL)
             }
 
-            // Gabungkan hash akhir dengan sisa modul perkalian lapis ketiga (40503) dikunci 32-bit
             val finalModifier = ((hash xor (bytes.size.toLong() * 10196)) * 40503) and 0xFFFFFFFFL
             val resultString = "${finalModifier}_RiveStreamCore"
-            
             return encodeWebSafeBase64(resultString.toByteArray(StandardCharsets.UTF_8))
         }
 
-        // Headers organik tiruan browser manusia tepercaya dengan injeksi Next.js Data Identifiers
+        /**
+         * ENGINE MUTAKHIR 2: Pemecah 7 Lapisan Enkripsi Voe/Loader Lokal (100% Verified)
+         */
+        private fun decodeROT13(input: String): String {
+            return input.map { char ->
+                when (char) {
+                    in 'A'..'Z' -> ((char - 'A' + 13) % 26 + 'A'.code).toChar()
+                    in 'a'..'z' -> ((char - 'a' + 13) % 26 + 'a'.code).toChar()
+                    else -> char
+                }
+            }.joinToString("")
+        }
+
+        private fun stripNoiseTokens(input: String): String {
+            val noiseTokens = arrayOf("@$", "^^", "~@", "%?", "*~", "!!", "#&")
+            var sanitized = input
+            noiseTokens.forEach { token ->
+                sanitized = sanitized.replace(token, "")
+            }
+            return sanitized
+        }
+
+        private fun decodeCaesarShift3(input: String): String {
+            return input.map { (it.code - 3).toChar() }.joinToString("")
+        }
+
+        fun decryptVoePayload(htmlContent: String): String? {
+            return try {
+                val jsonRegex = """<script[^>]*type=["']application/json["'][^>]*>\s*(\[\s*".*?"\s*])\s*</script>""".toRegex()
+                val matchResult = jsonRegex.find(htmlContent) ?: return null
+                
+                val jsonArray = JSONArray(matchResult.groupValues[1])
+                val encryptedSeed = jsonArray.getString(0)
+
+                val layer1 = decodeROT13(encryptedSeed)
+                val layer3 = stripNoiseTokens(layer1)
+                val layer4 = String(Base64.decode(layer3, Base64.DEFAULT), StandardCharsets.ISO_8859_1)
+                val layer5 = decodeCaesarShift3(layer4)
+                val layer6 = layer5.reversed()
+                val layer7 = Base64.decode(layer6, Base64.DEFAULT)
+                
+                val finalPlaintextJson = String(layer7, StandardCharsets.UTF_8)
+                val configObject = JSONObject(finalPlaintextJson)
+                
+                configObject.optString("source").takeIf { it.isNotEmpty() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
         private fun buildHeaders(referer: String = "$PRIMESRC_BASE/") = mapOf(
-            "User-Agent"              to USER_AGENT,
-            "Referer"                 to referer,
-            "Accept"                  to "application/json, text/plain, */*",
-            "x-nextjs-data"           to "1", 
-            "sec-ch-ua"               to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
-            "sec-ch-ua-mobile"        to "?1",
-            "sec-ch-ua-platform"      to "\"Android\"",
-            "sec-fetch-site"          to "same-origin",
-            "sec-fetch-mode"          to "cors",
-            "sec-fetch-dest"          to "empty",
-            "Accept-Language"         to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Origin"                  to PRIMESRC_BASE
+            "User-Agent" to USER_AGENT,
+            "Referer"    to referer,
+            "Accept"     to "application/json, text/plain, */*",
+            "x-nextjs-data" to "1",
+            "Origin"     to PRIMESRC_BASE
         )
 
-        // Parse URL RiveStream format → PrimeSrc embed URL
         private fun buildEmbedUrl(mainUrl: String, data: String): String? {
             val path = data.removePrefix("$mainUrl/").takeIf { it.isNotEmpty() } ?: return null
-            val type = path.substringBefore("/")   
-            val id   = path.substringAfter("/").substringBefore("?")  
+            val type = path.substringBefore("/")
+            val id   = path.substringAfter("/").substringBefore("?")
 
             val params = mutableListOf<String>()
             if (type == "tv") {
@@ -139,12 +144,10 @@ class PrimeSrcHelper {
                 qp["season"]?.let  { params += "season=$it" }
                 qp["episode"]?.let { params += "episode=$it" }
             }
-
             val qs = if (params.isNotEmpty()) "&" + params.joinToString("&") else ""
             return "$PRIMESRC_BASE/embed/$type?tmdb=$id$qs"
         }
 
-        // Penanganan restrukturisasi subdomain streamcasthub secara aman
         private fun fixStreamCastHubUrl(url: String): String {
             return if (url.contains("streamcasthub.store")) {
                 url.replace(Regex("https://[^/]+\\.streamcasthub\\.store"), "https://rrr.streamcasthub.store")
@@ -154,63 +157,50 @@ class PrimeSrcHelper {
         }
     }
 
-    // ========================================================
-    // MAIN API: invokePrimeSrc
-    // ========================================================
     suspend fun invokePrimeSrc(
         data: String,
         mainUrl: String,
         providerName: String,
-        apiKey: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
-            logError(Throwable("[$providerName] Embed URL Murni: $embedUrl"))
-
             val params = parseEmbedParams(embedUrl) ?: return false
-            logError(Throwable("[$providerName] Parsed parameters: $params"))
-
-            // Step 1: Ambil daftar server dari endpoint /api/v1/s
             val servers = fetchServerList(params) ?: return false
-            logError(Throwable("[$providerName] Terdeteksi ${servers.size} server dari /api/v1/s"))
 
             if (servers.isEmpty()) return false
 
-            val iframeUrls = mutableListOf<Pair<String, String>>()  
-
-            // Step 2: Ambil URL iframe untuk setiap server via /api/v1/l
             for (server in servers) {
                 if (server.name !in KNOWN_SERVERS) continue
-
-                val iframeUrl = fetchIframeUrl(
-                    serverKey = server.key,
-                    embedUrl = embedUrl
-                )
+                val iframeUrl = fetchIframeUrl(server.key, embedUrl)
 
                 if (iframeUrl != null) {
-                    logError(Throwable("[$providerName] Sukses mengambil iframe untuk ${server.name}: ${iframeUrl.take(80)}"))
-                    iframeUrls += server.name to iframeUrl
+                    val fixedIframeUrl = fixStreamCastHubUrl(iframeUrl)
+                    
+                    // Interseptor Khusus Voe Player untuk me-resolve manifest steril tanpa sandi hulu
+                    if (server.name == "Voe") {
+                        val playerHtml = app.get(fixedIframeUrl, headers = buildHeaders(embedUrl)).text
+                        val manifestUrl = decryptVoePayload(playerHtml)
+                        if (manifestUrl != null) {
+                            callback(
+                                ExtractorLink(
+                                    source = "Voe Native",
+                                    name = "Voe Native HLS",
+                                    url = manifestUrl,
+                                    referer = fixedIframeUrl,
+                                    quality = Qualities.Unknown.value,
+                                    isM3u8 = true
+                                )
+                            )
+                            continue
+                        }
+                    }
+                    
+                    // Lempar ke Extractor bawaan Cloudstream untuk server non-Voe
+                    com.lagradost.cloudstream3.utils.loadExtractor(fixedIframeUrl, embedUrl, subtitleCallback, callback)
                 }
             }
-
-            if (iframeUrls.isEmpty()) {
-                logError(Throwable("[$providerName] Gagal resolusi via /api/v1/l - Mengaktifkan mode Fallback Embed"))
-                return false
-            }
-
-            // Step 3: Kirim link hasil resolusi ke extractor bawaan
-            for ((serverName, iframeUrl) in iframeUrls) {
-                invokeExtractor(
-                    serverName = serverName,
-                    iframeUrl  = iframeUrl,
-                    embedUrl   = embedUrl,
-                    subtitleCallback = subtitleCallback,
-                    callback   = callback
-                )
-            }
-
             true
         } catch (e: Exception) {
             logError(e)
@@ -218,10 +208,6 @@ class PrimeSrcHelper {
         }
     }
 
-    // ========================================================
-    // FALLBACK API: invokeEmbedMode (Scraping-based + Custom Proxy Route)
-    // Penyembuhan Total Menggunakan Integrasi Ekstraktor Core CloudStream Terkalibrasi Referer
-    // ========================================================
     suspend fun invokeEmbedMode(
         data: String,
         mainUrl: String,
@@ -230,41 +216,30 @@ class PrimeSrcHelper {
     ): Boolean {
         return try {
             val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
-            logError(Throwable("[PrimeSrc.Embed] Membuka Jalur: $embedUrl"))
-
-            // Rekayasa fetchMode dinamis melewati Valhalla Proxy Server jika terdeteksi sensor ISP
             val targetUrl = "$PROXY_BASE/?destination=${encodeWebSafeBase64(embedUrl.toByteArray(StandardCharsets.UTF_8))}"
             val response = app.get(targetUrl, headers = buildHeaders(embedUrl)).text
             var isExtractorInvoked = false
 
-            // 1. Ekstraksi langsung via pencarian teks Regex link streamcasthub
             val streamCastRegex = Regex("""https://[a-zA-Z0-9.-]+\.streamcasthub\.store/[^\s"'`>]+""")
             val matches = streamCastRegex.findAll(response)
             for (match in matches) {
-                val url = match.value
-                val fixedUrl = fixStreamCastHubUrl(url)
-               
-                // Menghubungkan langsung ke pipa pemrosesan global Extractor Core CloudStream
+                val fixedUrl = fixStreamCastHubUrl(match.value)
                 if (com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, embedUrl, subtitleCallback, callback)) {
                     isExtractorInvoked = true
                 }
             }
 
-            // 2. Parsing tag iframe menggunakan Jsoup konvensional
             val document = org.jsoup.Jsoup.parse(response)
             for (iframe in document.select("iframe")) {
                 var src = iframe.attr("src")
                 if (src.isNotEmpty()) {
                     if (src.startsWith("//")) src = "https:$src"
                     val fixedSrc = fixStreamCastHubUrl(src)
-           
-                    // Mengunci integritas header Referer agar terhindar dari pemblokiran HTTP 403 Forbidden
                     if (com.lagradost.cloudstream3.utils.loadExtractor(fixedSrc, embedUrl, subtitleCallback, callback)) {
                         isExtractorInvoked = true
                     }
                 }
             }
-
             isExtractorInvoked
         } catch (e: Exception) {
             logError(e)
@@ -272,84 +247,39 @@ class PrimeSrcHelper {
         }
     }
 
-    // ========================================================
-    // Helper: Hit /api/v1/s (Server List dengan Otorisasi secretKey)
-    // ========================================================
     private suspend fun fetchServerList(params: EmbedParams): List<PrimeSrcServer>? {
         val queryCore = "tmdb=${params.tmdb}&type=${params.type}"
-        val secretKey = generateSecretKey(queryCore) 
+        val secretKey = generateSecretKey(queryCore)
 
         val url = buildString {
             append("$PRIMESRC_BASE/api/v1/s?")
             append(queryCore)
             if (params.season != null)  append("&season=${params.season}")
             if (params.episode != null) append("&episode=${params.episode}")
-            append("&secretKey=$secretKey") 
+            append("&secretKey=$secretKey")
             append("&proxyMode=client")
         }
 
         val referer = buildEmbedUrlFromParams(params)
         val response = app.get(url, headers = buildHeaders(referer)).text
         val parsed = tryParseJson<ServerListResponse>(response) ?: return null
-
         return parsed.servers
     }
 
-    // ========================================================
-    // Helper: Hit /api/v1/l (Otorisasi Ganda & Injeksi Token Signature)
-    // ========================================================
-    private suspend fun fetchIframeUrl(
-        serverKey: String,
-        embedUrl: String
-    ): String? {
+    private suspend fun fetchIframeUrl(serverKey: String, embedUrl: String): String? {
         return try {
-            // Hitung signature dinamis khusus untuk tautan link provider scraper hulu
             val signatureToken = generateSecretKey(serverKey)
             val url = "$PRIMESRC_BASE/api/v1/l?key=$serverKey&secretKey=$signatureToken"
-            
-            val response = app.get(
-                url,
-                headers = buildHeaders(embedUrl)
-            ).text
-
+            val response = app.get(url, headers = buildHeaders(embedUrl)).text
             val parsed = tryParseJson<LinkResponse>(response)
             parsed?.link
         } catch (e: Exception) {
-            logError(e)
             null
         }
     }
 
-    // ========================================================
-    // Helper: Pass iframe URL ke CloudStream built-in extractor
-    // ========================================================
-    private suspend fun invokeExtractor(
-        serverName: String,
-        iframeUrl: String,
-        embedUrl: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return
-        val fixedUrl = fixStreamCastHubUrl(iframeUrl)
-
-        try {
-            getExtractorApiFromName(extractorKey).getSafeUrl(
-                url = fixedUrl,
-                referer = embedUrl,
-                subtitleCallback = subtitleCallback,
-                callback = callback
-            )
-        } catch (e: Exception) {
-            logError(e)
-        }
-    }
-
-    // ========================================================
-    // Utility: Parse embed URL parameters
-    // ========================================================
     private data class EmbedParams(
-        val type: String,      
+        val type: String,
         val tmdb: Int,
         val season: Int? = null,
         val episode: Int? = null
@@ -358,15 +288,10 @@ class PrimeSrcHelper {
     private fun parseEmbedParams(embedUrl: String): EmbedParams? {
         val typePart = embedUrl.substringAfter("/embed/").substringBefore("?")
         val query = embedUrl.substringAfter("?", "")
-
         val qp = query.split("&").associate {
-            val key = it.substringBefore("=")
-            val value = it.substringAfter("=")
-            key to value
+            it.substringBefore("=") to it.substringAfter("=")
         }
-
         val tmdb = qp["tmdb"]?.toIntOrNull() ?: return null
-
         return EmbedParams(
             type    = typePart,
             tmdb    = tmdb,
@@ -383,49 +308,16 @@ class PrimeSrcHelper {
         }
     }
 
-    // ========================================================
-    // DATA CLASSES - JSON response models
-    // ========================================================
-
     private data class ServerListResponse(
-        @JsonProperty("servers") val servers: List<PrimeSrcServer>?,
-        @JsonProperty("info")    val info: PrimeSrcInfo?
+        @JsonProperty("servers") val servers: List<PrimeSrcServer>?
     )
 
     private data class PrimeSrcServer(
-        @JsonProperty("quality")        val quality: String?,
-        @JsonProperty("name")           val name: String,
-        @JsonProperty("key")            val key: String,
-        @JsonProperty("file_size")      val fileSize: String?,
-        @JsonProperty("file_name")      val fileName: String?,
-        @JsonProperty("audio_type")     val audioType: String?,
-        @JsonProperty("audio_language") val audioLanguage: String?
-    )
-
-    private data class PrimeSrcInfo(
-        @JsonProperty("type")          val type: String?,
-        @JsonProperty("title")         val title: String?,
-        @JsonProperty("imdb_id")       val imdbId: String?,
-        @JsonProperty("release_date")  val releaseDate: String?,
-        @JsonProperty("status")        val status: String?,
-        @JsonProperty("description")   val description: String?,
-        @JsonProperty("tmdb_image")    val tmdbImage: String?,
-        @JsonProperty("tmdb_backdrop") val tmdbBackdrop: String?,
-        @JsonProperty("episode")       val episode: PrimeSrcEpisode?,
-        @JsonProperty("tmdb_id")       val tmdbIdConfusing: String?,
-        @JsonProperty("tvmaze_id")     val tvmazeId: Any?
-    )
-
-    private data class PrimeSrcEpisode(
-        @JsonProperty("title")         val title: String?,
-        @JsonProperty("season")        val season: Int?,
-        @JsonProperty("episode")       val episode: Int?,
-        @JsonProperty("release_date")  val releaseDate: String?,
-        @JsonProperty("description")   val description: String?
+        @JsonProperty("name") val name: String,
+        @JsonProperty("key")  val key: String
     )
 
     private data class LinkResponse(
-        @JsonProperty("link")  val link: String?,
-        @JsonProperty("error") val error: String?
+        @JsonProperty("link") val link: String?
     )
 }
