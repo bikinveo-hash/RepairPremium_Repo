@@ -152,7 +152,6 @@ class RiveStreamProvider : MainAPI() {
     ): Boolean {
         val primeSrcHelper = PrimeSrcHelper()
 
-        // Sembuh Total: `apiKey` dioper dengan benar ke fungsi pembantu
         val nonEmbedResult = primeSrcHelper.invokePrimeSrc(
             data            = data,
             mainUrl         = mainUrl,
@@ -172,7 +171,7 @@ class RiveStreamProvider : MainAPI() {
         return nonEmbedResult || embedResult
     }
 
-    // ===== DATA CLASSES PACKAGING VIA JACKSON =====================================
+    // ===== DATA CLASSES TMDB =====================================================
 
     data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
