@@ -2,6 +2,7 @@ package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import java.net.URLEncoder
@@ -20,7 +21,7 @@ class RiveStreamProvider : MainAPI() {
         const val SHARED_API_KEY = "d64117f26031a428449f102ced3aba73"
         private const val TMDB_BASE  = "https://api.themoviedb.org/3"
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
-        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
     }
 
     override val mainPage = mainPageOf(
@@ -151,10 +152,12 @@ class RiveStreamProvider : MainAPI() {
     ): Boolean {
         val primeSrcHelper = PrimeSrcHelper()
 
+        // Sembuh Total: `apiKey` dioper dengan benar ke fungsi pembantu
         val nonEmbedResult = primeSrcHelper.invokePrimeSrc(
             data            = data,
             mainUrl         = mainUrl,
             providerName    = this.name,
+            apiKey          = SHARED_API_KEY,
             subtitleCallback = subtitleCallback,
             callback        = callback
         )
@@ -171,11 +174,11 @@ class RiveStreamProvider : MainAPI() {
 
     // ===== DATA CLASSES PACKAGING VIA JACKSON =====================================
 
-    private data class TmdbResultsResponse(
+    data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
     )
 
-    private data class TmdbItem(
+    data class TmdbItem(
         @JsonProperty("id")          val id:         Int,
         @JsonProperty("title")       val title:      String?,
         @JsonProperty("name")        val name:       String?,
@@ -183,7 +186,7 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("media_type")  val mediaType:  String?
     )
 
-    private data class TmdbDetailResult(
+    data class TmdbDetailResult(
         @JsonProperty("title")          val title:        String?,
         @JsonProperty("name")           val name:         String?,
         @JsonProperty("overview")       val overview:     String?,
@@ -195,19 +198,19 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("genres")         val genres:       List<TmdbGenreItem>?
     )
 
-    private data class TmdbGenreItem(
+    data class TmdbGenreItem(
         @JsonProperty("name") val name: String?
     )
 
-    private data class TmdbSeasonItem(
+    data class TmdbSeasonItem(
         @JsonProperty("season_number") val seasonNumber: Int?
     )
 
-    private data class TmdbSeasonResponse(
+    data class TmdbSeasonResponse(
         @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?
     )
 
-    private data class TmdbEpisodeItem(
+    data class TmdbEpisodeItem(
         @JsonProperty("name")           val name:          String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
