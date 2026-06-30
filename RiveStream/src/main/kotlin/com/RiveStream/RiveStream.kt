@@ -2,11 +2,13 @@ package com.RiveStream
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import java.net.URLEncoder
 
+/**
+ * RiveStream Provider - Core Plugin Cloudstream Terkalibrasi Standar MainAPI
+ */
 class RiveStreamProvider : MainAPI() {
     override var name    = "RiveStream"
     override var mainUrl = "https://www.rivestream.app"
@@ -16,9 +18,9 @@ class RiveStreamProvider : MainAPI() {
 
     companion object {
         const val SHARED_API_KEY = "d64117f26031a428449f102ced3aba73"
-
         private const val TMDB_BASE  = "https://api.themoviedb.org/3"
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
     }
 
     override val mainPage = mainPageOf(
@@ -67,7 +69,7 @@ class RiveStreamProvider : MainAPI() {
         val parsed       = tryParseJson<TmdbResultsResponse>(response) ?: return null
 
         val items = parsed.results?.mapNotNull { item ->
-            val title     = item.title ?: item.name ?: return@mapNotNull null
+            val title       = item.title ?: item.name ?: return@mapNotNull null
             val poster    = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
             val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
             val itemUrl   = "$mainUrl/$mediaType/${item.id}"
@@ -153,7 +155,6 @@ class RiveStreamProvider : MainAPI() {
             data            = data,
             mainUrl         = mainUrl,
             providerName    = this.name,
-            apiKey          = SHARED_API_KEY,
             subtitleCallback = subtitleCallback,
             callback        = callback
         )
@@ -168,13 +169,13 @@ class RiveStreamProvider : MainAPI() {
         return nonEmbedResult || embedResult
     }
 
-    // ===== DATA CLASSES TMDB =====================================================
+    // ===== DATA CLASSES PACKAGING VIA JACKSON =====================================
 
-    data class TmdbResultsResponse(
+    private data class TmdbResultsResponse(
         @JsonProperty("results") val results: List<TmdbItem>?
     )
 
-    data class TmdbItem(
+    private data class TmdbItem(
         @JsonProperty("id")          val id:         Int,
         @JsonProperty("title")       val title:      String?,
         @JsonProperty("name")        val name:       String?,
@@ -182,7 +183,7 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("media_type")  val mediaType:  String?
     )
 
-    data class TmdbDetailResult(
+    private data class TmdbDetailResult(
         @JsonProperty("title")          val title:        String?,
         @JsonProperty("name")           val name:         String?,
         @JsonProperty("overview")       val overview:     String?,
@@ -194,19 +195,19 @@ class RiveStreamProvider : MainAPI() {
         @JsonProperty("genres")         val genres:       List<TmdbGenreItem>?
     )
 
-    data class TmdbGenreItem(
+    private data class TmdbGenreItem(
         @JsonProperty("name") val name: String?
     )
 
-    data class TmdbSeasonItem(
+    private data class TmdbSeasonItem(
         @JsonProperty("season_number") val seasonNumber: Int?
     )
 
-    data class TmdbSeasonResponse(
+    private data class TmdbSeasonResponse(
         @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>?
     )
 
-    data class TmdbEpisodeItem(
+    private data class TmdbEpisodeItem(
         @JsonProperty("name")           val name:          String?,
         @JsonProperty("episode_number") val episodeNumber: Int?
     )
