@@ -279,7 +279,7 @@ object Adicinemax21Extractor : Adicinemax21() {
     private data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
     private data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
 
-    // ================== ADIMOVIEBOX (OLD) SOURCE ==================
+    // ================== ADIMOVIEBOX SOURCE (UPDATED VERSION) ==================
     suspend fun invokeAdimoviebox(
         title: String,
         orgTitle: String? = null,
@@ -330,26 +330,42 @@ object Adicinemax21Extractor : Adicinemax21() {
         val se = season ?: 0
         val ep = episode ?: 0
         
-        val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
-        val validReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
-        val reqHeaders = commonHeaders + mapOf("referer" to validReferer)
+        // 1. Alur Pemutaran Video Baru (Beralih ke endpoint netfilm.world dengan otorisasi Cookie)
+        val playUrl = "https://netfilm.world/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
+        val playHeaders = mapOf(
+            "authority" to "netfilm.world",
+            "accept" to "application/json",
+            "referer" to "https://netfilm.world/spa/videoPlayPage/movies/$detailPath?id=$subjectId&detailSe=&detailEp=&lang=en&type=/movie/detail",
+            "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+            "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}",
+            "cookie" to "mb_token=\"$bearerToken\""
+        )
 
-        val playRes = app.get(playUrl, headers = reqHeaders).text
+        val playRes = app.get(playUrl, headers = playHeaders).text
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
         
         streams.reversed().distinctBy { it.url }.forEach { source ->
              callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p", source.url ?: return@forEach, INFER_TYPE) {
-                    this.referer = mainUrl
+                    this.referer = "https://netfilm.world/"
                     this.quality = getQualityFromName(source.resolutions)
              })
         }
      
+        // 2. Alur Pembuatan Caption / Subtitle Baru (Melengkapi parameter detailPath & captionHeaders terbaru)
         val firstStream = streams.firstOrNull()
         val id = firstStream?.id
         val format = firstStream?.format
-        if (id != null) {
+        if (id != null && format != null) {
             val subUrl = "$apiBaseUrl/subject/caption?format=$format&id=$id&subjectId=$subjectId&detailPath=$detailPath"
-            app.get(subUrl, headers = reqHeaders).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
+            val captionHeaders = mapOf(
+                "authority" to "h5-api.aoneroom.com",
+                "accept" to "application/json",
+                "referer" to "https://netfilm.world/",
+                "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+                "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}"
+            )
+            val subRes = app.get(subUrl, headers = captionHeaders).text
+            tryParseJson<AdimovieboxResponse>(subRes)?.data?.captions?.forEach { sub ->
                 subtitleCallback.invoke(newSubtitleFile(sub.lanName ?: "Unknown", sub.url ?: return@forEach))
             }
         }
