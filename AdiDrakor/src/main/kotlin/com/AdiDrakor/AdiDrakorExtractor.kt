@@ -81,7 +81,7 @@ object AdiDrakorExtractor {
     private data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
     private data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
 
-    // ================== ADIMOVIEBOX (V1) SOURCE ==================
+    // ================== ADIMOVIEBOX (V1) SOURCE (UPDATED VERSION) ==================
     suspend fun invokeAdimoviebox(
         title: String,
         orgTitle: String? = null,
@@ -126,30 +126,43 @@ object AdiDrakorExtractor {
         val detailPath = matchedMedia.detailPath ?: subjectId
         val se = season ?: 0
         val ep = episode ?: 0
+        
+        // 1. Alur Pemutaran Video Baru (Beralih ke endpoint netfilm.world dengan otorisasi Cookie)
+        val playUrl = "https://netfilm.world/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
+        val playHeaders = mapOf(
+            "authority" to "netfilm.world",
+            "accept" to "application/json",
+            "referer" to "https://netfilm.world/spa/videoPlayPage/movies/$detailPath?id=$subjectId&detailSe=&detailEp=&lang=en&type=/movie/detail",
+            "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+            "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}",
+            "cookie" to "mb_token=\"$bearerToken\""
+        )
 
-        val playUrl = "$apiBaseUrl/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
-        val validReferer = "$mainUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
-        val reqHeaders = commonHeaders + mapOf("referer" to validReferer)
-
-        val playRes = app.get(playUrl, headers = reqHeaders).text
+        val playRes = app.get(playUrl, headers = playHeaders).text
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
-
+        
         streams.reversed().distinctBy { it.url }.forEach { source ->
-            callback.invoke(newExtractorLink(
-                "Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p",
-                source.url ?: return@forEach, INFER_TYPE
-            ) {
-                this.referer = mainUrl
-                this.quality = getQualityFromName(source.resolutions)
-            })
+             callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p", source.url ?: return@forEach, INFER_TYPE) {
+                    this.referer = "https://netfilm.world/"
+                    this.quality = getQualityFromName(source.resolutions)
+             })
         }
-
+     
+        // 2. Alur Pembuatan Caption / Subtitle Baru (Melengkapi parameter detailPath & captionHeaders terbaru)
         val firstStream = streams.firstOrNull()
         val id = firstStream?.id
         val format = firstStream?.format
-        if (id != null) {
+        if (id != null && format != null) {
             val subUrl = "$apiBaseUrl/subject/caption?format=$format&id=$id&subjectId=$subjectId&detailPath=$detailPath"
-            app.get(subUrl, headers = reqHeaders).parsedSafe<AdimovieboxResponse>()?.data?.captions?.forEach { sub ->
+            val captionHeaders = mapOf(
+                "authority" to "h5-api.aoneroom.com",
+                "accept" to "application/json",
+                "referer" to "https://netfilm.world/",
+                "user-agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+                "x-client-info" to "{\"timezone\":\"Asia/Jakarta\"}"
+            )
+            val subRes = app.get(subUrl, headers = captionHeaders).text
+            tryParseJson<AdimovieboxResponse>(subRes)?.data?.captions?.forEach { sub ->
                 subtitleCallback.invoke(newSubtitleFile(sub.lanName ?: "Unknown", sub.url ?: return@forEach))
             }
         }
@@ -384,8 +397,6 @@ object AdiDrakorExtractor {
     }
 
     // ================== ADIMOVIEBOX2 HELPER ==================
-    // Base64 helper dideklarasikan LANGSUNG di sini (bukan di Utils) supaya bisa
-    // diakses oleh private object Adimoviebox2Helper yang nested di dalam object ini.
     private fun b64Decode(string: String): String =
         Base64.decode(string, Base64.DEFAULT).toString(Charsets.ISO_8859_1)
 
@@ -396,7 +407,6 @@ object AdiDrakorExtractor {
         Base64.decode(string, Base64.DEFAULT)
 
     private object Adimoviebox2Helper {
-        // secretKeyDefault menggunakan helper b64Decode dari outer object
         private val secretKeyDefault = b64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
 
         private val HOST_POOL = listOf(
@@ -474,7 +484,6 @@ object AdiDrakorExtractor {
 
         suspend fun getCachedToken(host: String, brand: String, model: String): String {
             if (isTokenValid(bearerToken)) return bearerToken!!
-
             val url = "$host/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1"
             val xClientToken = generateXClientToken()
             val xTrSignature = generateXTrSignature("GET", "application/json", "application/json", url)
@@ -564,7 +573,6 @@ object AdiDrakorExtractor {
             } else ""
             val bodyLength = bodyBytes?.size?.toString() ?: ""
             val canonical = "${method.uppercase()}\n${accept ?: ""}\n${contentType ?: ""}\n$bodyLength\n$timestamp\n$bodyHash\n$canonicalUrl"
-            // b64DecodeArray dan b64Encode diakses dari outer object AdiDrakorExtractor
             val secretBytes = b64DecodeArray(secretKeyDefault)
             val mac = Mac.getInstance("HmacMD5")
             mac.init(SecretKeySpec(secretBytes, "HmacMD5"))
