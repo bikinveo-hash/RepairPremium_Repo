@@ -18,8 +18,160 @@ import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.annotation.SuppressLint
+import java.util.UUID
 
 object AdiDrakorExtractor {
+
+    // ================== IDLIX SOURCE (NEW INTEGRATION) ==================
+    suspend fun invokeIdlix(
+        title: String,
+        orgTitle: String? = null,
+        altTitle: String? = null,
+        year: Int?, season: Int?, episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
+    ) {
+        val idlixUrl = "https://z2.idlixku.com"
+        val isSeries = season != null
+
+        suspend fun searchAndMatchIdlix(query: String): ContentData? {
+            return try {
+                val encodedQuery = java.net.URLEncoder.encode(query, "utf-8")
+                val searchRes = app.get("$idlixUrl/api/search?q=$encodedQuery").text
+                val parsed = AppUtils.parseJson<IdlixSearchResponse>(searchRes)
+                val items = parsed.data ?: parsed.results ?: emptyList()
+                
+                val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+                
+                items.find {
+                    val cleanItemTitle = (it.title ?: it.originalTitle ?: "").replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+                    val typeRaw = it.contentType ?: ""
+                    val itemIsSeries = typeRaw.contains("series", true)
+                    cleanItemTitle.contains(cleanQuery) && itemIsSeries == isSeries
+                } ?: items.firstOrNull {
+                    val typeRaw = it.contentType ?: ""
+                    val itemIsSeries = typeRaw.contains("series", true)
+                    itemIsSeries == isSeries
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        var matched: ContentData? = null
+        // PROTEKSI: Jika bertipe serial dan season > 1, cari dengan string tambahan "Season X" karena Idlix memisah entri drakor sekuel
+        if (isSeries && season != null && season > 1) {
+            matched = searchAndMatchIdlix("$title Season $season")
+            if (matched == null && orgTitle != null) matched = searchAndMatchIdlix("$orgTitle Season $season")
+        }
+        
+        // Fallback ke pencarian nama dasar jika entri per season tidak ditemukan
+        if (matched == null) matched = searchAndMatchIdlix(title)
+        if (matched == null && orgTitle != null) matched = searchAndMatchIdlix(orgTitle)
+        if (matched == null && altTitle != null) matched = searchAndMatchIdlix(altTitle)
+        val slug = matched?.slug ?: return
+
+        var contentType = if (isSeries) "episode" else "movie"
+        var contentId = ""
+
+        try {
+            if (isSeries) {
+                // Jika slug sudah eksplisit mengandung penanda "season-X", maka penunjuk sub-endpoint direset jadi 1
+                val targetSeason = if (slug.contains("season-$season", ignoreCase = true)) 1 else season
+                val seasonApiUrl = "$idlixUrl/api/series/$slug/season/$targetSeason"
+                val seasonResText = app.get(seasonApiUrl).text
+                val parsedSeason = AppUtils.parseJson<IdlixSeasonApiResponse>(seasonResText)
+                val targetEp = parsedSeason.season?.episodes?.find { it.episodeNumber == episode }
+                if (targetEp?.hasVideo == true) {
+                    contentId = targetEp.id ?: return
+                } else return
+            } else {
+                val movieApiUrl = "$idlixUrl/api/movies/$slug"
+                val movieResText = app.get(movieApiUrl).text
+                val detail = AppUtils.parseJson<IdlixDetailResponse>(movieResText)
+                contentId = detail.id ?: slug
+            }
+        } catch (e: Exception) {
+            return
+        }
+
+        try {
+            app.get(idlixUrl)
+
+            val randomDid = UUID.randomUUID().toString().replace("-", "")
+            val customCookies = mapOf("did" to randomDid, "NEXT_LOCALE" to "id")
+            val refererUrl = "$idlixUrl/${if (isSeries) "series" else "movie"}/$slug"
+            
+            val headers = mapOf(
+                "Referer" to refererUrl, 
+                "Origin" to idlixUrl, 
+                "Accept" to "application/json, text/plain, */*",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            )
+
+            val targetPlayInfoUrl = "$idlixUrl/api/watch/play-info/$contentType/$contentId"
+
+            var playInfoResText = runCatching {
+                app.get(url = targetPlayInfoUrl, headers = headers, cookies = customCookies).text
+            }.getOrNull() ?: ""
+
+            var playInfoRes = runCatching { AppUtils.parseJson<PlayInfoResponse>(playInfoResText) }.getOrNull()
+
+            if (playInfoRes?.gateToken == null) {
+                val webViewResolver = WebViewResolver(interceptUrl = Regex(".*api/watch/play-info.*"), useOkhttp = false)
+                webViewResolver.resolveUsingWebView(url = targetPlayInfoUrl, headers = headers)
+                playInfoResText = app.get(url = targetPlayInfoUrl, headers = headers, cookies = customCookies).text
+                playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoResText)
+            }
+
+            val gateToken = playInfoRes?.gateToken ?: return
+            
+            val serverNow = playInfoRes.serverNow ?: 0L
+            val unlockAt = playInfoRes.unlockAt ?: 0L
+            val countdownSec = playInfoRes.preroll?.countdownSec ?: 7L
+            val finalWaitMs = maxOf(countdownSec * 1000L, unlockAt - serverNow) + 1000L
+            kotlinx.coroutines.delay(finalWaitMs)
+
+            val jsonMediaType = "application/json".toMediaTypeOrNull()
+            val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
+            val claimResText = app.post(url = "$idlixUrl/api/watch/session/claim", headers = headers, cookies = customCookies, requestBody = requestBodyData).text
+            val claim = AppUtils.parseJson<SessionClaimResponse>(claimResText).claim ?: return
+
+            val safeMajorHeaders = mapOf(
+                "Origin" to idlixUrl,
+                "Referer" to "$idlixUrl/",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+            )
+            val textMediaType = "text/plain".toMediaTypeOrNull()
+            val majorRequestBody = mapOf("claim" to claim).toJson().toRequestBody(textMediaType)
+
+            val responseText = app.post(
+                url = "https://e2e.majorplay.net/api/play",
+                headers = safeMajorHeaders.plus("Content-Type" to "text/plain"),
+                requestBody = majorRequestBody
+            ).text
+            val majorResponse = AppUtils.parseJson<NewMajorplayResponse>(responseText)
+            val masterConfigUrl = majorResponse.url ?: return
+
+            majorResponse.subtitles?.forEach { sub ->
+                val subUrl = sub.path ?: return@forEach
+                val langLabel = sub.label ?: sub.lang ?: "Indo"
+                subtitleCallback.invoke(newSubtitleFile(langLabel, subUrl))
+            }
+
+            callback.invoke(
+                newExtractorLink(
+                    source = "Idlix (Majorplay)",
+                    name = "Idlix Auto Quality",
+                    url = "$masterConfigUrl&.m3u8",
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.headers = safeMajorHeaders
+                    this.referer = "$idlixUrl/"
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+        } catch (_: Exception) {}
+    }
 
     // ================== KISSKH SOURCE ==================
     suspend fun invokeKisskh(
@@ -81,7 +233,7 @@ object AdiDrakorExtractor {
     private data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
     private data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
 
-    // ================== ADIMOVIEBOX (V1) SOURCE (FIXED VERSION) ==================
+    // ================== ADIMOVIEBOX SOURCE (UPDATED) ==================
     suspend fun invokeAdimoviebox(
         title: String,
         orgTitle: String? = null,
@@ -112,7 +264,6 @@ object AdiDrakorExtractor {
                 val itemYear = item.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
                 val cleanItemTitle = item.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
                 
-                // FIXED: Penyesuaian pengecekan tahun rilis terikat multi-season TV Series
                 val isYearMatch = if (season != null && season > 0) {
                     itemYear == null || year == null || itemYear <= year
                 } else {
@@ -134,7 +285,6 @@ object AdiDrakorExtractor {
         val se = season ?: 0
         val ep = episode ?: 0
 
-        // 1. Alur Pemutaran Video Baru (Beralih ke endpoint netfilm.world dengan otorisasi Cookie)
         val playUrl = "https://netfilm.world/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath"
         val playHeaders = mapOf(
             "authority" to "netfilm.world",
@@ -149,13 +299,15 @@ object AdiDrakorExtractor {
         val streams = tryParseJson<AdimovieboxResponse>(playRes)?.data?.streams ?: return
 
         streams.reversed().distinctBy { it.url }.forEach { source ->
-             callback.invoke(newExtractorLink("Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p", source.url ?: return@forEach, INFER_TYPE) {
-                    this.referer = "https://netfilm.world/"
-                    this.quality = getQualityFromName(source.resolutions)
-             })
+            callback.invoke(newExtractorLink(
+                "Adimoviebox", "Adimoviebox ${source.resolutions ?: "?"}p",
+                source.url ?: return@forEach, INFER_TYPE
+            ) {
+                this.referer = "https://netfilm.world/"
+                this.quality = getQualityFromName(source.resolutions)
+            })
         }
 
-        // 2. Alur Pembuatan Caption / Subtitle Baru (Melengkapi parameter detailPath & captionHeaders terbaru)
         val firstStream = streams.firstOrNull()
         val id = firstStream?.id
         val format = firstStream?.format
@@ -198,7 +350,7 @@ object AdiDrakorExtractor {
         )
     }
 
-    // ================== ADIMOVIEBOX 2 SOURCE (multi-host + dynamic JWT + parallel) ==================
+    // ================== ADIMOVIEBOX 2 SOURCE ==================
     suspend fun invokeAdimoviebox2(
         title: String,
         orgTitle: String? = null,
@@ -222,8 +374,9 @@ object AdiDrakorExtractor {
                 } catch (_: Exception) { return null }
                 Adimoviebox2Helper.persistTokenFromXUser(response.headers["x-user"])
                 val searchRes = response.parsedSafe<Adimoviebox2SearchResponse>()
+
                 val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
-                return searchRes?.data?.results?.flatMap { it.subjects ?: emptyList() }?.find { subject ->
+                return searchRes?.data?.results?.flatMap { it.subjects ?: arrayListOf() }?.find { subject ->
                     val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
                     val cleanSubjectTitle = subject.title?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase() ?: ""
                     val isTitleMatch = cleanSubjectTitle.isNotEmpty() && cleanQuery.isNotEmpty() && cleanSubjectTitle.contains(cleanQuery)
@@ -234,15 +387,18 @@ object AdiDrakorExtractor {
             }
 
             var matchedSubject = searchSubject(title.substringBefore(":").trim())
-            if (matchedSubject == null && orgTitle != null) matchedSubject = searchSubject(orgTitle.substringBefore(":").trim())
-            if (matchedSubject == null && altTitle != null) matchedSubject = searchSubject(altTitle.substringBefore(":").trim())
+            if (matchedSubject == null && orgTitle != null) {
+                matchedSubject = searchSubject(orgTitle.substringBefore(":").trim())
+            }
+            if (matchedSubject == null && altTitle != null) {
+                matchedSubject = searchSubject(altTitle.substringBefore(":").trim())
+            }
             if (matchedSubject == null) return
 
             val originalSubjectId = matchedSubject.subjectId ?: return
             val s = season ?: 0
             val e = episode ?: 0
 
-            // Ambil daftar dub
             val subjectUrl = "$host/wefeed-mobile-bff/subject-api/get?subjectId=$originalSubjectId"
             val subjectHeaders = Adimoviebox2Helper.getSignedHeaders(subjectUrl, null, "GET", brand, model, token)
             val subjectResponse = try {
@@ -251,6 +407,7 @@ object AdiDrakorExtractor {
             Adimoviebox2Helper.persistTokenFromXUser(subjectResponse.headers["x-user"])
 
             val subjectIds = mutableListOf<Pair<String, String>>()
+            var originalLanguageName = "Original"
             if (subjectResponse.code == 200) {
                 try {
                     val data = JSONObject(subjectResponse.text).optJSONObject("data")
@@ -260,17 +417,17 @@ object AdiDrakorExtractor {
                             val dub = dubs.optJSONObject(i) ?: continue
                             val dubId = dub.optString("subjectId")
                             val lanName = dub.optString("lanName").ifBlank { "Dub" }
-                            if (dubId.isNotBlank() && dubId != originalSubjectId)
+                            if (dubId.isNotBlank() && dubId != originalSubjectId) {
                                 subjectIds.add(Pair(dubId, lanName))
+                            }
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (_: Exception) {}
             }
-            subjectIds.add(0, Pair(originalSubjectId, "Original"))
+            subjectIds.add(0, Pair(originalSubjectId, originalLanguageName))
 
             val finalToken = Adimoviebox2Helper.getCachedToken(host, brand, model)
 
-            // Parallel: tiap subjectId → play-info + stream + caption
             subjectIds.amap { (subjectId, language) ->
                 try {
                     val playUrl = "$host/wefeed-mobile-bff/subject-api/play-info?subjectId=$subjectId&se=$s&ep=$e"
@@ -358,7 +515,6 @@ object AdiDrakorExtractor {
                         }
                     }
 
-                    // Fallback: kalau streams kosong, coba resourceDetectors
                     if (streams == null || streams.length() == 0) {
                         val fallbackUrl = "$host/wefeed-mobile-bff/subject-api/get?subjectId=$subjectId"
                         val fallbackHeaders = playHeaders.toMutableMap().apply {
@@ -587,20 +743,52 @@ object AdiDrakorExtractor {
             return "$timestamp|2|$signature"
         }
     }
-}
 
-private fun getHighestQuality(input: String): Int? {
-    val qualities = listOf(
-        "2160" to Qualities.P2160.value,
-        "1440" to Qualities.P1440.value,
-        "1080" to Qualities.P1080.value,
-        "720"  to Qualities.P720.value,
-        "480"  to Qualities.P480.value,
-        "360"  to Qualities.P360.value,
-        "240"  to Qualities.P240.value
+    // ================== IDLIX INTERNAL DATA CLASSES ==================
+    private data class IdlixSearchResponse(
+        @JsonProperty("data") val data: List<ContentData>? = null,
+        @JsonProperty("results") val results: List<ContentData>? = null
     )
-    for ((label, mappedValue) in qualities) {
-        if (input.contains(label, ignoreCase = true)) return mappedValue
-    }
-    return null
+    private data class ContentData(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("originalTitle") val originalTitle: String? = null,
+        @JsonProperty("slug") val slug: String? = null,
+        @JsonProperty("contentType") val contentType: String? = null
+    )
+    private data class IdlixSeasonApiResponse(
+        @JsonProperty("season") val season: SeasonDetail? = null
+    )
+    private data class SeasonDetail(
+        @JsonProperty("episodes") val episodes: List<EpisodeDetail>? = null
+    )
+    private data class EpisodeDetail(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("episodeNumber") val episodeNumber: Int? = null,
+        @JsonProperty("hasVideo") val hasVideo: Boolean? = null
+    )
+    private data class IdlixDetailResponse(
+        @JsonProperty("id") val id: String? = null
+    )
+    private data class PlayInfoResponse(
+        @JsonProperty("gateToken") val gateToken: String? = null,
+        @JsonProperty("serverNow") val serverNow: Long? = null,
+        @JsonProperty("unlockAt") val unlockAt: Long? = null,
+        @JsonProperty("preroll") val preroll: PrerollData? = null
+    )
+    private data class PrerollData(
+        @JsonProperty("countdownSec") val countdownSec: Long? = null
+    )
+    private data class SessionClaimResponse(
+        @JsonProperty("claim") val claim: String? = null
+    )
+    private data class NewMajorplayResponse(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null
+    )
+    private data class NewMajorSubtitle(
+        @JsonProperty("lang") val lang: String? = null, 
+        @JsonProperty("label") val label: String? = null, 
+        @JsonProperty("path") val path: String? = null
+    )
 }
