@@ -149,10 +149,14 @@ object AdiDrakorExtractor {
             val majorResponse = AppUtils.parseJson<NewMajorplayResponse>(responseText)
             val masterConfigUrl = majorResponse.url ?: return
 
-            majorResponse.subtitles?.forEach { sub ->
-                val subUrl = sub.path ?: return@forEach
-                val langLabel = sub.label ?: sub.lang ?: "Indo"
-                subtitleCallback.invoke(newSubtitleFile(langLabel, subUrl))
+            // FIXED: Menggunakan standard 'for' loop untuk menghindari kendala asinkronisasi lambda
+            val subsList = majorResponse.subtitles
+            if (subsList != null) {
+                for (sub in subsList) {
+                    val subUrl = sub.path ?: continue
+                    val langLabel = sub.label ?: sub.lang ?: "Indo"
+                    subtitleCallback.invoke(newSubtitleFile(langLabel, subUrl))
+                }
             }
 
             callback.invoke(
@@ -218,8 +222,14 @@ object AdiDrakorExtractor {
         }
         val kkeySub = app.get("$KISSKH_SUB_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
         val subJson = app.get("$mainUrl/api/Sub/$epsId?kkey=$kkeySub").text
-        tryParseJson<List<KisskhSubtitle>>(subJson)?.forEach { sub ->
-            subtitleCallback.invoke(newSubtitleFile(sub.label ?: "Unknown", sub.src ?: return@forEach))
+        
+        // FIXED: Menggunakan standard 'for' loop untuk keamanan pemanggilan suspend function
+        val subList = tryParseJson<List<KisskhSubtitle>>(subJson)
+        if (subList != null) {
+            for (sub in subList) {
+                val srcUrl = sub.src ?: continue
+                subtitleCallback.invoke(newSubtitleFile(sub.label ?: "Unknown", srcUrl))
+            }
         }
     }
 
@@ -233,7 +243,7 @@ object AdiDrakorExtractor {
     ) {
         val mainUrl = "https://moviebox.ph"
         val apiBaseUrl = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
-        val bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc8MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
+        val bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjY1NDQ3MzA2NDM5NjQ1MTYyMzIsImF0cCI6MywiZXh0IjoiMTc4MjUzNTQwMiIsImV4cCI6MTc5MDMxMTQwMiwiaWF0IjoxNzgyNTM1MTAyfQ.d2WpLFeF0erMdSlaaM1RMgnpyB4j1R1s2xVcY6a2Ut8"
 
         val commonHeaders = mapOf(
             "origin" to mainUrl,
@@ -347,6 +357,7 @@ object AdiDrakorExtractor {
     ) {
         try {
             val (brand, model) = Adimoviebox2Helper.randomBrandModel()
+
             val host = Adimoviebox2Helper.findWorkingHost() ?: return
             val token = Adimoviebox2Helper.getCachedToken(host, brand, model)
 
@@ -360,6 +371,7 @@ object AdiDrakorExtractor {
                 } catch (_: Exception) { return null }
                 Adimoviebox2Helper.persistTokenFromXUser(response.headers["x-user"])
                 val searchRes = response.parsedSafe<Adimoviebox2SearchResponse>()
+
                 val cleanQuery = query.replace(Regex("[^A-Za-z0-9]"), "").lowercase()
                 return searchRes?.data?.results?.flatMap { it.subjects ?: emptyList() }?.find { subject ->
                     val subjectYear = subject.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
@@ -372,8 +384,12 @@ object AdiDrakorExtractor {
             }
 
             var matchedSubject = searchSubject(title.substringBefore(":").trim())
-            if (matchedSubject == null && orgTitle != null) matchedSubject = searchSubject(orgTitle.substringBefore(":").trim())
-            if (matchedSubject == null && altTitle != null) matchedSubject = searchSubject(altTitle.substringBefore(":").trim())
+            if (matchedSubject == null && orgTitle != null) {
+                matchedSubject = searchSubject(orgTitle.substringBefore(":").trim())
+            }
+            if (matchedSubject == null && altTitle != null) {
+                matchedSubject = searchSubject(altTitle.substringBefore(":").trim())
+            }
             if (matchedSubject == null) return
 
             val originalSubjectId = matchedSubject.subjectId ?: return
@@ -388,6 +404,7 @@ object AdiDrakorExtractor {
             Adimoviebox2Helper.persistTokenFromXUser(subjectResponse.headers["x-user"])
 
             val subjectIds = mutableListOf<Pair<String, String>>()
+            var originalLanguageName = "Original"
             if (subjectResponse.code == 200) {
                 try {
                     val data = JSONObject(subjectResponse.text).optJSONObject("data")
@@ -397,13 +414,14 @@ object AdiDrakorExtractor {
                             val dub = dubs.optJSONObject(i) ?: continue
                             val dubId = dub.optString("subjectId")
                             val lanName = dub.optString("lanName").ifBlank { "Dub" }
-                            if (dubId.isNotBlank() && dubId != originalSubjectId)
+                            if (dubId.isNotBlank() && dubId != originalSubjectId) {
                                 subjectIds.add(Pair(dubId, lanName))
+                            }
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (_: Exception) {}
             }
-            subjectIds.add(0, Pair(originalSubjectId, "Original"))
+            subjectIds.add(0, Pair(originalSubjectId, originalLanguageName))
 
             val finalToken = Adimoviebox2Helper.getCachedToken(host, brand, model)
 
@@ -470,7 +488,7 @@ object AdiDrakorExtractor {
                                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageLabel)", capUrl))
                                     }
                                 }
-                            } catch (_: Exception) { }
+                            } catch (_: Exception) {}
 
                             val subUrlExternal = "$host/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$subjectId&resourceId=$id&episode=0"
                             val subHeadersExternal = Adimoviebox2Helper.getSignedHeaders(subUrlExternal, null, "GET", brand, model, finalToken)
@@ -488,7 +506,7 @@ object AdiDrakorExtractor {
                                         subtitleCallback.invoke(newSubtitleFile("$lang ($languageLabel) [Ext]", capUrl))
                                     }
                                 }
-                            } catch (_: Exception) { }
+                            } catch (_: Exception) {}
                         }
                     }
 
@@ -513,6 +531,10 @@ object AdiDrakorExtractor {
                                             val q = video.optInt("resolution", 0)
                                             val se2 = video.optInt("se")
                                             val ep2 = video.optInt("ep")
+                                            
+                                            // FIXED: Mendeklarasikan ulang languageLabel di scope loop lokal detectors
+                                            val languageLabel = language.replace("dub", "Audio")
+                                            
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = "Adimoviebox2 ($languageLabel)",
@@ -528,11 +550,11 @@ object AdiDrakorExtractor {
                                     }
                                 }
                             }
-                        } catch (_: Exception) { }
+                        } catch (_: Exception) {}
                     }
                 } catch (_: Exception) { return@amap }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {}
     }
 
     // ================== ADIMOVIEBOX2 HELPER ==================
@@ -736,3 +758,90 @@ object AdiDrakorExtractor {
         return null
     }
 }
+
+// ================== FIXED TOP-LEVEL DATA CLASSES ==================
+
+data class IdlixSearchResponse(
+    @param:JsonProperty("data") val data: List<ContentData>? = null,
+    @param:JsonProperty("results") val results: List<ContentData>? = null
+)
+
+data class ContentData(
+    @param:JsonProperty("id") val id: String? = null,
+    @param:JsonProperty("title") val title: String? = null,
+    @param:JsonProperty("originalTitle") val originalTitle: String? = null,
+    @param:JsonProperty("slug") val slug: String? = null,
+    @param:JsonProperty("contentType") val contentType: String? = null
+)
+
+data class IdlixSeasonApiResponse(
+    @param:JsonProperty("season") val season: SeasonDetail? = null
+)
+
+data class SeasonDetail(
+    @param:JsonProperty("episodes") val episodes: List<EpisodeDetail>? = null
+)
+
+data class EpisodeDetail(
+    @param:JsonProperty("id") val id: String? = null,
+    @param:JsonProperty("episodeNumber") val episodeNumber: Int? = null,
+    @param:JsonProperty("hasVideo") val hasVideo: Boolean? = null
+)
+
+data class IdlixDetailResponse(
+    @param:JsonProperty("id") val id: String? = null
+)
+
+data class PlayInfoResponse(
+    @param:JsonProperty("gateToken") val gateToken: String? = null,
+    @param:JsonProperty("serverNow") val serverNow: Long? = null,
+    @param:JsonProperty("unlockAt") val unlockAt: Long? = null,
+    @param:JsonProperty("preroll") val preroll: PrerollData? = null
+)
+
+data class PrerollData(
+    @param:JsonProperty("countdownSec") val countdownSec: Long? = null
+)
+
+data class SessionClaimResponse(
+    @param:JsonProperty("claim") val claim: String? = null
+)
+
+data class NewMajorplayResponse(
+    @param:JsonProperty("url") val url: String? = null,
+    @param:JsonProperty("subtitles") val subtitles: List<NewMajorSubtitle>? = null
+)
+
+data class NewMajorSubtitle(
+    @param:JsonProperty("lang") val lang: String? = null, 
+    @param:JsonProperty("label") val label: String? = null, 
+    @param:JsonProperty("path") val path: String? = null
+)
+
+data class KisskhMedia(
+    @param:JsonProperty("id") val id: Int?, 
+    @param:JsonProperty("title") val title: String?
+)
+
+data class KisskhDetail(
+    @param:JsonProperty("episodes") val episodes: ArrayList<KisskhEpisode>?
+)
+
+data class KisskhEpisode(
+    @param:JsonProperty("id") val id: Int?, 
+    @param:JsonProperty("number") val number: Double?
+)
+
+data class KisskhKey(
+    @param:JsonProperty("key") val key: String?
+)
+
+data class KisskhSources(
+    @param:JsonProperty("Video") val video: String?, 
+    @param:JsonProperty("ThirdParty") val thirdParty: String?
+)
+
+data class KisskhSubtitle(
+    @param:JsonProperty("src") val src: String?, 
+    @param:JsonProperty("label") val label: String?
+)
