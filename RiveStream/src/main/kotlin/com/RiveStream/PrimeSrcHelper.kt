@@ -12,7 +12,8 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 /**
- * PrimeSrc Helper - Bridges RiveStream provider dengan PrimeSrc embed service
+ * PrimeSrc Helper - Mengoordinasikan komunikasi dengan layanan PrimeSrc Embed
+ * Mengintegrasikan pipa 7 lapisan dekripsi biner hasil validasi forensik runtime
  */
 class PrimeSrcHelper {
 
@@ -237,7 +238,7 @@ class PrimeSrcHelper {
 
             true
         } catch (e: Exception) {
-            logError(e)
+            com.lagradost.cloudstream3.mvvm.logError(e)
             false
         }
     }
@@ -278,7 +279,7 @@ class PrimeSrcHelper {
 
             isExtractorInvoked
         } catch (e: Exception) {
-            logError(e)
+            com.lagradost.cloudstream3.mvvm.logError(e)
             false
         }
     }
@@ -332,7 +333,7 @@ class PrimeSrcHelper {
                 callback = callback
             )
         } catch (e: Exception) {
-            logError(e)
+            com.lagradost.cloudstream3.mvvm.logError(e)
         }
     }
 
