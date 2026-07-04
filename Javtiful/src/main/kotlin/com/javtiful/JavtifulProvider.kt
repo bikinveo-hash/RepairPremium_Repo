@@ -71,12 +71,12 @@ class JavtifulProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        [span_6](start_span)// 1. FILTER PARTNER: Skip jika kartu video berlabel partner / ad-placement[span_6](end_span)
+        // 1. FILTER PARTNER: Skip jika kartu video berlabel partner / ad-placement
         if (this.hasClass("front-partner-card") || this.selectFirst(".front-partner-badge") != null) {
             return null
         }
 
-        [span_7](start_span)[span_8](start_span)// 2. FILTER LOGO HD: Skip jika kualitas video tidak memenuhi standar HD / 4K[span_7](end_span)[span_8](end_span)
+        // 2. FILTER LOGO HD: Skip jika kualitas video tidak memenuhi standar HD / 4K
         val qualityElement = this.selectFirst(".front-quality-tag") ?: return null
         val quality = qualityElement.text()
         
@@ -147,7 +147,6 @@ class JavtifulProvider : MainAPI() {
             val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
             val subSearchDoc = app.get(subSearchUrl, headers = baseHeaders).document
 
-            // Mengambil maksimal 5 baris opsi subtitle teratas
             val resultLinks = subSearchDoc.select("table.sub-table tbody tr td a").take(5)
 
             resultLinks.forEachIndexed { index, element ->
@@ -166,8 +165,7 @@ class JavtifulProvider : MainAPI() {
                             var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
                             finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
                             
-                            // Menggunakan struktur penulisan modern newSubtitleFile factory method
-                            subtitleCallback.invoke(
+                            subtitleCallback(
                                 newSubtitleFile(
                                     lang = "ID - $subLabel",
                                     url = finalDownloadUrl
@@ -184,7 +182,6 @@ class JavtifulProvider : MainAPI() {
         }
         // ==================================================================
 
-        // Pemrosesan streaming utama via konfigurasi JSON #frontWatchConfig
         val configScript = document.selectFirst("script#frontWatchConfig")?.data()
         if (!configScript.isNullOrBlank()) {
             val parsedConfig = tryParseJson<FrontWatchConfig>(configScript)
@@ -209,7 +206,6 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
-        // Jalur Pencarian Cadangan 1: Iframe players
         document.select("iframe").forEach { iframe ->
             val frameUrl = iframe.attr("src")
             if (frameUrl.isNotBlank()) {
@@ -217,7 +213,6 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
-        // Jalur Pencarian Cadangan 2: Native HTML5 video tags
         document.select("video source").forEach { srcTag ->
             val videoUrl = srcTag.attr("src")
             if (videoUrl.isNotBlank()) {
