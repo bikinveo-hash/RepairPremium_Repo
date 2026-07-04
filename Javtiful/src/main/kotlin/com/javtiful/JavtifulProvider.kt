@@ -46,7 +46,7 @@ class JavtifulProvider : MainAPI() {
             it.toSearchResult()
         }
 
-        return newHomePageResponse(request.name, homeItems)
+        return newHomePageResponse(request, homeItems)
     }
 
     // ==================== LOGIKA PENCARIAN BERPAGINASI ====================
