@@ -103,16 +103,30 @@ class JavtifulProvider : MainAPI() {
         val primaryLazy = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
 
         // Prioritas 2: data-front-lazy-fallback-src (daftar '|'-separated)
-        val fallbackChain = thumbElement?.attr("data-front-lazy-fallback-src")
+        val fallbackChain = thumbElement?.attr("data-front-lazy-src")
+            ?.let { listOf(it) }
+            ?: emptyList()
+
+        // Ambil juga data-front-lazy-src dari <a> wrapper (bukan <img>)
+        val aLazySrc = this.selectFirst("a.front-video-thumb")?.attr("data-front-lazy-src")
+            ?.takeIf { it.isNotBlank() }
+
+        val allLazySrcs = (fallbackChain + listOfNotNull(aLazySrc)).distinct()
+
+        // Prioritas 1 final: data-front-lazy-src di <img> atau <a>
+        val primaryLazyFinal = primaryLazy ?: aLazySrc
+
+        // Prioritas 2: data-front-lazy-fallback-src (daftar '|'-separated)
+        val fallbackChainFinal = thumbElement?.attr("data-front-lazy-fallback-src")
             ?.split('|')
             ?.map { it.trim() }
             ?.filter { it.isNotBlank() && !it.isPlaceholder() }
             ?: emptyList()
 
-        val fallbackCandidate = fallbackChain.firstOrNull { it != primaryLazy }
-            ?: fallbackChain.firstOrNull()
+        val fallbackCandidate = fallbackChainFinal.firstOrNull { it != primaryLazyFinal }
+            ?: fallbackChainFinal.firstOrNull()
 
-        val posterUrl = primaryLazy?.takeIf { !it.isPlaceholder() }
+        val posterUrl = primaryLazyFinal?.takeIf { !it.isPlaceholder() }
             ?: fallbackCandidate
             ?: thumbElement?.attr("data-original")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
             ?: thumbElement?.attr("data-src")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
@@ -166,19 +180,22 @@ class JavtifulProvider : MainAPI() {
             this.recommendations = recommendationsList
         }
 
-        // === TRAILER: append langsung ke trailers list (paling kompatibel) ===
-        // Kita manipulasi `trailers: MutableList<TrailerData>` langsung dari interface LoadResponse.
-        // Lebih reliable daripada `addTrailer(...)` karena ga depend sama extension function
-        // yang mungkin beda signature antar versi CloudStream.
-        // Hasilnya identik dengan addTrailer() — di belakang layar addTrailer juga append ke list ini.
+        // === TRAILER: derive preview URL dengan hostname fix dari card ===
+        // Hostname preview BEDA dari hostname main video (main=r2.cloudflarestorage.com,
+        // preview=syyejpyh6y...jav.si). Kita ambil hostname preview dari data-front-video-preview-src
+        // di card rekomendasi pada halaman yang sama.
         val trailerUrl = extractPreviewUrl(document)
         if (!trailerUrl.isNullOrBlank()) {
             response.trailers.add(
                 TrailerData(
                     extractorUrl = trailerUrl,
                     referer = "$mainUrl/",
-                    raw = true,                 // addRaw = true equivalent (langsung pakai URL)
-                    headers = baseHeaders       // CDN butuh Referer
+                    raw = true,
+                    headers = mapOf(
+                        "User-Agent" to (baseHeaders["User-Agent"] ?: USER_AGENT),
+                        "Referer" to "$mainUrl/",
+                        "Accept" to "*/*"
+                    )
                 )
             )
         }
@@ -188,92 +205,74 @@ class JavtifulProvider : MainAPI() {
 
     // ==================== TRAILER / PREVIEW VIDEO ====================
     // Frontend Javtiful nampilin preview video on-hover di card.
-    // CDN URL pattern: https://{cdn}/videos/previews/{YYYY}/{MM}/{VIDEO_CODE}/{VIDEO_CODE}_preview.mp4
-    // Strategi: scan markup → parse JSON config → derive dari playerSources URL.
+    // CDN URL pattern: https://{previewHost}/videos/previews/{YYYY}/{MM}/{VIDEO_CODE}/{VIDEO_CODE}_preview.mp4
+    // Sumber URL preview bisa dari:
+    //   - data-front-video-preview-src di <a class="front-video-thumb"> (cuma untuk card lain, BUKAN video yg sedang dibuka)
+    //   - frontWatchConfig.playerSources[0].src (main URL, perlu ditransform)
+    //   - schema.org JSON-LD VideoObject (uploadDate, duration)
     private fun extractPreviewUrl(document: org.jsoup.nodes.Document): String? {
-        // ===== STRATEGI 1: Native <video>/<source> tag di markup =====
-        document.selectFirst("video source")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return it }
-        document.selectFirst("video[src]")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return it }
-
-        // ===== STRATEGI 2: data-* attribute di player container =====
-        val playerSelectors = listOf(
-            ".front-watch-player", ".front-player", ".front-video-player",
-            ".player-wrapper", ".video-wrapper", "[data-preview]"
-        )
-        for (selector in playerSelectors) {
-            val container = document.selectFirst(selector) ?: continue
-            listOf(
-                "data-preview", "data-preview-src", "data-preview-url",
-                "data-trailer", "data-trailer-url", "data-hover-video",
-                "data-front-preview-src", "data-front-lazy-preview-src"
-            ).firstNotNullOfOrNull { attr ->
-                container.attr(attr).takeIf { it.isNotBlank() }
-            }?.let { return it }
-        }
-
-        // ===== STRATEGI 3: og:video / twitter:player meta tags =====
-        listOf(
-            "og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"
-        ).firstNotNullOfOrNull { prop ->
-            document.selectFirst("meta[property=\"$prop\"]")?.attr("content")?.takeIf { it.isNotBlank() }
-        }?.let { return it }
-
-        // ===== STRATEGI 4: Parse frontWatchConfig JSON =====
+        // Parse frontWatchConfig JSON
         val config = try {
-            tryParseJson<FrontWatchConfig>(document.selectFirst("script#frontWatchConfig")?.data() ?: "")
+            tryParseJson<FrontWatchConfig>(
+                document.selectFirst("script#frontWatchConfig")?.data() ?: ""
+            )
         } catch (_: Exception) { null }
 
-        // 4a. Cek explicit preview/trailer URL field
-        config?.let { cfg ->
-            listOfNotNull(cfg.previewUrl, cfg.previewVideoUrl, cfg.trailerUrl)
-                .firstOrNull { it.isNotBlank() }
-                ?.let { return it }
-        }
+        val mainSrc = config?.playerSources?.firstOrNull()?.src
 
-        // 4b. Scan semua URL .mp4/.webm/.m3u8 di JSON — cari yang ada keyword preview/trailer
-        document.selectFirst("script#frontWatchConfig")?.data()?.let { jsonText ->
-            Regex("""["'](https?://[^"']+\.(?:mp4|webm|m3u8))["']""")
-                .findAll(jsonText)
-                .map { it.groupValues[1] }
-                .firstOrNull { url ->
-                    url.contains("preview", ignoreCase = true) ||
-                        url.contains("trailer", ignoreCase = true)
-                }?.let { return it }
-        }
+        // ===== STEP 1: Cari hostname preview dari card rekomendasi =====
+        // Di halaman detail ada section rekomendasi yang punya preview-src.
+        // Ambil hostname pertama yang valid (dia konsisten untuk semua video di site).
+        val previewHostname = document.select("a.front-video-thumb[data-front-video-preview-src]")
+            .mapNotNull { it.attr("data-front-video-preview-src").takeIf { s -> s.isNotBlank() } }
+            .mapNotNull { url ->
+                Regex("""(https?://[^/]+)""").find(url)?.groupValues?.get(1)
+            }
+            .firstOrNull()
 
-        // ===== STRATEGI 5: Derive dari playerSources[0].src =====
-        // Main URL: https://{cdn}/videos/{YYYY}/{MM}/{CODE}/{CODE}.mp4
-        // Target:  https://{cdn}/videos/previews/{YYYY}/{MM}/{CODE}/{CODE}_preview.mp4
-        config?.playerSources?.firstOrNull()?.src?.takeIf { it.isNotBlank() }?.let { mainSrc ->
-            val derived = derivePreviewUrl(mainSrc)
-            if (derived != null && derived != mainSrc) {
-                return derived
+        // ===== STEP 2: Ambil video code & date =====
+        // video code dari main URL (e.g. "VID-E7F85587")
+        val videoCode = mainSrc
+            ?.let { Regex("""/([A-Za-z0-9_-]+)_\d+p\.mp4""").find(it)?.groupValues?.get(1) }
+            ?: extractVideoCodeFromScripts(document)
+
+        // upload date dari JSON-LD VideoObject (paling reliable)
+        val uploadDate = document.select("script[type=\"application/ld+json\"]")
+            .mapNotNull { script ->
+                tryParseJson<Map<String, Any?>>(script.data())?.get("uploadDate") as? String
+            }
+            .firstOrNull { it.startsWith("20") }
+
+        val datePath = uploadDate?.let { dateStr ->
+            // Parse "2026-07-04T00:35:45+07:00" → "2026/07"
+            Regex("""(20\d{2})-(\d{2})""").find(dateStr)?.let {
+                "${it.groupValues[1]}/${it.groupValues[2]}"
             }
         }
 
-        // ===== STRATEGI 6: Scan semua <script> buat field hash + date =====
-        val codeFromAnywhere = extractVideoCodeFromScripts(document)
-        val dateFromAnywhere = extractPublishDateFromScripts(document)
-        if (!codeFromAnywhere.isNullOrBlank() && !dateFromAnywhere.isNullOrBlank()) {
-            val cdnBase = config?.playerSources?.firstOrNull()?.src
-                ?.let { Regex("""(https?://[^/]+)""").find(it)?.groupValues?.get(1) }
+        // ===== STEP 3: Construct preview URL =====
+        if (!videoCode.isNullOrBlank() && !datePath.isNullOrBlank() && !previewHostname.isNullOrBlank()) {
+            return "$previewHostname/videos/previews/$datePath/$videoCode/${videoCode}_preview.mp4"
+        }
 
-            if (!cdnBase.isNullOrBlank()) {
-                return "$cdnBase/videos/previews/$dateFromAnywhere/$codeFromAnywhere/${codeFromAnywhere}_preview.mp4"
+        // ===== STEP 4: Fallback — derive langsung dari mainSrc =====
+        // Kalau hostname preview ga ketemu di card, pakai hostname dari mainSrc
+        // (kadang host-nya sama, kadang beda — tergantung migrasi CDN)
+        if (!videoCode.isNullOrBlank() && !datePath.isNullOrBlank() && !mainSrc.isNullOrBlank()) {
+            val mainHostname = Regex("""(https?://[^/]+)""").find(mainSrc)?.groupValues?.get(1)
+            if (!mainHostname.isNullOrBlank()) {
+                return "$mainHostname/videos/previews/$datePath/$videoCode/${videoCode}_preview.mp4"
             }
+        }
+
+        // ===== STEP 5: Fallback terakhir — scan scripts =====
+        if (!videoCode.isNullOrBlank() && !datePath.isNullOrBlank()) {
+            // Hardcode hostname preview yang umum dipakai Javtiful sebagai last resort
+            val fallbackHost = "https://syyejpyh6yupolshmbfitseg.jav.si"
+            return "$fallbackHost/videos/previews/$datePath/$videoCode/${videoCode}_preview.mp4"
         }
 
         return null
-    }
-
-    private fun derivePreviewUrl(mainSrc: String): String? {
-        // Pattern target: /videos/previews/{YYYY}/{MM}/{CODE}/{CODE}_preview.mp4
-        return runCatching {
-            val withPreviewDir = mainSrc.replace(Regex("/videos/"), "/videos/previews/")
-            withPreviewDir.replace(Regex("(\\.[a-z0-9]+)$"), "_preview$1")
-        }.getOrNull()?.takeIf {
-            it != mainSrc && it.contains("_preview.")
-        }
     }
 
     private fun extractVideoCodeFromScripts(document: org.jsoup.nodes.Document): String? {
@@ -281,13 +280,6 @@ class JavtifulProvider : MainAPI() {
         return document.select("script").mapNotNull { script ->
             codeRegex.find(script.data())?.value
         }.firstOrNull()
-    }
-
-    private fun extractPublishDateFromScripts(document: org.jsoup.nodes.Document): String? {
-        val isoRegex = Regex("""["']?(20\d{2})[-/](0[1-9]|1[0-2])[-/]?(0[1-9]|[12]\d|3[01])?["']?""")
-        return document.select("script").mapNotNull { script ->
-            isoRegex.find(script.data())?.value?.trim('"', '\'')
-        }.firstOrNull { it.length >= 7 }
     }
 
     // ==================== EKSTRAKSI TAUTAN & SUBTITLE ====================
@@ -478,17 +470,7 @@ class JavtifulProvider : MainAPI() {
 
     data class FrontWatchConfig(
         @JsonProperty("playerSources") val playerSources: List<PlayerSource>? = null,
-        @JsonProperty("videoTitle") val videoTitle: String? = null,
-        // Field tambahan untuk trailer
-        @JsonProperty("previewUrl") val previewUrl: String? = null,
-        @JsonProperty("previewVideoUrl") val previewVideoUrl: String? = null,
-        @JsonProperty("trailerUrl") val trailerUrl: String? = null,
-        @JsonProperty("hash") val hash: String? = null,
-        @JsonProperty("videoCode") val videoCode: String? = null,
-        @JsonProperty("id") val id: String? = null,
-        @JsonProperty("publishedAt") val publishedAt: String? = null,
-        @JsonProperty("published_at") val publishedAtSnake: String? = null,
-        @JsonProperty("createdAt") val createdAt: String? = null
+        @JsonProperty("videoTitle") val videoTitle: String? = null
     )
 
     data class PlayerSource(
