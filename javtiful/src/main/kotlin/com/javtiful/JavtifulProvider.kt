@@ -12,18 +12,18 @@ class JavtifulProvider : MainAPI() {
     override var name = "Javtiful"
     override var mainUrl = "https://javtiful.com"
     override var lang = "id"
-    override val supportedTypes = setOf(TvType.Movie)
+    
+    // Mengubah tipe utama provider menjadi NSFW agar terfilter dengan benar di aplikasi
+    override val supportedTypes = setOf(TvType.NSFW)[span_2](start_span)[span_2](end_span)
 
     override val hasMainPage = true
 
-    // Headers yang disesuaikan untuk bypass hotlinking protection website target
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer" to "$mainUrl/"
     )
 
-    // Konfigurasi Kategori Halaman Utama
     override val mainPage = mainPageOf(
         Pair("id/foryou", "Untuk Anda"),
         Pair("id/censored", "Sensor"),
@@ -67,7 +67,6 @@ class JavtifulProvider : MainAPI() {
             it.toSearchResult()
         }
 
-        // Cek apakah ada tombol "Berikutnya" di elemen pagination HTML
         val hasNext = document.select("nav.front-pagination a.front-pagination-link").any { 
             it.text().contains("Berikutnya", ignoreCase = true) 
         }
@@ -75,20 +74,19 @@ class JavtifulProvider : MainAPI() {
         return newSearchResponseList(searchResults, hasNext)
     }
 
-    // Pemrosesan item card grid menjadi SearchResponse objek
     private fun Element.toSearchResult(): SearchResponse? {
         val titleElement = this.selectFirst("a.front-video-title") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
         
-        // Membaca fallback url gambar dari lazy loading attribute data-front-lazy-src
         val thumbElement = this.selectFirst("a.front-video-thumb img")
         val posterUrl = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
             ?: thumbElement?.attr("src")
 
         val quality = this.selectFirst(".front-quality-tag")?.text() ?: "HD"
 
-        return newMovieSearchResponse(title, href, TvType.Movie) {
+        // Mengubah parameter tipe data response menjadi TvType.NSFW
+        return newMovieSearchResponse(title, href, TvType.NSFW) {[span_3](start_span)[span_3](end_span)
             this.posterUrl = fixUrlNull(posterUrl)
             addQuality(quality)
         }
@@ -106,17 +104,16 @@ class JavtifulProvider : MainAPI() {
         val posterUrl = document.selectFirst("meta[property=\"og:image\"]")?.attr("content")
         val plot = document.selectFirst("meta[name=\"description\"]")?.attr("content")
 
-        // Mengambil metadata tag list
         val tagsList = document.select(".front-watch-link-chip").map { it.text() }
 
-        // Mengambil metadata aktor beserta foto profil mereka
         val actorsList = document.select(".front-watch-actor-card").map { actorCard ->
             val actorName = actorCard.selectFirst("span")?.text() ?: ""
             val actorThumb = actorCard.selectFirst("img")?.attr("src")
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
-        return newMovieLoadResponse(title, url, TvType.Movie, dataUrl = url) {
+        // Mengubah parameter tipe data load menjadi TvType.NSFW
+        return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {[span_4](start_span)[span_4](end_span)
             this.posterUrl = fixUrlNull(posterUrl)
             this.plot = plot
             this.tags = tagsList
@@ -134,7 +131,6 @@ class JavtifulProvider : MainAPI() {
         val res = app.get(data, headers = baseHeaders)
         val document = res.document
 
-        // Jalur Utama: Parsing data JSON internal dari element script tag #frontWatchConfig (Cloudflare R2 Direct Stream)
         val configScript = document.selectFirst("script#frontWatchConfig")?.data()
         if (!configScript.isNullOrBlank()) {
             val parsedConfig = tryParseJson<FrontWatchConfig>(configScript)
@@ -158,7 +154,6 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
-        // Jalur Cadangan 1: Deteksi iframe player pihak ketiga (MixDrop, Streamtape, dll.)
         document.select("iframe").forEach { iframe ->
             val frameUrl = iframe.attr("src")
             if (frameUrl.isNotBlank()) {
@@ -166,7 +161,6 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
-        // Jalur Cadangan 2: Ekstraksi tag raw HTML5 video source jika ada perubahan player
         document.select("video source").forEach { srcTag ->
             val videoUrl = srcTag.attr("src")
             if (videoUrl.isNotBlank()) {
@@ -185,7 +179,6 @@ class JavtifulProvider : MainAPI() {
         return true
     }
 
-    // Model Data Classes untuk deserialisasi data JSON konfigurasi player internal
     data class FrontWatchConfig(
         @JsonProperty("playerSources") val playerSources: List<PlayerSource>? = null,
         @JsonProperty("videoTitle") val videoTitle: String? = null
