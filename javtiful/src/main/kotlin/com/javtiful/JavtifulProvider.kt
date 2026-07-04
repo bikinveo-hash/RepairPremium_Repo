@@ -2,10 +2,8 @@ package com.javtiful
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.* // Memperbaiki Unresolved reference extractor utils
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class JavtifulProvider : MainAPI() {
@@ -13,8 +11,8 @@ class JavtifulProvider : MainAPI() {
     override var mainUrl = "https://javtiful.com"
     override var lang = "id"
     
-    // Mengubah tipe utama provider menjadi NSFW agar terfilter dengan benar di aplikasi
-    override val supportedTypes = setOf(TvType.NSFW)[span_2](start_span)[span_2](end_span)
+    // Menambahkan tipe data eksplit Set<TvType> untuk mencegah kesalahan inferensi compiler
+    override val supportedTypes: Set<TvType> = setOf(TvType.NSFW)
 
     override val hasMainPage = true
 
@@ -85,8 +83,7 @@ class JavtifulProvider : MainAPI() {
 
         val quality = this.selectFirst(".front-quality-tag")?.text() ?: "HD"
 
-        // Mengubah parameter tipe data response menjadi TvType.NSFW
-        return newMovieSearchResponse(title, href, TvType.NSFW) {[span_3](start_span)[span_3](end_span)
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = fixUrlNull(posterUrl)
             addQuality(quality)
         }
@@ -112,8 +109,7 @@ class JavtifulProvider : MainAPI() {
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
-        // Mengubah parameter tipe data load menjadi TvType.NSFW
-        return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {[span_4](start_span)[span_4](end_span)
+        return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {
             this.posterUrl = fixUrlNull(posterUrl)
             this.plot = plot
             this.tags = tagsList
@@ -142,13 +138,14 @@ class JavtifulProvider : MainAPI() {
                     
                     callback(
                         newExtractorLink(
-                            name = "Javtiful (R2 Storage)",
                             source = name,
+                            name = "Javtiful (R2 Storage)",
                             url = streamUrl,
-                            referer = "$mainUrl/",
-                            quality = resQuality,
                             type = ExtractorLinkType.VIDEO
-                        )
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.quality = resQuality
+                        }
                     )
                 }
             }
@@ -166,12 +163,13 @@ class JavtifulProvider : MainAPI() {
             if (videoUrl.isNotBlank()) {
                 callback(
                     newExtractorLink(
-                        name = "Javtiful Native Source",
                         source = name,
+                        name = "Javtiful Native Source",
                         url = fixUrl(videoUrl),
-                        referer = "$mainUrl/",
                         type = ExtractorLinkType.VIDEO
-                    )
+                    ) {
+                        this.referer = "$mainUrl/"
+                    }
                 )
             }
         }
