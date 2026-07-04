@@ -148,41 +148,119 @@ class JavtifulProvider : MainAPI() {
         // FITUR PENCARIAN SUBTITLE OTOMATIS VIA SUBTITLECAT
         // ------------------------------------------------------------------
         try {
+            // 1. Normalisasi kode film (mis. "adn-784", "ADN784", "/watch/adn-784" -> "ADN-784")
             val rawCode = data.substringAfterLast("/").substringBefore("?")
-            val codeRegex = Regex("""[a-zA-Z]{2,5}-\d{3,4}""")
-            val videoCode = codeRegex.find(rawCode)?.value ?: rawCode
-            
+            val codeRegex = Regex("""[a-zA-Z]{2,5}-?\d{3,4}""")
+            val normalizedCode = (codeRegex.find(rawCode)?.value ?: rawCode).uppercase()
+            // Pastikan ada tanda "-" antara huruf & angka supaya tahan input apapun
+            val videoCode = normalizedCode.replace(Regex("""([A-Z]{2,5})(\d{3,4})"""), "$1-$2")
+            val codeLetterPart = videoCode.substringBefore("-")
+            val codeDigitPart = videoCode.substringAfter("-")
+
+            // 2. Request halaman pencarian SubtitleCat
             val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
             val subSearchDoc = app.get(subSearchUrl, headers = baseHeaders).document
 
-            val resultLinks = subSearchDoc.select("table.sub-table tbody tr td a").take(5)
+            // 3. Seleksi kandidat: dari tiap baris hasil, kita cek:
+            //    a) anchor `<a>` di tabel hasil, ATAU
+            //    b) baris `<tr>` itu sendiri (untuk fallback kalau selector table tidak ada),
+            //    lalu validasi hard-match terhadap kode film.
+            val candidateRows = subSearchDoc.select("table.sub-table tbody tr")
 
-            resultLinks.forEachIndexed { index, element ->
-                val resultPath = element.attr("href")
-                val subLabel = element.parent()?.text()?.takeIf { it.isNotBlank() } ?: "Opsi ${index + 1}"
-                
-                if (resultPath.isNotBlank()) {
-                    var detailUrl = if (resultPath.startsWith("http")) resultPath else "https://www.subtitlecat.com/${resultPath.removePrefix("/")}"
-                    detailUrl = detailUrl.replace(" ", "%20")
+            data class SubtitleCandidate(val row: Element, val anchor: Element?, val labelText: String)
 
-                    try {
-                        val subDetailDoc = app.get(detailUrl, headers = baseHeaders).document
-                        val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
-                        
-                        if (!indoSubPath.isNullOrBlank()) {
-                            var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
-                            finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
-                            
+            val matchedCandidates = candidateRows.mapNotNull { row ->
+                val anchor = row.selectFirst("td a")
+                // Kumpulkan semua teks dari baris sebagai basis pencocokan
+                val rowText = row.text().uppercase()
+                // Teks pada anchor saja (judul/label subtitle)
+                val anchorText = anchor?.text()?.uppercase().orEmpty()
+                val hrefText = anchor?.attr("href")?.uppercase().orEmpty()
+
+                // 4. Pencocokan keras: kode film lengkap (mis. "ADN-784") harus muncul,
+                //    atau minimal huruf seri (ADN) + 3-4 digit angka (784) muncul bersamaan,
+                //    DAN tidak boleh mengandung kode seri lain dengan digit yang sama
+                //    (mis. "STAR-784" atau "ADN-784-COPY" tanpa prefix artikel lain).
+                val fullCodeMatch = rowText.contains(videoCode) || anchorText.contains(videoCode) || hrefText.contains(videoCode)
+                val looseMatch = rowText.contains(codeLetterPart) &&
+                    Regex("""\b""" + Regex.escape(codeDigitPart) + """\b""").containsMatchIn(rowText)
+
+                if (!fullCodeMatch && !looseMatch) {
+                    null
+                } else {
+                    // Anti false-positive: pastikan tidak ada kode seri beda dengan digit identik
+                    // di teks baris (mis. baris yang nyebut "ABC-784" padahal bukan ADN).
+                    val otherSeriesWithSameDigits = Regex(
+                        """([A-Z]{2,5})-?" + Regex.escape(codeDigitPart) + """\b"""
+                    ).findAll(rowText).any { match ->
+                        match.value.replace("-", "") != videoCode.replace("-", "")
+                    }
+                    if (otherSeriesWithSameDigits) {
+                        null
+                    } else {
+                        val labelText = row.text().takeIf { it.isNotBlank() }
+                            ?: anchor?.text()?.takeIf { it.isNotBlank() }
+                            ?: "Opsi"
+                        SubtitleCandidate(row, anchor, labelText)
+                    }
+                }
+            }.distinctBy { it.anchor?.attr("href") ?: it.labelText }
+
+            // 5. Kunjungi halaman detail HANYA untuk kandidat yang lolos pencocokan
+            matchedCandidates.forEachIndexed { index, candidate ->
+                val anchor = candidate.anchor
+                val subLabel = candidate.labelText
+
+                val resultPath = anchor?.attr("href")
+                if (resultPath.isNullOrBlank()) return@forEachIndexed
+
+                var detailUrl = if (resultPath.startsWith("http")) resultPath else "https://www.subtitlecat.com/${resultPath.removePrefix("/")}"
+                detailUrl = detailUrl.replace(" ", "%20")
+
+                try {
+                    val subDetailDoc = app.get(detailUrl, headers = baseHeaders).document
+
+                    // 6. Validasi silang pada halaman detail: judul halaman harus
+                    //    mengandung kode film (huruf seri + digit, toleran spasi/dash).
+                    val detailTitle = (subDetailDoc.title().ifBlank {
+                        subDetailDoc.selectFirst("h1, h2, .sub-title, .page-title")?.text().orEmpty()
+                    }).uppercase()
+                    val detailTitleNormalized = detailTitle.replace(Regex("""\s+"""), " ")
+                    val detailMatches = detailTitleNormalized.contains(videoCode) ||
+                        (detailTitleNormalized.contains(codeLetterPart) &&
+                            Regex("""\b""" + Regex.escape(codeDigitPart) + """\b""").containsMatchIn(detailTitleNormalized))
+
+                    if (!detailMatches) {
+                        // Buang kandidat yang tidak benar-benar cocok pada halaman detail
+                        return@forEachIndexed
+                    }
+
+                    val indoSubPath = subDetailDoc.selectFirst("#download_id")?.attr("href")
+
+                    if (!indoSubPath.isNullOrBlank()) {
+                        var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
+                        finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
+
+                        // Sanitasi tambahan: hanya izinkan link download yang tampak seperti
+                        // file subtitle (.srt/.zip/.rar/.ass) untuk menghindari tautan internal.
+                        val lowerUrl = finalDownloadUrl.lowercase()
+                        val isPlausibleSubtitle = lowerUrl.endsWith(".srt") ||
+                            lowerUrl.endsWith(".zip") ||
+                            lowerUrl.endsWith(".rar") ||
+                            lowerUrl.endsWith(".ass") ||
+                            lowerUrl.endsWith(".sub")
+
+                        if (isPlausibleSubtitle) {
                             subtitleCallback(
                                 newSubtitleFile(
-                                    lang = "ID - $subLabel",
+                                    lang = "ID - $subLabel (${index + 1}/${matchedCandidates.size})",
                                     url = finalDownloadUrl
                                 )
                             )
                         }
-                    } catch (e: Exception) {
-                        // Mencegah kerusakan loop jika satu berkas gagal dimuat
                     }
+                } catch (e: Exception) {
+                    // Mencegah kerusakan loop jika satu berkas gagal dimuat
                 }
             }
         } catch (e: Exception) {
