@@ -22,10 +22,10 @@ class JavtifulProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        Pair("id/foryou", "Untuk Anda"),
-        Pair("id/censored", "Sensor"),
-        Pair("id/uncensored", "Tanpa Sensor"),
-        Pair("id/reducing-mosaic", "Reducing Mosaic")
+        mainPage("id/foryou", "Untuk Anda", horizontalImages = true),
+        mainPage("id/censored", "Sensor", horizontalImages = true),
+        mainPage("id/uncensored", "Tanpa Sensor", horizontalImages = true),
+        mainPage("id/reducing-mosaic", "Reducing Mosaic", horizontalImages = true)
     )
 
     // ==================== LOGIKA HALAMAN UTAMA ====================
@@ -205,9 +205,11 @@ class JavtifulProvider : MainAPI() {
                 }
             }.distinctBy { it.anchor?.attr("href") ?: it.labelText }
 
-            // 5. Kunjungi halaman detail HANYA untuk kandidat yang lolos pencocokan
-            if (matchedCandidates.isNotEmpty()) {
-                matchedCandidates.forEachIndexed { index, candidate ->
+            // 5. Kunjungi halaman detail HANYA untuk kandidat yang lolos pencocokan.
+            //    Batasi ke 2 kandidat teratas untuk performa (sisanya biasanya rilis ulang/repack).
+            val finalCandidates = matchedCandidates.take(2)
+            if (finalCandidates.isNotEmpty()) {
+                finalCandidates.forEachIndexed { index, candidate ->
                     val anchor = candidate.anchor
                     val subLabel = candidate.labelText
 
@@ -256,7 +258,7 @@ class JavtifulProvider : MainAPI() {
                             if (isPlausibleSubtitle) {
                                 subtitleCallback(
                                     newSubtitleFile(
-                                        lang = "ID - $subLabel (${index + 1}/${matchedCandidates.size})",
+                                        lang = "ID - $subLabel (${index + 1}/${finalCandidates.size})",
                                         url = finalDownloadUrl
                                     )
                                 )
