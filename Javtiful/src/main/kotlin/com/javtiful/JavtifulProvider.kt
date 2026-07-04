@@ -41,7 +41,7 @@ class JavtifulProvider : MainAPI() {
 
         val res = app.get(url, headers = baseHeaders)
         val document = res.document
-        
+
         val homeItems = document.select("article.front-video-card").mapNotNull {
             it.toSearchResult()
         }
@@ -64,8 +64,8 @@ class JavtifulProvider : MainAPI() {
             it.toSearchResult()
         }
 
-        val hasNext = document.select("nav.front-pagination a.front-pagination-link").any { 
-            it.text().contains("Berikutnya", ignoreCase = true) 
+        val hasNext = document.select("nav.front-pagination a.front-pagination-link").any {
+            it.text().contains("Berikutnya", ignoreCase = true)
         }
 
         return newSearchResponseList(searchResults, hasNext)
@@ -81,7 +81,7 @@ class JavtifulProvider : MainAPI() {
         // 2. FILTER LOGO HD: Cari elemen badge kualitas, wajib ada dan harus berlogo HD/4K
         val qualityElement = this.selectFirst(".front-quality-tag") ?: return null
         val quality = qualityElement.text()
-        
+
         if (!quality.contains("HD", ignoreCase = true) && !quality.contains("4K", ignoreCase = true)) {
             return null
         }
@@ -89,7 +89,7 @@ class JavtifulProvider : MainAPI() {
         val titleElement = this.selectFirst("a.front-video-title") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
-        
+
         val thumbElement = this.selectFirst("a.front-video-thumb img")
         val posterUrl = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
             ?: thumbElement?.attr("src")
@@ -105,10 +105,10 @@ class JavtifulProvider : MainAPI() {
         val res = app.get(url, headers = baseHeaders)
         val document = res.document
 
-        val title = document.selectFirst(".front-watch-title h1")?.text() 
-            ?: document.selectFirst("h1")?.text() 
+        val title = document.selectFirst(".front-watch-title h1")?.text()
+            ?: document.selectFirst("h1")?.text()
             ?: "Javtiful Video"
-        
+
         val posterUrl = document.selectFirst("meta[property=\"og:image\"]")?.attr("content")
         val plot = document.selectFirst("meta[name=\"description\"]")?.attr("content")
 
@@ -145,14 +145,13 @@ class JavtifulProvider : MainAPI() {
         val document = res.document
 
         // ------------------------------------------------------------------
-        // FITUR PENCARIAN SUBTITLE OTOMATIS VIA SUBTITLECAT
+        // FITUR PENCARIAN SUBTITLE OTOMATIS VIA SUBTITLECAT (PATCHED: hard-match)
         // ------------------------------------------------------------------
         try {
-            // 1. Normalisasi kode film (mis. "adn-784", "ADN784", "/watch/adn-784" -> "ADN-784")
+            // 1. Normalisasi kode film (tahan input: "adn-784", "ADN784", "/watch/adn-784", dll)
             val rawCode = data.substringAfterLast("/").substringBefore("?")
             val codeRegex = Regex("""[a-zA-Z]{2,5}-?\d{3,4}""")
             val normalizedCode = (codeRegex.find(rawCode)?.value ?: rawCode).uppercase()
-            // Pastikan ada tanda "-" antara huruf & angka supaya tahan input apapun
             val videoCode = normalizedCode.replace(Regex("""([A-Z]{2,5})(\d{3,4})"""), "$1-$2")
             val codeLetterPart = videoCode.substringBefore("-")
             val codeDigitPart = videoCode.substringAfter("-")
@@ -161,35 +160,32 @@ class JavtifulProvider : MainAPI() {
             val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
             val subSearchDoc = app.get(subSearchUrl, headers = baseHeaders).document
 
-            // 3. Seleksi kandidat: dari tiap baris hasil, kita cek:
-            //    a) anchor `<a>` di tabel hasil, ATAU
-            //    b) baris `<tr>` itu sendiri (untuk fallback kalau selector table tidak ada),
-            //    lalu validasi hard-match terhadap kode film.
+            // 3. Seleksi kandidat baris hasil pencarian
             val candidateRows = subSearchDoc.select("table.sub-table tbody tr")
 
             data class SubtitleCandidate(val row: Element, val anchor: Element?, val labelText: String)
 
             val matchedCandidates = candidateRows.mapNotNull { row ->
                 val anchor = row.selectFirst("td a")
-                // Kumpulkan semua teks dari baris sebagai basis pencocokan
                 val rowText = row.text().uppercase()
-                // Teks pada anchor saja (judul/label subtitle)
                 val anchorText = anchor?.text()?.uppercase().orEmpty()
                 val hrefText = anchor?.attr("href")?.uppercase().orEmpty()
 
-                // 4. Pencocokan keras: kode film lengkap (mis. "ADN-784") harus muncul,
-                //    atau minimal huruf seri (ADN) + 3-4 digit angka (784) muncul bersamaan,
-                //    DAN tidak boleh mengandung kode seri lain dengan digit yang sama
-                //    (mis. "STAR-784" atau "ADN-784-COPY" tanpa prefix artikel lain).
-                val fullCodeMatch = rowText.contains(videoCode) || anchorText.contains(videoCode) || hrefText.contains(videoCode)
+                // 4. Pencocokan keras:
+                //    a) kode film lengkap (mis. "ADN-784") muncul di salah satu teks baris, ATAU
+                //    b) huruf seri ("ADN") + digit ("784" sebagai whole word) muncul bersamaan.
+                val fullCodeMatch = rowText.contains(videoCode) ||
+                    anchorText.contains(videoCode) ||
+                    hrefText.contains(videoCode)
+
                 val looseMatch = rowText.contains(codeLetterPart) &&
                     Regex("""\b""" + Regex.escape(codeDigitPart) + """\b""").containsMatchIn(rowText)
 
                 if (!fullCodeMatch && !looseMatch) {
                     null
                 } else {
-                    // Anti false-positive: pastikan tidak ada kode seri beda dengan digit identik
-                    // di teks baris (mis. baris yang nyebut "ABC-784" padahal bukan ADN).
+                    // Anti false-positive: pastikan tidak ada seri beda dengan digit identik
+                    // (mis. baris menyebut "STAR-784" atau "ABC-784" padahal target kita "ADN-784")
                     val otherSeriesWithSameDigits = Regex(
                         """([A-Z]{2,5})-?" + Regex.escape(codeDigitPart) + """\b"""
                     ).findAll(rowText).any { match ->
@@ -220,18 +216,18 @@ class JavtifulProvider : MainAPI() {
                 try {
                     val subDetailDoc = app.get(detailUrl, headers = baseHeaders).document
 
-                    // 6. Validasi silang pada halaman detail: judul halaman harus
-                    //    mengandung kode film (huruf seri + digit, toleran spasi/dash).
-                    val detailTitle = (subDetailDoc.title().ifBlank {
+                    // 6. Validasi silang pada halaman detail: judul halaman harus memuat kode film.
+                    val detailTitleRaw = subDetailDoc.title().ifBlank {
                         subDetailDoc.selectFirst("h1, h2, .sub-title, .page-title")?.text().orEmpty()
-                    }).uppercase()
+                    }
+                    val detailTitle = detailTitleRaw.uppercase()
                     val detailTitleNormalized = detailTitle.replace(Regex("""\s+"""), " ")
                     val detailMatches = detailTitleNormalized.contains(videoCode) ||
                         (detailTitleNormalized.contains(codeLetterPart) &&
-                            Regex("""\b""" + Regex.escape(codeDigitPart) + """\b""").containsMatchIn(detailTitleNormalized))
+                            Regex("""\b""" + Regex.escape(codeDigitPart) + """\b""")
+                                .containsMatchIn(detailTitleNormalized))
 
                     if (!detailMatches) {
-                        // Buang kandidat yang tidak benar-benar cocok pada halaman detail
                         return@forEachIndexed
                     }
 
@@ -241,8 +237,7 @@ class JavtifulProvider : MainAPI() {
                         var finalDownloadUrl = if (indoSubPath.startsWith("http")) indoSubPath else "https://www.subtitlecat.com/${indoSubPath.removePrefix("/")}"
                         finalDownloadUrl = finalDownloadUrl.replace(" ", "%20")
 
-                        // Sanitasi tambahan: hanya izinkan link download yang tampak seperti
-                        // file subtitle (.srt/.zip/.rar/.ass) untuk menghindari tautan internal.
+                        // Sanitasi URL: hanyaizinkan yang tampak seperti file subtitle
                         val lowerUrl = finalDownloadUrl.lowercase()
                         val isPlausibleSubtitle = lowerUrl.endsWith(".srt") ||
                             lowerUrl.endsWith(".zip") ||
@@ -272,12 +267,12 @@ class JavtifulProvider : MainAPI() {
         val configScript = document.selectFirst("script#frontWatchConfig")?.data()
         if (!configScript.isNullOrBlank()) {
             val parsedConfig = tryParseJson<FrontWatchConfig>(configScript)
-            
+
             parsedConfig?.playerSources?.forEach { source ->
                 val streamUrl = source.src
                 if (!streamUrl.isNullOrBlank()) {
                     val resQuality = source.size ?: 720
-                    
+
                     callback(
                         newExtractorLink(
                             source = name,
@@ -288,7 +283,7 @@ class JavtifulProvider : MainAPI() {
                             this.referer = "$mainUrl/"
                             this.quality = resQuality
                             // PERBAIKAN BANDWIDTH: Memaksa ExoPlayer mengirimkan browser headers agar tidak di-throttle Cloudflare
-                            this.headers = baseHeaders 
+                            this.headers = baseHeaders
                         }
                     )
                 }
