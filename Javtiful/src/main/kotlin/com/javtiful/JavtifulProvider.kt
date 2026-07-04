@@ -92,52 +92,52 @@ class JavtifulProvider : MainAPI() {
 
         // === Resolusi poster: ambil gambar paling tajam yang tersedia ===
         // CDN Javtiful umumnya nolak request tanpa Referer, jadi sertakan baseHeaders
-        // melalui addPoster(url, headers) sesuai standar CloudStream.
+        // sesuai standar CloudStream (interface SearchResponse.posterHeaders).
+        //
+        // Per view-source + hydrateFrontLazyImages():
+        //   src                 = path SVG placeholder (rendah-res, di-skip)
+        //   data-front-lazy-src = URL gambar ASLI (JPG/PNG/AVIF/...). PASTI full-res.
+        //   data-front-lazy-fallback-src = daftar URL fallback dipisah '|' (opsional)
+        //   loading="eager"     = di-set client-side pas masuk viewport
+        //   width/height        = dimensi native (mis. 640x360 untuk 16:9)
+        //
+        // Strategi: pakai data-front-lazy-src sebagai primary karena dari JS loader
+        // sudah pasti gambar terbaik. Jika atribut tsb. absen, fallback ke atribut
+        // umum lain, akhirnya src HANYA kalau bukan placeholder SVG.
         val thumbElement = this.selectFirst("a.front-video-thumb img")
 
-        // 1) srcset / data-srcset — ambil URL dengan lebar terbesar (full-res)
-        val srcsetAttr = thumbElement?.attr("data-srcset")?.takeIf { it.isNotBlank() }
-            ?: thumbElement?.attr("srcset")?.takeIf { it.isNotBlank() }
-        val posterUrl = srcsetAttr?.let { attr ->
-            attr.split(",")
-                .mapNotNull { entry ->
-                    val parts = entry.trim().split(Regex("\\s+"))
-                    val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    // Ambil descriptor width (mis. "640w") atau density (mis. "2x")
-                    val descriptor = parts.getOrNull(1)?.lowercase().orEmpty()
-                    val width = Regex("(\\d+)w").find(descriptor)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    val density = Regex("(\\d+(?:\\.\\d+)?)x").find(descriptor)?.groupValues?.get(1)?.toDoubleOrNull() ?: 1.0
-                    // Skor: prioritaskan width absolut, fallback ke density
-                    val score = if (width > 0) width.toDouble() else density * 100.0
-                    url to score
-                }
-                .maxByOrNull { it.second }
-                ?.first
-        } ?: thumbElement?.attr("data-original")?.takeIf { it.isNotBlank() }
-            ?: thumbElement?.attr("data-full")?.takeIf { it.isNotBlank() }
-            ?: thumbElement?.attr("data-hi-res-src")?.takeIf { it.isNotBlank() }
-            ?: thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
-            ?: thumbElement?.attr("src")
-
-        // 2) Upgrade path ukuran kalau CDN expose dimensi di URL
-        //    Pola umum: ".../thumb/300x200/abc.jpg" -> ".../thumb/600x900/abc.jpg"
-        //    atau ".../300x200/abc.jpg" -> gunakan penuh ".../abc.jpg"
-        val posterUrlSharpened = posterUrl?.let { raw ->
-            val dimRegex = Regex("/(\\d{2,4})x(\\d{2,4})/")
-            val match = dimRegex.find(raw)
-            if (match != null) {
-                val (w, h) = match.groupValues[1].toInt() to match.groupValues[2].toInt()
-                // Naikkan ke 2x (atau minimal 720p pada sumbu terpanjang)
-                val targetW = (w * 2).coerceAtLeast(720)
-                val targetH = (h * 2).coerceAtLeast(if (h >= w) 1080 else 720)
-                raw.replace(dimRegex, "/${targetW}x${targetH}/")
-            } else {
-                raw
-            }
+        // Helper kecil: cek apakah URL keliatan kayak placeholder yang harus diskip
+        fun String.isPlaceholder(): Boolean {
+            val s = this.lowercase()
+            return s.endsWith(".svg") || s.contains("placeholder")
         }
 
+        // Prioritas 1: data-front-lazy-src (strategi utama website ini)
+        val primaryLazy = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
+
+        // Prioritas 2: data-front-lazy-fallback-src (daftar '|'-separated)
+        // Ambil entry pertama yang BUKAN placeholder dan BUKAN primaryLazy.
+        val fallbackChain = thumbElement?.attr("data-front-lazy-fallback-src")
+            ?.split('|')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() && !it.isPlaceholder() }
+            ?: emptyList()
+
+        val fallbackCandidate = fallbackChain.firstOrNull { it != primaryLazy }
+            ?: fallbackChain.firstOrNull()
+
+        val posterUrl = primaryLazy?.takeIf { !it.isPlaceholder() }
+            ?: fallbackCandidate
+            ?: thumbElement?.attr("data-original")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("data-src")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("data-hi-res-src")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("data-source")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("data-full")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() && !it.isPlaceholder() }
+            ?: thumbElement?.attr("src")?.takeIf { !it.isPlaceholder() }
+
         return newMovieSearchResponse(title, href, TvType.NSFW) {
-            this.posterUrl = fixUrlNull(posterUrlSharpened)
+            this.posterUrl = fixUrlNull(posterUrl)
             this.posterHeaders = baseHeaders
             addQuality(quality)
         }
