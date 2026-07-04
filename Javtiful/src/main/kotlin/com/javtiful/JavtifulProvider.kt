@@ -2,7 +2,7 @@ package com.javtiful
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.* // Memperbaiki Unresolved reference extractor utils
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 
@@ -10,8 +10,6 @@ class JavtifulProvider : MainAPI() {
     override var name = "Javtiful"
     override var mainUrl = "https://javtiful.com"
     override var lang = "id"
-    
-    // Menambahkan tipe data eksplit Set<TvType> untuk mencegah kesalahan inferensi compiler
     override val supportedTypes: Set<TvType> = setOf(TvType.NSFW)
 
     override val hasMainPage = true
@@ -73,6 +71,20 @@ class JavtifulProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
+        // 1. FILTER PARTNER: Skip jika kartu video merupakan iklan partner / rekomendasi luar
+        if (this.hasClass("front-partner-card") || this.selectFirst(".front-partner-badge") != null) {
+            return null
+        }
+
+        // 2. FILTER LOGO HD: Cari elemen badge kualitas, jika tidak ada langsung skip
+        val qualityElement = this.selectFirst(".front-quality-tag") ?: return null
+        val quality = qualityElement.text()
+        
+        // Pastikan teks kualitas mengandung teks "HD" (termasuk FHD) atau "4K"
+        if (!quality.contains("HD", ignoreCase = true) && !quality.contains("4K", ignoreCase = true)) {
+            return null
+        }
+
         val titleElement = this.selectFirst("a.front-video-title") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
@@ -80,8 +92,6 @@ class JavtifulProvider : MainAPI() {
         val thumbElement = this.selectFirst("a.front-video-thumb img")
         val posterUrl = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
             ?: thumbElement?.attr("src")
-
-        val quality = this.selectFirst(".front-quality-tag")?.text() ?: "HD"
 
         return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = fixUrlNull(posterUrl)
