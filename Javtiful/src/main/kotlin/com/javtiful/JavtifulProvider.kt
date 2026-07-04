@@ -118,11 +118,17 @@ class JavtifulProvider : MainAPI() {
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
+        // EKSTRAKSI REKOMENDASI / SARAN FILM (Otomatis ter-filter Partner & Non-HD)
+        val recommendationsList = document.select("article.front-video-card").mapNotNull {
+            it.toSearchResult()
+        }
+
         return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {
             this.posterUrl = fixUrlNull(posterUrl)
             this.plot = plot
             this.tags = tagsList
             this.actors = actorsList.map { ActorData(it) }
+            this.recommendations = recommendationsList // Menampilkan baris rekomendasi film di UI
         }
     }
 
@@ -136,9 +142,7 @@ class JavtifulProvider : MainAPI() {
         val res = app.get(data, headers = baseHeaders)
         val document = res.document
 
-        // ==================================================================
-        // INTEGRASI EKSTRAKTOR SUBTITLE OTOMATIS (SUBTITLECAT MULTI-OPTIONS)
-        // ==================================================================
+        // Integrasi Pencarian Subtitle Otomatis ke SubtitleCat
         try {
             val rawCode = data.substringAfterLast("/").substringBefore("?")
             val codeRegex = Regex("""[a-zA-Z]{2,5}-\d{3,4}""")
@@ -173,14 +177,13 @@ class JavtifulProvider : MainAPI() {
                             )
                         }
                     } catch (e: Exception) {
-                        // Mencegah kerusakan loop jika salah satu file download bermasalah
+                        // Mencegah crash loop
                     }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        // ==================================================================
 
         val configScript = document.selectFirst("script#frontWatchConfig")?.data()
         if (!configScript.isNullOrBlank()) {
