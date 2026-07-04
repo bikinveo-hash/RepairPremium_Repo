@@ -151,43 +151,41 @@ class JavtifulProvider : MainAPI() {
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
-        // FITUR SARAN FILM: Mengambil item video terkait dari halaman detail (otomatis menyaring Partner & Non-HD)
+        // FITUR SARAN FILM: Mengambil item video terkait dari halaman detail
         val recommendationsList = document.select("article.front-video-card").mapNotNull {
             it.toSearchResult()
         }
 
-        return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {
+        // Build response dulu
+        val response = newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {
             this.posterUrl = fixUrlNull(posterUrl)
             this.posterHeaders = baseHeaders
             this.plot = plot
             this.tags = tagsList
             this.actors = actorsList.map { ActorData(it) }
             this.recommendations = recommendationsList
-
-            // === TRAILER: attach preview video dari CDN Javtiful ===
-            scanAndAttachTrailer(this, document)
         }
+
+        // === TRAILER: panggil via LoadResponse.Companion secara eksplisit ===
+        // (extension di companion object, panggil eksplisit biar resolve jelas)
+        val trailerUrl = extractPreviewUrl(document)
+        if (!trailerUrl.isNullOrBlank()) {
+            LoadResponse.addTrailer(
+                response,
+                trailerUrl = trailerUrl,
+                referer = "$mainUrl/",
+                addRaw = true,
+                headers = baseHeaders
+            )
+        }
+
+        return response
     }
 
     // ==================== TRAILER / PREVIEW VIDEO ====================
     // Frontend Javtiful nampilin preview video on-hover di card.
     // CDN URL pattern: https://{cdn}/videos/previews/{YYYY}/{MM}/{VIDEO_CODE}/{VIDEO_CODE}_preview.mp4
     // Strategi: scan markup → parse JSON config → derive dari playerSources URL.
-    private suspend fun scanAndAttachTrailer(
-        response: MovieLoadResponse,
-        document: org.jsoup.nodes.Document
-    ) {
-        val trailerUrl = extractPreviewUrl(document)
-        if (trailerUrl.isNullOrBlank()) return
-
-        response.addTrailer(
-            trailerUrl = trailerUrl,
-            referer = "$mainUrl/",
-            addRaw = true,                  // direct .mp4 file dari CDN
-            headers = baseHeaders           // CDN butuh Referer
-        )
-    }
-
     private fun extractPreviewUrl(document: org.jsoup.nodes.Document): String? {
         // ===== STRATEGI 1: Native <video>/<source> tag di markup =====
         document.selectFirst("video source")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return it }
@@ -200,19 +198,21 @@ class JavtifulProvider : MainAPI() {
         )
         for (selector in playerSelectors) {
             val container = document.selectFirst(selector) ?: continue
-            listOf("data-preview", "data-preview-src", "data-preview-url",
-                   "data-trailer", "data-trailer-url", "data-hover-video",
-                   "data-front-preview-src", "data-front-lazy-preview-src")
-                .firstNotNullOfOrNull { attr ->
-                    container.attr(attr).takeIf { it.isNotBlank() }
-                }?.let { return it }
+            listOf(
+                "data-preview", "data-preview-src", "data-preview-url",
+                "data-trailer", "data-trailer-url", "data-hover-video",
+                "data-front-preview-src", "data-front-lazy-preview-src"
+            ).firstNotNullOfOrNull { attr ->
+                container.attr(attr).takeIf { it.isNotBlank() }
+            }?.let { return it }
         }
 
         // ===== STRATEGI 3: og:video / twitter:player meta tags =====
-        listOf("og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream")
-            .firstNotNullOfOrNull { prop ->
-                document.selectFirst("meta[property=\"$prop\"]")?.attr("content")?.takeIf { it.isNotBlank() }
-            }?.let { return it }
+        listOf(
+            "og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"
+        ).firstNotNullOfOrNull { prop ->
+            document.selectFirst("meta[property=\"$prop\"]")?.attr("content")?.takeIf { it.isNotBlank() }
+        }?.let { return it }
 
         // ===== STRATEGI 4: Parse frontWatchConfig JSON =====
         val config = try {
@@ -226,20 +226,20 @@ class JavtifulProvider : MainAPI() {
                 ?.let { return it }
         }
 
-        // 4b. Scan semua string field di JSON — cari URL .mp4/.webm/.m3u8 yang ada keyword preview/trailer
+        // 4b. Scan semua URL .mp4/.webm/.m3u8 di JSON — cari yang ada keyword preview/trailer
         document.selectFirst("script#frontWatchConfig")?.data()?.let { jsonText ->
             Regex("""["'](https?://[^"']+\.(?:mp4|webm|m3u8))["']""")
                 .findAll(jsonText)
                 .map { it.groupValues[1] }
                 .firstOrNull { url ->
                     url.contains("preview", ignoreCase = true) ||
-                    url.contains("trailer", ignoreCase = true)
+                        url.contains("trailer", ignoreCase = true)
                 }?.let { return it }
         }
 
         // ===== STRATEGI 5: Derive dari playerSources[0].src =====
-        // Main URL pattern: https://{cdn}/videos/{YYYY}/{MM}/{CODE}/{CODE}.mp4
-        // Target:           https://{cdn}/videos/previews/{YYYY}/{MM}/{CODE}/{CODE}_preview.mp4
+        // Main URL: https://{cdn}/videos/{YYYY}/{MM}/{CODE}/{CODE}.mp4
+        // Target:  https://{cdn}/videos/previews/{YYYY}/{MM}/{CODE}/{CODE}_preview.mp4
         config?.playerSources?.firstOrNull()?.src?.takeIf { it.isNotBlank() }?.let { mainSrc ->
             val derived = derivePreviewUrl(mainSrc)
             if (derived != null && derived != mainSrc) {
@@ -247,7 +247,7 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
-        // ===== STRATEGI 6: Scan semua <script> JSON buat field hash + date =====
+        // ===== STRATEGI 6: Scan semua <script> buat field hash + date =====
         val codeFromAnywhere = extractVideoCodeFromScripts(document)
         val dateFromAnywhere = extractPublishDateFromScripts(document)
         if (!codeFromAnywhere.isNullOrBlank() && !dateFromAnywhere.isNullOrBlank()) {
@@ -300,6 +300,7 @@ class JavtifulProvider : MainAPI() {
         // FITUR PENCARIAN SUBTITLE OTOMATIS VIA SUBTITLECAT (PATCHED: hard-match)
         // ------------------------------------------------------------------
         try {
+            // 1. Normalisasi kode film
             val rawCode = data.substringAfterLast("/").substringBefore("?")
             val codeRegex = Regex("[a-zA-Z]{2,5}-?[0-9]{3,4}")
             val normalizedCode = (codeRegex.find(rawCode)?.value ?: rawCode).uppercase()
@@ -307,9 +308,11 @@ class JavtifulProvider : MainAPI() {
             val codeLetterPart = videoCode.substringBefore("-")
             val codeDigitPart = videoCode.substringAfter("-")
 
+            // 2. Request halaman pencarian SubtitleCat
             val subSearchUrl = "https://www.subtitlecat.com/index.php?search=$videoCode"
             val subSearchDoc = app.get(subSearchUrl, headers = baseHeaders).document
 
+            // 3. Seleksi kandidat baris hasil pencarian
             val candidateRows = subSearchDoc.select("table.sub-table tbody tr")
 
             data class SubtitleCandidate(val row: Element, val anchor: Element?, val labelText: String)
@@ -347,6 +350,7 @@ class JavtifulProvider : MainAPI() {
                 }
             }.distinctBy { it.anchor?.attr("href") ?: it.labelText }
 
+            // 5. Kunjungi halaman detail HANYA untuk kandidat yang lolos pencocokan.
             val finalCandidates = matchedCandidates.take(2)
             if (finalCandidates.isNotEmpty()) {
                 finalCandidates.forEachIndexed { index, candidate ->
@@ -431,6 +435,7 @@ class JavtifulProvider : MainAPI() {
                         ) {
                             this.referer = "$mainUrl/"
                             this.quality = resQuality
+                            // PERBAIKAN BANDWIDTH: Memaksa ExoPlayer mengirimkan browser headers agar tidak di-throttle Cloudflare
                             this.headers = baseHeaders
                         }
                     )
