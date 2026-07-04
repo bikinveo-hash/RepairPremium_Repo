@@ -90,12 +90,55 @@ class JavtifulProvider : MainAPI() {
         val title = titleElement.text()
         val href = titleElement.attr("href")
 
+        // === Resolusi poster: ambil gambar paling tajam yang tersedia ===
+        // CDN Javtiful umumnya nolak request tanpa Referer, jadi sertakan baseHeaders
+        // melalui addPoster(url, headers) sesuai standar CloudStream.
         val thumbElement = this.selectFirst("a.front-video-thumb img")
-        val posterUrl = thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
+
+        // 1) srcset / data-srcset — ambil URL dengan lebar terbesar (full-res)
+        val srcsetAttr = thumbElement?.attr("data-srcset")?.takeIf { it.isNotBlank() }
+            ?: thumbElement?.attr("srcset")?.takeIf { it.isNotBlank() }
+        val posterUrl = srcsetAttr?.let { attr ->
+            attr.split(",")
+                .mapNotNull { entry ->
+                    val parts = entry.trim().split(Regex("\\s+"))
+                    val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    // Ambil descriptor width (mis. "640w") atau density (mis. "2x")
+                    val descriptor = parts.getOrNull(1)?.lowercase().orEmpty()
+                    val width = Regex("(\\d+)w").find(descriptor)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    val density = Regex("(\\d+(?:\\.\\d+)?)x").find(descriptor)?.groupValues?.get(1)?.toDoubleOrNull() ?: 1.0
+                    // Skor: prioritaskan width absolut, fallback ke density
+                    val score = if (width > 0) width.toDouble() else density * 100.0
+                    url to score
+                }
+                .maxByOrNull { it.second }
+                ?.first
+        } ?: thumbElement?.attr("data-original")?.takeIf { it.isNotBlank() }
+            ?: thumbElement?.attr("data-full")?.takeIf { it.isNotBlank() }
+            ?: thumbElement?.attr("data-hi-res-src")?.takeIf { it.isNotBlank() }
+            ?: thumbElement?.attr("data-front-lazy-src")?.takeIf { it.isNotBlank() }
             ?: thumbElement?.attr("src")
 
+        // 2) Upgrade path ukuran kalau CDN expose dimensi di URL
+        //    Pola umum: ".../thumb/300x200/abc.jpg" -> ".../thumb/600x900/abc.jpg"
+        //    atau ".../300x200/abc.jpg" -> gunakan penuh ".../abc.jpg"
+        val posterUrlSharpened = posterUrl?.let { raw ->
+            val dimRegex = Regex("/(\\d{2,4})x(\\d{2,4})/")
+            val match = dimRegex.find(raw)
+            if (match != null) {
+                val (w, h) = match.groupValues[1].toInt() to match.groupValues[2].toInt()
+                // Naikkan ke 2x (atau minimal 720p pada sumbu terpanjang)
+                val targetW = (w * 2).coerceAtLeast(720)
+                val targetH = (h * 2).coerceAtLeast(if (h >= w) 1080 else 720)
+                raw.replace(dimRegex, "/${targetW}x${targetH}/")
+            } else {
+                raw
+            }
+        }
+
         return newMovieSearchResponse(title, href, TvType.NSFW) {
-            this.posterUrl = fixUrlNull(posterUrl)
+            this.posterUrl = fixUrlNull(posterUrlSharpened)
+            this.posterHeaders = baseHeaders
             addQuality(quality)
         }
     }
@@ -116,7 +159,9 @@ class JavtifulProvider : MainAPI() {
 
         val actorsList = document.select(".front-watch-actor-card").map { actorCard ->
             val actorName = actorCard.selectFirst("span")?.text() ?: ""
-            val actorThumb = actorCard.selectFirst("img")?.attr("src")
+            val actorThumb = actorCard.selectFirst("img")?.attr("data-original")
+                ?.takeIf { it.isNotBlank() }
+                ?: actorCard.selectFirst("img")?.attr("src")
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
@@ -127,6 +172,7 @@ class JavtifulProvider : MainAPI() {
 
         return newMovieLoadResponse(title, url, TvType.NSFW, dataUrl = url) {
             this.posterUrl = fixUrlNull(posterUrl)
+            this.posterHeaders = baseHeaders
             this.plot = plot
             this.tags = tagsList
             this.actors = actorsList.map { ActorData(it) }
