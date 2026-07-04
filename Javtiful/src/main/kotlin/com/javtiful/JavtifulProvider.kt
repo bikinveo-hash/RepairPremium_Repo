@@ -166,16 +166,20 @@ class JavtifulProvider : MainAPI() {
             this.recommendations = recommendationsList
         }
 
-        // === TRAILER: panggil via LoadResponse.Companion secara eksplisit ===
-        // (extension di companion object, panggil eksplisit biar resolve jelas)
+        // === TRAILER: append langsung ke trailers list (paling kompatibel) ===
+        // Kita manipulasi `trailers: MutableList<TrailerData>` langsung dari interface LoadResponse.
+        // Lebih reliable daripada `addTrailer(...)` karena ga depend sama extension function
+        // yang mungkin beda signature antar versi CloudStream.
+        // Hasilnya identik dengan addTrailer() — di belakang layar addTrailer juga append ke list ini.
         val trailerUrl = extractPreviewUrl(document)
         if (!trailerUrl.isNullOrBlank()) {
-            LoadResponse.addTrailer(
-                response,
-                trailerUrl = trailerUrl,
-                referer = "$mainUrl/",
-                addRaw = true,
-                headers = baseHeaders
+            response.trailers.add(
+                TrailerData(
+                    extractorUrl = trailerUrl,
+                    referer = "$mainUrl/",
+                    raw = true,                 // addRaw = true equivalent (langsung pakai URL)
+                    headers = baseHeaders       // CDN butuh Referer
+                )
             )
         }
 
