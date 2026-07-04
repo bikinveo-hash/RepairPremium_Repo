@@ -14,6 +14,7 @@ class JavtifulProvider : MainAPI() {
 
     override val hasMainPage = true
 
+    // Base headers untuk bypass proteksi bot Cloudflare & penyamaran browser
     private val baseHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -70,13 +71,14 @@ class JavtifulProvider : MainAPI() {
         return newSearchResponseList(searchResults, hasNext)
     }
 
+    // Pemrosesan item card grid & Filter ganda (Partner & Kualitas Non-HD)
     private fun Element.toSearchResult(): SearchResponse? {
-        // 1. FILTER PARTNER: Skip jika kartu video berlabel partner / ad-placement
+        // 1. FILTER PARTNER: Langsung skip jika kartu video berlabel partner / rekomendasi luar
         if (this.hasClass("front-partner-card") || this.selectFirst(".front-partner-badge") != null) {
             return null
         }
 
-        // 2. FILTER LOGO HD: Skip jika kualitas video tidak memenuhi standar HD / 4K
+        // 2. FILTER LOGO HD: Cari elemen badge kualitas, wajib ada dan harus berlogo HD/4K
         val qualityElement = this.selectFirst(".front-quality-tag") ?: return null
         val quality = qualityElement.text()
         
@@ -118,7 +120,7 @@ class JavtifulProvider : MainAPI() {
             Actor(actorName, fixUrlNull(actorThumb))
         }
 
-        // EKSTRAKSI REKOMENDASI / SARAN FILM (Otomatis ter-filter Partner & Non-HD)
+        // FITUR SARAN FILM: Mengambil item video terkait dari halaman detail (otomatis menyaring Partner & Non-HD)
         val recommendationsList = document.select("article.front-video-card").mapNotNull {
             it.toSearchResult()
         }
@@ -128,7 +130,7 @@ class JavtifulProvider : MainAPI() {
             this.plot = plot
             this.tags = tagsList
             this.actors = actorsList.map { ActorData(it) }
-            this.recommendations = recommendationsList // Menampilkan baris rekomendasi film di UI
+            this.recommendations = recommendationsList
         }
     }
 
@@ -142,7 +144,9 @@ class JavtifulProvider : MainAPI() {
         val res = app.get(data, headers = baseHeaders)
         val document = res.document
 
-        // Integrasi Pencarian Subtitle Otomatis ke SubtitleCat
+        // ------------------------------------------------------------------
+        // FITUR PENCARIAN SUBTITLE OTOMATIS VIA SUBTITLECAT
+        // ------------------------------------------------------------------
         try {
             val rawCode = data.substringAfterLast("/").substringBefore("?")
             val codeRegex = Regex("""[a-zA-Z]{2,5}-\d{3,4}""")
@@ -177,14 +181,16 @@ class JavtifulProvider : MainAPI() {
                             )
                         }
                     } catch (e: Exception) {
-                        // Mencegah crash loop
+                        // Mencegah kerusakan loop jika satu berkas gagal dimuat
                     }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        // ------------------------------------------------------------------
 
+        // Jalur Utama Player: Parsing objek JSON konfigurasi #frontWatchConfig
         val configScript = document.selectFirst("script#frontWatchConfig")?.data()
         if (!configScript.isNullOrBlank()) {
             val parsedConfig = tryParseJson<FrontWatchConfig>(configScript)
@@ -203,12 +209,15 @@ class JavtifulProvider : MainAPI() {
                         ) {
                             this.referer = "$mainUrl/"
                             this.quality = resQuality
+                            // PERBAIKAN BANDWIDTH: Memaksa ExoPlayer mengirimkan browser headers agar tidak di-throttle Cloudflare
+                            this.headers = baseHeaders 
                         }
                     )
                 }
             }
         }
 
+        // Jalur Cadangan 1: Cek player iframe eksternal
         document.select("iframe").forEach { iframe ->
             val frameUrl = iframe.attr("src")
             if (frameUrl.isNotBlank()) {
@@ -216,6 +225,7 @@ class JavtifulProvider : MainAPI() {
             }
         }
 
+        // Jalur Cadangan 2: Cek raw video source html5 native tag
         document.select("video source").forEach { srcTag ->
             val videoUrl = srcTag.attr("src")
             if (videoUrl.isNotBlank()) {
@@ -227,6 +237,7 @@ class JavtifulProvider : MainAPI() {
                         type = ExtractorLinkType.VIDEO
                     ) {
                         this.referer = "$mainUrl/"
+                        this.headers = baseHeaders
                     }
                 )
             }
