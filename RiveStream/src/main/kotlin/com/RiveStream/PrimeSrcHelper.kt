@@ -1,231 +1,395 @@
-//
 package com.RiveStream
 
+import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import java.net.URLEncoder
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 
 /**
- * RiveStream Provider - Core Plugin Cloudstream Terkalibrasi Standar MainAPI
+ * PrimeSrc Helper - Mengoordinasikan komunikasi dengan layanan PrimeSrc Embed
  */
-class RiveStreamProvider : MainAPI() { //
-    override var name    = "RiveStream" //
-    override var mainUrl = "https://www.rivestream.app" //
-    override var lang    = "en" //
-    override val hasMainPage    = true //
-    override val hasQuickSearch = false //
+class PrimeSrcHelper {
 
-    companion object { //
-        const val SHARED_API_KEY = "d64117f26031a428449f102ced3aba73" //
-        private const val TMDB_BASE  = "https://api.themoviedb.org/3" //
-        private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination=" //
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" //
-    }
+    companion object {
+        private const val PRIMESRC_BASE = "https://primesrc.me"
+        private const val PROXY_BASE = "https://proxy.valhallastream.com"
+        private val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
 
-    override val mainPage = mainPageOf( //
-        Pair("movie/now_playing",  "Latest Movies"), //
-        Pair("tv/airing_today",    "Latest TV Shows"), //
-        Pair("trending/movie/week","Trending Movies"), //
-        Pair("trending/tv/week",   "Trending TV Shows") //
-    ) //
+        private val SALT_ARRAY = arrayOf(
+            "4Z7lUo", "gwIVSMD", "kP9xL1", "mR2vB5", "aQ8wX0", "zT4nY7", "uV1oI3",
+            "pE6xM9", "bC2vF4", "hG8kL0", "jK3mN5", "rP9sT1", "uW4vY7", "xA1bC3",
+            "dE6fH9", "iJ2kM4", "lN8oP0", "qR3sT5", "uV9wX1", "yZ4aB7", "cD1eF3",
+            "gH6iJ9", "kL2mN4", "oP8qR0", "sT3uV5", "wX9yZ1", "aB4cC7", "dE1fG3",
+            "hI6jK9", "lN2mO4", "pQ8rS0", "tU3vW5", "xY9zA1", "bC4dE7", "fF1gH3",
+            "jI6kL9", "mN2nP4", "oP8qR0", "sT3uV5", "wX9yZ1", "aB4cC7", "dE1fG3",
+            "hI6jK9", "lN2mO4", "pQ8rS0", "tU3vW5", "xY9zA1", "bC4dE7", "fG1hI3",
+            "jK6lN9", "mN2oP4", "qR8sT0", "uV3wX5", "yZ9aB1", "cC4dE7", "fG1hI3"
+        )
 
-    private fun buildUrl(path: String, useProxy: Boolean = true): String { //
-        val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$SHARED_API_KEY" //
-        return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl //
-    }
+        private val KNOWN_SERVERS = setOf(
+            "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
+            "Streamplay", "Vidnest", "Filemoon", "Streamwish",
+            "Vidmoly", "Mixdrop", "Upzur", "Savefiles", "Vidara", "VidsST"
+        )
 
-    private val tmdbHeaders = mapOf( //
-        "User-Agent" to USER_AGENT, //
-        "Referer"    to "$mainUrl/" //
-    )
+        private val SERVER_EXTRACTOR_MAP = mapOf(
+            "Voe"        to "Voe",
+            "Filelions"  to "Filelions",
+            "Streamtape" to "Streamtape",
+            "Dood"       to "Dood",
+            "Luluvdoo"   to "Luluvdoo",    
+            "Streamplay" to "Streamplay", 
+            "Vidnest"    to "Vidnest",
+            "Filemoon"   to "Filemoon",
+            "Streamwish" to "Streamwish",
+            "Vidmoly"    to "Vidmoly",
+            "Mixdrop"    to "Mixdrop",
+            "Upzur"      to "Upzur",       
+            "Savefiles"  to "Savefiles"    
+        )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? { //
-        val path     = "${request.data}?page=$page" //
-        val url      = buildUrl(path) //
-        val response = app.get(url, headers = tmdbHeaders).text //
-        val parsed   = tryParseJson<TmdbResultsResponse>(response) ?: return null //
-
-        val homeItems = parsed.results?.mapNotNull { item -> //
-            val isMovie  = item.title != null || request.data.contains("movie") //
-            val itemUrl  = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}" //
-            val title    = item.title ?: item.name ?: return@mapNotNull null //
-            val poster   = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" } //
-
-            if (isMovie) { //
-                newMovieSearchResponse(title, itemUrl, TvType.Movie) { this.posterUrl = poster } //
-            } else { //
-                newTvSeriesSearchResponse(title, itemUrl, TvType.TvSeries) { this.posterUrl = poster } //
-            }
-        } ?: emptyList() //
-
-        return newHomePageResponse(request.name, homeItems, hasNext = true) //
-    }
-
-    override suspend fun search(query: String, page: Int): SearchResponseList? { //
-        val encodedQuery = URLEncoder.encode(query, "UTF-8") //
-        val url          = buildUrl("search/multi?query=$encodedQuery&page=$page") //
-        val response     = app.get(url, headers = tmdbHeaders).text //
-        val parsed       = tryParseJson<TmdbResultsResponse>(response) ?: return null //
-
-        val items = parsed.results?.mapNotNull { item -> //
-            val title        = item.title ?: item.name ?: return@mapNotNull null //
-            val poster    = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" } //
-            val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv") //
-            val itemUrl   = "$mainUrl/$mediaType/${item.id}" //
-
-            when (mediaType) { //
-                "movie" -> newMovieSearchResponse(title, itemUrl, TvType.Movie) { this.posterUrl = poster } //
-                "tv"    -> newTvSeriesSearchResponse(title, itemUrl, TvType.TvSeries) { this.posterUrl = poster } //
-                else    -> null //
-            }
-        } ?: emptyList() //
-
-        return newSearchResponseList(items, hasNext = items.isNotEmpty()) //
-    }
-
-    override suspend fun load(url: String): LoadResponse? { //
-        val cleanPath = url.replace("$mainUrl/", "") //
-        val type: String
-        val id: String
-        
-        // TERCALIBRASI: Adaptasi otomatis skema URL Query string baru (?type=movie&id=...) & URL lama
-        if (cleanPath.startsWith("watch")) { //
-            val query = url.substringAfter("?") //
-            val qp = query.split("&").associate {
-                it.substringBefore("=") to java.net.URLDecoder.decode(it.substringAfter("="), "UTF-8")
-            }
-            type = qp["type"] ?: return null //
-            id = qp["id"] ?: return null //
-        } else {
-            type = cleanPath.substringBefore("/") //
-            id = cleanPath.substringAfter("/").substringBefore("?") //
+        private fun encodeWebSafeBase64(byteArray: ByteArray): String {
+            val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+            return base64.replace("+", "-")
+                .replace("/", "_")
+                .replace("=", "")
         }
-        
-        val detailsUrl = buildUrl("$type/$id?append_to_response=external_ids") //
-        val response   = app.get(detailsUrl, headers = tmdbHeaders).text //
-        val item       = tryParseJson<TmdbDetailResult>(response) ?: return null //
 
-        val title  = item.title ?: item.name ?: return null //
-        val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" } //
-        val genres = item.genres?.mapNotNull { it.name } //
+        fun generateSecretKey(query: String): String {
+            var hash: Long = 3735928559L
+            val bytes = query.toByteArray(StandardCharsets.UTF_8)
 
-        if (type == "movie") { //
-            return newMovieLoadResponse(title, url, TvType.Movie, url) { //
-                this.posterUrl = poster //
-                this.plot      = item.overview //
-                this.year      = item.releaseDate?.substringBefore("-")?.toIntOrNull() //
-                this.tags      = genres //
-                item.voteAverage?.let { this.score = Score.from10(it) } //
-            }
-        } else { //
-            val episodes = item.seasons //
-                ?.filter { (it.seasonNumber ?: 0) > 0 } //
-                ?.amap { season -> //
-                    val seasonNum = season.seasonNumber ?: return@amap null //
-                    try { //
-                        val seasonUrl      = buildUrl("$type/$id/season/$seasonNum") //
-                        val seasonResponse = app.get(seasonUrl, headers = tmdbHeaders).text //
-                        val seasonData     = tryParseJson<TmdbSeasonResponse>(seasonResponse) //
-
-                        seasonData?.episodes?.mapNotNull { ep -> //
-                            val epNum = ep.episodeNumber ?: return@mapNotNull null //
-                            val epData = "$url?season=$seasonNum&episode=$epNum" //
-                            newEpisode(epData) { //
-                                this.name    = ep.name //
-                                this.season  = seasonNum //
-                                this.episode = epNum //
-                            }
-                        }
-                    } catch (e: Exception) { //
-                        logError(e) //
-                        null //
-                    }
+            for (i in bytes.indices) {
+                val b = bytes[i].toInt() and 0xFF
+                val saltIndex = (b + i) % SALT_ARRAY.size
+                val salt = SALT_ARRAY[saltIndex]
+                
+                hash = ((hash xor b.toLong()) * 60205) and 0xFFFFFFFFL
+                
+                for (j in 0 until salt.length) {
+                    val ch = salt[j].code.toLong()
+                    hash = ((hash xor ch) * 49842) and 0xFFFFFFFFL
                 }
-                ?.filterNotNull() //
-                ?.flatten() //
-                ?.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode }) //
-                ?: emptyList() //
+                hash = (((hash shl 5) or (hash ushr 27)) and 0xFFFFFFFFL)
+            }
 
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) { //
-                this.posterUrl = poster //
-                this.plot      = item.overview //
-                this.year      = item.firstAirDate?.substringBefore("-")?.toIntOrNull() //
-                this.tags      = genres //
-                item.voteAverage?.let { this.score = Score.from10(it) } //
+            val finalModifier = ((hash xor (bytes.size.toLong() * 10196)) * 40503) and 0xFFFFFFFFL
+            val resultString = "${finalModifier}_RiveStreamCore"
+            return encodeWebSafeBase64(resultString.toByteArray(StandardCharsets.UTF_8))
+        }
+
+        private fun decodeROT13(input: String): String {
+            return input.map { char ->
+                when (char) {
+                    in 'A'..'Z' -> ((char - 'A' + 13) % 26 + 'A'.code).toChar()
+                    in 'a'..'z' -> ((char - 'a' + 13) % 26 + 'a'.code).toChar()
+                    else -> char
+                }
+            }.joinToString("")
+        }
+
+        private fun stripNoiseTokens(input: String): String {
+            val noiseTokens = arrayOf("@$", "^^", "~@", "%?", "*~", "!!", "#&")
+            var sanitized = input
+            noiseTokens.forEach { token ->
+                sanitized = sanitized.replace(token, "")
+            }
+            return sanitized
+        }
+
+        private fun decodeCaesarShift3(input: String): String {
+            return input.map { (it.code - 3).toChar() }.joinToString("")
+        }
+
+        fun decryptVoePayload(htmlContent: String): String? {
+            return try {
+                val jsonRegex = """<script[^>]*type=["']application/json["'][^>]*>\s*(\[\s*".*?"\s*])\s*</script>""".toRegex()
+                val matchResult = jsonRegex.find(htmlContent) ?: return null
+                
+                val jsonArray = JSONArray(matchResult.groupValues[1])
+                val encryptedSeed = jsonArray.getString(0)
+
+                val layer1 = decodeROT13(encryptedSeed)
+                val layer3 = stripNoiseTokens(layer1)
+                val layer4 = String(Base64.decode(layer3, Base64.DEFAULT), StandardCharsets.ISO_8859_1)
+                val layer5 = decodeCaesarShift3(layer4)
+                val layer6 = layer5.reversed()
+                val layer7 = Base64.decode(layer6, Base64.DEFAULT)
+                
+                val finalPlaintextJson = String(layer7, StandardCharsets.UTF_8)
+                val configObject = JSONObject(finalPlaintextJson)
+                
+                configObject.optString("source").takeIf { it.isNotEmpty() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        private fun buildHeaders(referer: String = "$PRIMESRC_BASE/") = mapOf(
+            "User-Agent"              to USER_AGENT,
+            "Referer"                 to referer,
+            "Accept"                  to "application/json, text/plain, */*",
+            "x-nextjs-data"           to "1", 
+            "sec-ch-ua"               to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
+            "sec-ch-ua-mobile"        to "?1",
+            "sec-ch-ua-platform"      to "\"Android\"",
+            "sec-fetch-site"          to "same-origin",
+            "sec-fetch-mode"          to "cors",
+            "sec-fetch-dest"          to "empty",
+            "Accept-Language"         to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin"                  to PRIMESRC_BASE
+        )
+
+        private fun buildEmbedUrl(mainUrl: String, data: String): String? {
+            val type: String
+            val id: String
+
+            if (data.contains("watch?")) {
+                val query = data.substringAfter("?")
+                val qp = query.split("&").associate {
+                    it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8")
+                }
+                type = qp["type"] ?: return null
+                id = qp["id"] ?: return null
+            } else {
+                val path = data.removePrefix("$mainUrl/").takeIf { it.isNotEmpty() } ?: return null
+                type = path.substringBefore("/")
+                id   = path.substringAfter("/").substringBefore("?")
+            }
+
+            val params = mutableListOf<String>()
+            if (type == "tv") {
+                val query = data.substringAfter("?", "")
+                if (query.isNotEmpty() && query != data) {
+                    val qp = query.split("&").associate {
+                        it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8")
+                    }
+                    qp["season"]?.let  { params += "season=$it" }
+                    qp["episode"]?.let { params += "episode=$it" }
+                }
+            }
+
+            val qs = if (params.isNotEmpty()) "&" + params.joinToString("&") else ""
+            return "$PRIMESRC_BASE/embed/$type?tmdb=$id$qs"
+        }
+
+        private fun fixStreamCastHubUrl(url: String): String {
+            return if (url.contains("streamcasthub.store")) {
+                url.replace(Regex("https://[^/]+\\.streamcasthub\\.store"), "https://rrr.streamcasthub.store")
+            } else {
+                url
             }
         }
     }
 
-    override suspend fun loadLinks( //
+    suspend fun invokePrimeSrc(
         data: String,
-        isCasting: Boolean,
+        mainUrl: String,
+        providerName: String,
+        apiKey: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean { //
-        val primeSrcHelper = PrimeSrcHelper() //
+    ): Boolean {
+        return try {
+            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
+            val params = parseEmbedParams(embedUrl) ?: return false
+            val servers = fetchServerList(params) ?: return false
 
-        val nonEmbedResult = primeSrcHelper.invokePrimeSrc( //
-            data             = data, //
-            mainUrl          = mainUrl, //
-            providerName     = this.name, //
-            apiKey           = SHARED_API_KEY, //
-            subtitleCallback = subtitleCallback, //
-            callback         = callback //
-        )
+            if (servers.isEmpty()) return false
 
-        val embedResult = primeSrcHelper.invokeEmbedMode( //
-            data             = data, //
-            mainUrl          = mainUrl, //
-            subtitleCallback = subtitleCallback, //
-            callback         = callback //
-        )
+            val iframeUrls = mutableListOf<Pair<String, String>>()  
 
-        return nonEmbedResult || embedResult //
+            for (server in servers) {
+                if (server.name !in KNOWN_SERVERS) continue
+                val iframeUrl = fetchIframeUrl(
+                    serverKey = server.key,
+                    embedUrl = embedUrl
+                )
+
+                if (iframeUrl != null) {
+                    iframeUrls += server.name to iframeUrl
+                }
+            }
+
+            if (iframeUrls.isEmpty()) return false
+
+            for ((serverName, iframeUrl) in iframeUrls) {
+                val fixedIframeUrl = fixStreamCastHubUrl(iframeUrl)
+                
+                if (serverName == "Voe") {
+                    val playerHtml = app.get(fixedIframeUrl, headers = buildHeaders(embedUrl)).text
+                    val manifestUrl = decryptVoePayload(playerHtml)
+                    if (manifestUrl != null) {
+                        val nativeLink = newExtractorLink(
+                            source = "Voe Native",
+                            name = "Voe Native HLS",
+                            url = manifestUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = fixedIframeUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                        callback(nativeLink)
+                        continue
+                    }
+                }
+
+                invokeExtractor(
+                    serverName = serverName,
+                    iframeUrl  = fixedIframeUrl,
+                    embedUrl   = embedUrl,
+                    subtitleCallback = subtitleCallback,
+                    callback   = callback
+                )
+            }
+
+            true
+        } catch (e: Exception) {
+            com.lagradost.cloudstream3.mvvm.logError(e)
+            false
+        }
     }
 
-    // ===== DATA CLASSES TMDB =====================================================
+    suspend fun invokeEmbedMode(
+        data: String,
+        mainUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false
+            val targetUrl = "$PROXY_BASE/?destination=${encodeWebSafeBase64(embedUrl.toByteArray(StandardCharsets.UTF_8))}"
+            val response = app.get(targetUrl, headers = buildHeaders(embedUrl)).text
+            var isExtractorInvoked = false
 
-    data class TmdbResultsResponse( //
-        @JsonProperty("results") val results: List<TmdbItem>? //
+            val streamCastRegex = Regex("""https://[a-zA-Z0-9.-]+\.streamcasthub\.store/[^\s"'`>]+""")
+            val matches = streamCastRegex.findAll(response)
+            for (match in matches) {
+                val url = match.value
+                val fixedUrl = fixStreamCastHubUrl(url)
+                if (com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, embedUrl, subtitleCallback, callback)) {
+                    isExtractorInvoked = true
+                }
+            }
+
+            val document = org.jsoup.Jsoup.parse(response)
+            for (iframe in document.select("iframe")) {
+                var src = iframe.attr("src")
+                if (src.isNotEmpty()) {
+                    if (src.startsWith("//")) src = "https:$src"
+                    val fixedSrc = fixStreamCastHubUrl(src)
+                    if (com.lagradost.cloudstream3.utils.loadExtractor(fixedSrc, embedUrl, subtitleCallback, callback)) {
+                        isExtractorInvoked = true
+                    }
+                }
+            }
+
+            isExtractorInvoked
+        } catch (e: Exception) {
+            com.lagradost.cloudstream3.mvvm.logError(e)
+            false
+        }
+    }
+
+    private suspend fun fetchServerList(params: EmbedParams): List<PrimeSrcServer>? {
+        val url = buildString {
+            append("$PRIMESRC_BASE/api/v1/s?")
+            append("tmdb=${params.tmdb}")
+            append("&type=${params.type}")
+            if (params.season != null)  append("&season=${params.season}")
+            if (params.episode != null) append("&episode=${params.episode}")
+        }
+
+        val referer = buildEmbedUrlFromParams(params)
+        val response = app.get(url, headers = buildHeaders(referer)).text
+        val parsed = tryParseJson<ServerListResponse>(response) ?: return null
+        return parsed.servers
+    }
+
+    private suspend fun fetchIframeUrl(serverKey: String, embedUrl: String): String? {
+        return try {
+            val url = "$PRIMESRC_BASE/api/v1/l?key=$serverKey"
+            val response = app.get(url, headers = buildHeaders(embedUrl)).text
+            val parsed = tryParseJson<LinkResponse>(response)
+            parsed?.link
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private suspend fun invokeExtractor(
+        serverName: String,
+        iframeUrl: String,
+        embedUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return
+        val fixedUrl = fixStreamCastHubUrl(iframeUrl)
+
+        try {
+            getExtractorApiFromName(extractorKey).getSafeUrl(
+                url = fixedUrl,
+                referer = embedUrl,
+                subtitleCallback = subtitleCallback,
+                callback = callback
+            )
+        } catch (e: Exception) {
+            com.lagradost.cloudstream3.mvvm.logError(e)
+        }
+    }
+
+    private data class EmbedParams(
+        val type: String,      
+        val tmdb: Int,
+        val season: Int? = null,
+        val episode: Int? = null
     )
 
-    data class TmdbItem( //
-        @JsonProperty("id")          val id:         Int, //
-        @JsonProperty("title")       val title:      String?, //
-        @JsonProperty("name")        val name:       String?, //
-        @JsonProperty("poster_path") val posterPath: String?, //
-        @JsonProperty("media_type")  val mediaType:  String? //
+    private fun parseEmbedParams(embedUrl: String): EmbedParams? {
+        val typePart = embedUrl.substringAfter("/embed/").substringBefore("?")
+        val query = embedUrl.substringAfter("?", "")
+
+        val qp = query.split("&").associate {
+            val key = it.substringBefore("=")
+            val value = it.substringAfter("=")
+            key to value
+        }
+
+        val tmdb = qp["tmdb"]?.toIntOrNull() ?: return null
+
+        return EmbedParams(
+            type    = typePart,
+            tmdb    = tmdb,
+            season  = qp["season"]?.toIntOrNull(),
+            episode = qp["episode"]?.toIntOrNull()
+        )
+    }
+
+    private fun buildEmbedUrlFromParams(params: EmbedParams): String {
+        return buildString {
+            append("$PRIMESRC_BASE/embed/${params.type}?tmdb=${params.tmdb}")
+            if (params.season != null)  append("&season=${params.season}")
+            if (params.episode != null) append("&episode=${params.episode}")
+        }
+    }
+
+    private data class ServerListResponse(
+        @JsonProperty("servers") val servers: List<PrimeSrcServer>?
     )
 
-    data class TmdbDetailResult( //
-        @JsonProperty("title")          val title:        String?, //
-        @JsonProperty("name")           val name:         String?, //
-        @JsonProperty("overview")       val overview:     String?, //
-        @JsonProperty("poster_path")    val posterPath:   String?, //
-        @JsonProperty("release_date")   val releaseDate:  String?, //
-        @JsonProperty("first_air_date") val firstAirDate: String?, //
-        @JsonProperty("vote_average")   val voteAverage:  Double?, //
-        @JsonProperty("seasons")        val seasons:      List<TmdbSeasonItem>?, //
-        @JsonProperty("genres")         val genres:       List<TmdbGenreItem>? //
+    private data class PrimeSrcServer(
+        @JsonProperty("name")           val name: String,
+        @JsonProperty("key")            val key: String
     )
 
-    data class TmdbGenreItem( //
-        @JsonProperty("name") val name: String? //
-    )
-
-    data class TmdbSeasonItem( //
-        @JsonProperty("season_number") val seasonNumber: Int? //
-    )
-
-    data class TmdbSeasonResponse( //
-        @JsonProperty("episodes") val episodes: List<TmdbEpisodeItem>? //
-    )
-
-    data class TmdbEpisodeItem( //
-        @JsonProperty("name")           val name:          String?, //
-        @JsonProperty("episode_number") val episodeNumber: Int? //
+    private data class LinkResponse(
+        @JsonProperty("link")  val link: String?
     )
 }
