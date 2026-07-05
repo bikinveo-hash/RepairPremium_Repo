@@ -32,14 +32,14 @@ class PrimeSrcHelper { //
             "jK6lN9", "mN2oP4", "qR8sT0", "uV3wX5", "yZ9aB1", "cC4dE7", "fG1hI3"
         )
 
-        // TERCALIBRASI: Sinkronisasi case-sensitive nama server sesuai JSON response terbaru
+        // TERKALIBRASI: Pembetulan huruf besar/kecil mengikut respons JSON API terkini
         private val KNOWN_SERVERS = setOf(
             "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
             "Streamplay", "Vidnest", "Filemoon", "Streamwish",
             "Vidmoly", "Mixdrop", "Upzur", "Savefiles", "Vidara", "VidsST"
         )
 
-        // TERCALIBRASI: Pemetaan string server dari API ke core extractor bawaan Cloudstream secara presisi
+        // TERKALIBRASI: Pemetaan tepat mengikut penamaan string dari pelayan
         private val SERVER_EXTRACTOR_MAP = mapOf(
             "Voe"        to "Voe",
             "Filelions"  to "Filelions",
@@ -148,7 +148,7 @@ class PrimeSrcHelper { //
             "Origin"                  to PRIMESRC_BASE //
         )
 
-        // TERCALIBRASI: Ekstraksi ID TMDB & Media Type adaptif untuk format URL kueri baru maupun lama
+        // TERKALIBRASI: Ekstraksi URL berasaskan struktur parameter kueri (query string) baharu
         private fun buildEmbedUrl(mainUrl: String, data: String): String? {
             val type: String
             val id: String
@@ -243,7 +243,7 @@ class PrimeSrcHelper { //
                     }
                 }
 
-                // TERCALIBRASI: Interseptasi halaman mirror peladen streamta.site/streamtape untuk memotong data biner via #botlink + &stream=1
+                // TERKALIBRASI: Fungsi interseptasi laman cermin streamta.site / streamtape untuk memproses elemen #botlink & parameter stream=1
                 if (fixedIframeUrl.contains("streamta.site") || fixedIframeUrl.contains("streamtape")) {
                     try {
                         val playerHtml = app.get(fixedIframeUrl, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
@@ -302,7 +302,6 @@ class PrimeSrcHelper { //
                 val url = match.value //
                 val fixedUrl = fixStreamCastHubUrl(url) //
                 
-                // PENGAMAN CADANGAN: Interseptasi jika deteksi URL cermin didapatkan dari regex streamCast
                 if (fixedUrl.contains("streamta.site") || fixedUrl.contains("streamtape")) {
                     try {
                         val playerHtml = app.get(fixedUrl, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
@@ -340,7 +339,6 @@ class PrimeSrcHelper { //
                     if (src.startsWith("//")) src = "https:$src" //
                     val fixedSrc = fixStreamCastHubUrl(src) //
                     
-                    // PENGAMAN CADANGAN: Interseptasi pada siklus penelusuran tag iframe
                     if (fixedSrc.contains("streamta.site") || fixedSrc.contains("streamtape")) {
                         try {
                             val playerHtml = app.get(fixedSrc, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
@@ -379,7 +377,7 @@ class PrimeSrcHelper { //
         }
     }
 
-    // TERCALIBRASI: Pembersihan menyeluruh sistem secretKey & proxyMode sampah mengikuti alur fetch murni runtime JS terbaru
+    // TERKALIBRASI: Pemotongan parameter secretKey dan proxyMode untuk menyelaraskan API pelayan yang baharu
     private suspend fun fetchServerList(params: EmbedParams): List<PrimeSrcServer>? {
         val url = buildString {
             append("$PRIMESRC_BASE/api/v1/s?")
@@ -395,7 +393,7 @@ class PrimeSrcHelper { //
         return parsed.servers //
     }
 
-    // TERCALIBRASI: Endpoint /api/v1/l dipotong murni dari kueri kunci rahasia usang
+    // TERKALIBRASI: Pembersihan kueri token rahasia pada penjemputan pautan iframe pelayan
     private suspend fun fetchIframeUrl(serverKey: String, embedUrl: String): String? {
         return try {
             val url = "$PRIMESRC_BASE/api/v1/l?key=$serverKey"
