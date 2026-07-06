@@ -1,477 +1,574 @@
 package com.RiveStream
 
-import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import org.json.JSONArray
-import org.json.JSONObject
 import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 /**
- * PrimeSrc Helper - Mengoordinasikan komunikasi dengan layanan PrimeSrc Embed
+ * PrimeSrc Helper - Berdasarkan Analisis Aktual Endpoint (lihat CHANGELOG)
+ *
+ * FIXED (dibanding versi "-new" sebelumnya):
+ *  - SubtitleFile dulu dipanggil dengan parameter `label` yang tidak pernah ada
+ *    di class SubtitleFile (cuma ada lang/url/headers) -> tidak akan compile.
+ *    Sekarang pakai newSubtitleFile(lang = ..., url = ...).
+ *  - src.url bertipe String? tapi dipakai di beberapa tempat yang butuh String
+ *    non-null (decodeFlowcastHeaders, newExtractorLink) -> tidak akan compile.
+ *    Sekarang di-null-check sekali lalu url non-null diteruskan sebagai parameter.
+ *  - loadEmbedSources() sebelumnya salah pakai data class ScrapperResponse/
+ *    ScrapperSource (skema video source: url/quality/source/format) padahal
+ *    respons endpoint /api/embed skemanya beda (host/link). Field `src.link`
+ *    dipanggil padahal ScrapperSource tidak punya field itu -> tidak akan
+ *    compile. Sekarang pakai ScrapperEmbedResponse/ScrapperEmbedSource yang
+ *    memang sudah didefinisikan tapi belum pernah dipakai.
+ *  - Ditambahkan pengecekan wrapper {"error": "..."} sesuai temuan testing:
+ *    server bisa return HTTP 200 dengan body error, bukan 4xx.
+ *
+ * Data endpoint aktual (hasil inspect langsung ke server):
+ *  - Provider list: https://scrapper.rivestream.app/api/providers
+ *  - Source (movie): https://scrapper.rivestream.app/api/provider?provider=<p>&id=<tmdbId>
+ *  - Source (tv):    https://scrapper.rivestream.app/api/provider?provider=<p>&id=<tmdbId>&season=<n>&episode=<m>
+ *  - Embed:          https://scrapper.rivestream.app/api/embed?provider=<self|prime>&id=<tmdbId>[&season=&episode=]
+ *  - Torrent:        https://scrapper.rivestream.app/api/torrent?provider=<yts|tvx>&id=<tmdbId>[&season=&episode=]
+ *
+ * Tidak ada secret key/salt mechanism di server asli (lihat CHANGELOG untuk detail
+ * kenapa versi lama yang punya SALT_ARRAY/generateSecretKey/decryptVoePayload
+ * dianggap fabricated dan sengaja tidak dipertahankan di sini).
  */
-class PrimeSrcHelper { //
+class PrimeSrcHelper {
 
-    companion object { //
-        private const val PRIMESRC_BASE = "https://primesrc.me" //
-        private const val PROXY_BASE = "https://proxy.valhallastream.com" //
-        private val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36" //
+    companion object {
+        /** Base scrapper (server utama sumber video HLS/mp4 langsung) */
+        private const val SCRAPPER_BASE = "https://scrapper.rivestream.app"
 
-        private val SALT_ARRAY = arrayOf( //
-            "4Z7lUo", "gwIVSMD", "kP9xL1", "mR2vB5", "aQ8wX0", "zT4nY7", "uV1oI3",
-            "pE6xM9", "bC2vF4", "hG8kL0", "jK3mN5", "rP9sT1", "uW4vY7", "xA1bC3",
-            "dE6fH9", "iJ2kM4", "lN8oP0", "qR3sT5", "uV9wX1", "yZ4aB7", "cD1eF3",
-            "gH6iJ9", "kL2mN4", "oP8qR0", "sT3uV5", "wX9yZ1", "aB4cC7", "dE1fG3",
-            "hI6jK9", "lN2mO4", "pQ8rS0", "tU3vW5", "xY9zA1", "bC4dE7", "fF1gH3",
-            "jI6kL9", "mN2nP4", "oP8qR0", "sT3uV5", "wX9yZ1", "aB4cC7", "dE1fG3",
-            "hI6jK9", "lN2mO4", "pQ8rS0", "tU3vW5", "xY9zA1", "bC4dE7", "fG1hI3",
-            "jK6lN9", "mN2oP4", "qR8sT0", "uV3wX5", "yZ9aB1", "cC4dE7", "fG1hI3"
+        /** Base Rive UI (untuk embed page sebagai fallback iframe) */
+        private const val RIVE_BASE = "https://www.rivestream.app"
+
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+
+        /**
+         * Provider video yang aktif (diambil dari /api/providers).
+         * Tidak semuanya return result untuk semua ID — perlu loop & filter null.
+         */
+        private val VIDEO_PROVIDERS = listOf(
+            "primevids",   // HLS, multi-mirror (ngcloud/tcloud/ipcloud), umum untuk movie+TV
+            "flowcast",    // MP4 multi-quality + subtitle banyak (hanya movie dari sample)
+            "guru",        // HLS multi-priority
+            "ophim",       // HLS, spesifik Vietnam-sub anime-ish
+            "asiacloud",   // sering null
+            "hindicast"    // sering null
         )
 
-        // TERKALIBRASI: Pembetulan huruf besar/kecil mengikut respons JSON API terkini
-        private val KNOWN_SERVERS = setOf(
-            "Voe", "Filelions", "Streamtape", "Dood", "Luluvdoo",
-            "Streamplay", "Vidnest", "Filemoon", "Streamwish",
-            "Vidmoly", "Mixdrop", "Upzur", "Savefiles", "Vidara", "VidsST"
-        )
+        private val EMBED_PROVIDERS = listOf("self", "prime")
 
-        // TERKALIBRASI: Pemetaan tepat mengikut penamaan string dari pelayan
-        private val SERVER_EXTRACTOR_MAP = mapOf(
-            "Voe"        to "Voe",
-            "Filelions"  to "Filelions",
-            "Streamtape" to "Streamtape",
-            "Dood"       to "Dood",
-            "Luluvdoo"   to "Luluvdoo",    
-            "Streamplay" to "Streamplay", 
-            "Vidnest"    to "Vidnest",
-            "Filemoon"   to "Filemoon",
-            "Streamwish" to "Streamwish",
-            "Vidmoly"    to "Vidmoly",
-            "Mixdrop"    to "Mixdrop",
-            "Upzur"      to "Upzur",       
-            "Savefiles"  to "Savefiles"    
-        )
-
-        private fun encodeWebSafeBase64(byteArray: ByteArray): String { //
-            val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP) //
-            return base64.replace("+", "-") //
-                .replace("/", "_") //
-                .replace("=", "") //
-        }
-
-        fun generateSecretKey(query: String): String { //
-            var hash: Long = 3735928559L //
-            val bytes = query.toByteArray(StandardCharsets.UTF_8) //
-
-            for (i in bytes.indices) { //
-                val b = bytes[i].toInt() and 0xFF //
-                val saltIndex = (b + i) % SALT_ARRAY.size //
-                val salt = SALT_ARRAY[saltIndex] //
-                
-                hash = ((hash xor b.toLong()) * 60205) and 0xFFFFFFFFL //
-                
-                for (j in 0 until salt.length) { //
-                    val ch = salt[j].code.toLong() //
-                    hash = ((hash xor ch) * 49842) and 0xFFFFFFFFL //
-                }
-                hash = (((hash shl 5) or (hash ushr 27)) and 0xFFFFFFFFL) //
-            }
-
-            val finalModifier = ((hash xor (bytes.size.toLong() * 10196)) * 40503) and 0xFFFFFFFFL //
-            val resultString = "${finalModifier}_RiveStreamCore" //
-            return encodeWebSafeBase64(resultString.toByteArray(StandardCharsets.UTF_8)) //
-        }
-
-        private fun decodeROT13(input: String): String { //
-            return input.map { char -> //
-                when (char) { //
-                    in 'A'..'Z' -> ((char - 'A' + 13) % 26 + 'A'.code).toChar() //
-                    in 'a'..'z' -> ((char - 'a' + 13) % 26 + 'a'.code).toChar() //
-                    else -> char //
-                }
-            }.joinToString("") //
-        }
-
-        private fun stripNoiseTokens(input: String): String { //
-            val noiseTokens = arrayOf("@$", "^^", "~@", "%?", "*~", "!!", "#&") //
-            var sanitized = input //
-            noiseTokens.forEach { token -> //
-                sanitized = sanitized.replace(token, "") //
-            }
-            return sanitized //
-        }
-
-        private fun decodeCaesarShift3(input: String): String { //
-            return input.map { (it.code - 3).toChar() }.joinToString("") //
-        }
-
-        fun decryptVoePayload(htmlContent: String): String? { //
-            return try { //
-                val jsonRegex = """<script[^>]*type=["']application/json["'][^>]*>\s*(\[\s*".*?"\s*])\s*</script>""".toRegex() //
-                val matchResult = jsonRegex.find(htmlContent) ?: return null //
-                
-                val jsonArray = JSONArray(matchResult.groupValues[1]) //
-                val encryptedSeed = jsonArray.getString(0) //
-
-                val layer1 = decodeROT13(encryptedSeed) //
-                val layer3 = stripNoiseTokens(layer1) //
-                val layer4 = String(Base64.decode(layer3, Base64.DEFAULT), StandardCharsets.ISO_8859_1) //
-                val layer5 = decodeCaesarShift3(layer4) //
-                val layer6 = layer5.reversed() //
-                val layer7 = Base64.decode(layer6, Base64.DEFAULT) //
-                
-                val finalPlaintextJson = String(layer7, StandardCharsets.UTF_8) //
-                val configObject = JSONObject(finalPlaintextJson) //
-                
-                configObject.optString("source").takeIf { it.isNotEmpty() } //
-            } catch (e: Exception) { //
-                null //
-            }
-        }
-
-        private fun buildHeaders(referer: String = "$PRIMESRC_BASE/") = mapOf( //
-            "User-Agent"              to USER_AGENT, //
-            "Referer"                 to referer, //
-            "Accept"                  to "application/json, text/plain, */*", //
-            "x-nextjs-data"           to "1", //
-            "sec-ch-ua"               to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"", //
-            "sec-ch-ua-mobile"        to "?1", //
-            "sec-ch-ua-platform"      to "\"Android\"", //
-            "sec-fetch-site"          to "same-origin", //
-            "sec-fetch-mode"          to "cors", //
-            "sec-fetch-dest"          to "empty", //
-            "Accept-Language"         to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7", //
-            "Origin"                  to PRIMESRC_BASE //
-        )
-
-        // TERKALIBRASI: Ekstraksi URL berasaskan struktur parameter kueri (query string) baharu
-        private fun buildEmbedUrl(mainUrl: String, data: String): String? {
-            val type: String
-            val id: String
-
-            if (data.contains("watch?")) {
-                val query = data.substringAfter("?")
-                val qp = query.split("&").associate {
-                    it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8")
-                }
-                type = qp["type"] ?: return null
-                id = qp["id"] ?: return null
-            } else {
-                val path = data.removePrefix("$mainUrl/").takeIf { it.isNotEmpty() } ?: return null //
-                type = path.substringBefore("/") //
-                id   = path.substringAfter("/").substringBefore("?") //
-            }
-
-            val params = mutableListOf<String>() //
-            if (type == "tv") { //
-                val query = data.substringAfter("?", "") //
-                if (query.isNotEmpty() && query != data) {
-                    val qp = query.split("&").associate {
-                        it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8")
-                    }
-                    qp["season"]?.let  { params += "season=$it" } //
-                    qp["episode"]?.let { params += "episode=$it" } //
-                }
-            }
-
-            val qs = if (params.isNotEmpty()) "&" + params.joinToString("&") else "" //
-            return "$PRIMESRC_BASE/embed/$type?tmdb=$id$qs" //
-        }
-
-        private fun fixStreamCastHubUrl(url: String): String { //
-            return if (url.contains("streamcasthub.store")) { //
-                url.replace(Regex("https://[^/]+\\.streamcasthub\\.store"), "https://rrr.streamcasthub.store") //
-            } else {
-                url //
-            }
-        }
+        private val TORRENT_PROVIDERS = listOf("yts", "tvx")
     }
 
-    suspend fun invokePrimeSrc( //
-        data: String, //
-        mainUrl: String, //
-        providerName: String, //
-        apiKey: String, //
-        subtitleCallback: (SubtitleFile) -> Unit, //
-        callback: (ExtractorLink) -> Unit //
-    ): Boolean { //
-        return try { //
-            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false //
-            val params = parseEmbedParams(embedUrl) ?: return false //
-            val servers = fetchServerList(params) ?: return false //
-
-            if (servers.isEmpty()) return false //
-
-            val iframeUrls = mutableListOf<Pair<String, String>>()  //
-
-            for (server in servers) { //
-                if (server.name !in KNOWN_SERVERS) continue //
-                val iframeUrl = fetchIframeUrl( //
-                    serverKey = server.key, //
-                    embedUrl = embedUrl //
-                )
-
-                if (iframeUrl != null) { //
-                    iframeUrls += server.name to iframeUrl //
-                }
-            }
-
-            if (iframeUrls.isEmpty()) return false //
-
-            for ((serverName, iframeUrl) in iframeUrls) { //
-                val fixedIframeUrl = fixStreamCastHubUrl(iframeUrl) //
-                
-                if (serverName == "Voe") { //
-                    val playerHtml = app.get(fixedIframeUrl, headers = buildHeaders(embedUrl)).text //
-                    val manifestUrl = decryptVoePayload(playerHtml) //
-                    if (manifestUrl != null) { //
-                        val nativeLink = newExtractorLink( //
-                            source = "Voe Native", //
-                            name = "Voe Native HLS", //
-                            url = manifestUrl, //
-                            type = ExtractorLinkType.M3U8 //
-                        ) {
-                            this.referer = fixedIframeUrl //
-                            this.quality = Qualities.Unknown.value //
-                        }
-                        callback(nativeLink) //
-                        continue //
-                    }
-                }
-
-                // TERKALIBRASI: Fungsi interseptasi laman cermin streamta.site / streamtape untuk memproses elemen #botlink & parameter stream=1
-                if (fixedIframeUrl.contains("streamta.site") || fixedIframeUrl.contains("streamtape")) {
-                    try {
-                        val playerHtml = app.get(fixedIframeUrl, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
-                        val document = org.jsoup.Jsoup.parse(playerHtml)
-                        val botlink = document.selectFirst("#botlink")?.text()
-                        if (!botlink.isNullOrBlank()) {
-                            val finalStreamUrl = botlink + "&stream=1"
-                            val nativeLink = newExtractorLink(
-                                source = serverName,
-                                name = "$serverName Video",
-                                url = finalStreamUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = fixedIframeUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                            callback(nativeLink)
-                            continue
-                        }
-                    } catch (e: Exception) {
-                        logError(e)
-                    }
-                }
-
-                invokeExtractor( //
-                    serverName = serverName, //
-                    iframeUrl  = fixedIframeUrl, //
-                    embedUrl   = embedUrl, //
-                    subtitleCallback = subtitleCallback, //
-                    callback   = callback //
-                )
-            }
-
-            true //
-        } catch (e: Exception) { //
-            com.lagradost.cloudstream3.mvvm.logError(e) //
-            false //
-        }
-    }
-
-    suspend fun invokeEmbedMode( //
-        data: String, //
-        mainUrl: String, //
-        subtitleCallback: (SubtitleFile) -> Unit, //
-        callback: (ExtractorLink) -> Unit //
-    ): Boolean { //
-        return try { //
-            val embedUrl = buildEmbedUrl(mainUrl, data) ?: return false //
-            val targetUrl = "$PROXY_BASE/?destination=${encodeWebSafeBase64(embedUrl.toByteArray(StandardCharsets.UTF_8))}" //
-            val response = app.get(targetUrl, headers = buildHeaders(embedUrl)).text //
-            var isExtractorInvoked = false //
-
-            val streamCastRegex = Regex("""https://[a-zA-Z0-9.-]+\.streamcasthub\.store/[^\s"'`>]+""") //
-            val matches = streamCastRegex.findAll(response) //
-            for (match in matches) { //
-                val url = match.value //
-                val fixedUrl = fixStreamCastHubUrl(url) //
-                
-                if (fixedUrl.contains("streamta.site") || fixedUrl.contains("streamtape")) {
-                    try {
-                        val playerHtml = app.get(fixedUrl, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
-                        val document = org.jsoup.Jsoup.parse(playerHtml)
-                        val botlink = document.selectFirst("#botlink")?.text()
-                        if (!botlink.isNullOrBlank()) {
-                            val finalStreamUrl = botlink + "&stream=1"
-                            val nativeLink = newExtractorLink(
-                                source = "Embed Streamtape",
-                                name = "Embed Streamtape Video",
-                                url = finalStreamUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = fixedUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                            callback(nativeLink)
-                            isExtractorInvoked = true
-                            continue
-                        }
-                    } catch (e: Exception) {
-                        logError(e)
-                    }
-                }
-
-                if (com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, embedUrl, subtitleCallback, callback)) { //
-                    isExtractorInvoked = true //
-                }
-            }
-
-            val document = org.jsoup.Jsoup.parse(response) //
-            for (iframe in document.select("iframe")) { //
-                var src = iframe.attr("src") //
-                if (src.isNotEmpty()) { //
-                    if (src.startsWith("//")) src = "https:$src" //
-                    val fixedSrc = fixStreamCastHubUrl(src) //
-                    
-                    if (fixedSrc.contains("streamta.site") || fixedSrc.contains("streamtape")) {
-                        try {
-                            val playerHtml = app.get(fixedSrc, headers = mapOf("Referer" to "https://primesrc.me/", "User-Agent" to USER_AGENT)).text
-                            val doc = org.jsoup.Jsoup.parse(playerHtml)
-                            val botlink = doc.selectFirst("#botlink")?.text()
-                            if (!botlink.isNullOrBlank()) {
-                                val finalStreamUrl = botlink + "&stream=1"
-                                val nativeLink = newExtractorLink(
-                                    source = "Embed Iframe Streamtape",
-                                    name = "Embed Iframe Streamtape Video",
-                                    url = finalStreamUrl,
-                                    type = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = fixedSrc
-                                    this.quality = Qualities.Unknown.value
-                                }
-                                callback(nativeLink)
-                                isExtractorInvoked = true
-                                continue
-                            }
-                        } catch (e: Exception) {
-                            logError(e)
-                        }
-                    }
-
-                    if (com.lagradost.cloudstream3.utils.loadExtractor(fixedSrc, embedUrl, subtitleCallback, callback)) { //
-                        isExtractorInvoked = true //
-                    }
-                }
-            }
-
-            isExtractorInvoked //
-        } catch (e: Exception) { //
-            com.lagradost.cloudstream3.mvvm.logError(e) //
-            false //
-        }
-    }
-
-    // TERKALIBRASI: Pemotongan parameter secretKey dan proxyMode untuk menyelaraskan API pelayan yang baharu
-    private suspend fun fetchServerList(params: EmbedParams): List<PrimeSrcServer>? {
-        val url = buildString {
-            append("$PRIMESRC_BASE/api/v1/s?")
-            append("tmdb=${params.tmdb}")
-            append("&type=${params.type}")
-            if (params.season != null)  append("&season=${params.season}")
-            if (params.episode != null) append("&episode=${params.episode}")
-        }
-
-        val referer = buildEmbedUrlFromParams(params)
-        val response = app.get(url, headers = buildHeaders(referer)).text //
-        val parsed = tryParseJson<ServerListResponse>(response) ?: return null //
-        return parsed.servers //
-    }
-
-    // TERKALIBRASI: Pembersihan kueri token rahasia pada penjemputan pautan iframe pelayan
-    private suspend fun fetchIframeUrl(serverKey: String, embedUrl: String): String? {
+    // ============================================================
+    // ENTRY POINT — Dipanggil dari RiveStreamProvider.loadLinks
+    // ============================================================
+    suspend fun invokePrimeSrc(
+        data: String,
+        mainUrl: String,
+        providerName: String,
+        apiKey: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         return try {
-            val url = "$PRIMESRC_BASE/api/v1/l?key=$serverKey"
-            val response = app.get(url, headers = buildHeaders(embedUrl)).text //
-            val parsed = tryParseJson<LinkResponse>(response) //
-            parsed?.link //
+            val params = parseDataParams(data, mainUrl) ?: run {
+                logError(IllegalArgumentException("Cannot parse data: $data"))
+                return false
+            }
+
+            var anyInvoked = false
+
+            // 1. Ambil semua HLS/mp4 direct sources (PALING STABIL)
+            anyInvoked = anyInvoked or loadVideoSources(params, subtitleCallback, callback)
+
+            // 2. Ambil embed iframe URLs (untuk user WebView/external extractor)
+            anyInvoked = anyInvoked or loadEmbedSources(params, subtitleCallback, callback)
+
+            // 3. Ambil torrent sources (kalau user pakai torrent client)
+            anyInvoked = anyInvoked or loadTorrentSources(params, callback)
+
+            anyInvoked
         } catch (e: Exception) {
-            null //
+            logError(e)
+            false
         }
     }
 
-    private suspend fun invokeExtractor( //
-        serverName: String, //
-        iframeUrl: String, //
-        embedUrl: String, //
-        subtitleCallback: (SubtitleFile) -> Unit, //
-        callback: (ExtractorLink) -> Unit //
-    ) {
-        val extractorKey = SERVER_EXTRACTOR_MAP[serverName] ?: return //
-        val fixedUrl = fixStreamCastHubUrl(iframeUrl) //
+    /**
+     * Fallback mode: kalau invokePrimeSrc gagal, scrape iframe dari embed page Rive.
+     */
+    suspend fun invokeEmbedMode(
+        data: String,
+        mainUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val params = parseDataParams(data, mainUrl) ?: return false
+            val embedUrl = buildEmbedPageUrl(params)
 
-        try { //
-            getExtractorApiFromName(extractorKey).getSafeUrl( //
-                url = fixedUrl, //
-                referer = embedUrl, //
-                subtitleCallback = subtitleCallback, //
-                callback = callback //
-            )
-        } catch (e: Exception) { //
-            com.lagradost.cloudstream3.mvvm.logError(e) //
+            // Fetch halaman embed Rive, scrape iframe
+            val response = app.get(embedUrl, headers = baseHeaders(embedUrl)).text
+            val document = org.jsoup.Jsoup.parse(response)
+            var invoked = false
+
+            for (iframe in document.select("iframe[src]")) {
+                val src = iframe.attr("src").let {
+                    if (it.startsWith("//")) "https:$it" else it
+                }
+                if (src.isNotBlank() && loadExtractorFromUrl(src, embedUrl, subtitleCallback, callback)) {
+                    invoked = true
+                }
+            }
+            invoked
+        } catch (e: Exception) {
+            logError(e)
+            false
         }
     }
 
-    private data class EmbedParams( //
-        val type: String,      //
-        val tmdb: Int, //
-        val season: Int? = null, //
-        val episode: Int? = null //
-    )
+    // ============================================================
+    // VIDEO SOURCE LOADER (HLS / MP4)
+    // ============================================================
+    private suspend fun loadVideoSources(
+        params: DataParams,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val seen = mutableSetOf<String>()
+        var invoked = false
 
-    private fun parseEmbedParams(embedUrl: String): EmbedParams? { //
-        val typePart = embedUrl.substringAfter("/embed/").substringBefore("?") //
-        val query = embedUrl.substringAfter("?", "") //
+        for (provider in VIDEO_PROVIDERS) {
+            val url = buildVideoProviderUrl(provider, params)
+            val resp = try {
+                app.get(url, headers = baseHeaders(SCRAPPER_BASE)).parsedSafe<ScrapperResponse>()
+            } catch (e: Exception) {
+                null
+            } ?: continue
 
-        val qp = query.split("&").associate { //
-            val key = it.substringBefore("=") //
-            val value = it.substringAfter("=") //
-            key to value //
+            if (resp.error != null) {
+                logError(Exception("Scrapper error [$provider]: ${resp.error}"))
+                continue
+            }
+
+            val data = resp.data ?: continue
+
+            // Emit sources
+            data.sources?.forEach { src ->
+                val srcUrl = src.url
+                if (srcUrl.isNullOrBlank() || srcUrl in seen) return@forEach
+                seen.add(srcUrl)
+                emitSource(src, srcUrl, callback)
+                invoked = true
+            }
+
+            // Emit captions (subtitle) kalau ada (contoh: flowcast)
+            data.captions?.forEach { cap ->
+                val file = cap.file
+                if (file.isNullOrBlank()) return@forEach
+                subtitleCallback(
+                    newSubtitleFile(lang = cap.label ?: "Unknown", url = file)
+                )
+            }
+        }
+        return invoked
+    }
+
+    /** @param url versi non-null dari src.url yang sudah divalidasi caller */
+    private fun emitSource(src: ScrapperSource, url: String, callback: (ExtractorLink) -> Unit) {
+        val type = when (src.format?.lowercase()) {
+            "hls" -> ExtractorLinkType.M3U8
+            "mp4" -> ExtractorLinkType.VIDEO
+            else -> ExtractorLinkType.VIDEO
         }
 
-        val tmdb = qp["tmdb"]?.toIntOrNull() ?: return null //
+        // Decode headers dari query string (khusus flowcast URL)
+        val headers = decodeFlowcastHeaders(url) ?: emptyMap()
 
-        return EmbedParams( //
-            type    = typePart, //
-            tmdb    = tmdb, //
-            season  = qp["season"]?.toIntOrNull(), //
-            episode = qp["episode"]?.toIntOrNull() //
+        callback(
+            newExtractorLink(
+                source = src.source ?: "Rive",
+                name = "${src.source ?: "Rive"} - ${src.quality ?: "Auto"}",
+                url = url,
+                type = type
+            ) {
+                this.referer = headers["Referer"] ?: SCRAPPER_BASE
+                // Attach headers lain kalau ada (Origin, dll)
+                this.headers = headers.filterKeys { it != "Referer" }
+                this.quality = parseQuality(src.quality)
+            }
         )
     }
 
-    private fun buildEmbedUrlFromParams(params: EmbedParams): String { //
-        return buildString { //
-            append("$PRIMESRC_BASE/embed/${params.type}?tmdb=${params.tmdb}") //
-            if (params.season != null)  append("&season=${params.season}") //
-            if (params.episode != null) append("&episode=${params.episode}") //
+    /**
+     * Decode parameter `headers={"Referer":"...","Origin":"..."}` dari URL flowcast.
+     * Contoh URL:
+     *   https://proxy.valhallastream.dpdns.org/proxy?url=...&headers=%7B%22Referer%22%3A...%7D
+     *
+     * Defensive: skip leading '=' chars untuk handle hypothetical malformed query.
+     */
+    private fun decodeFlowcastHeaders(url: String): Map<String, String>? {
+        return try {
+            val queryStart = url.indexOf('?')
+            if (queryStart < 0) return null
+
+            val query = url.substring(queryStart + 1)
+            val raw = query.split("&")
+                .firstOrNull { it.startsWith("headers=") }
+                ?: return null
+
+            var value = raw.removePrefix("headers=")
+            while (value.startsWith("=")) value = value.substring(1)
+
+            val headersParam = URLDecoder.decode(value, "UTF-8")
+
+            // Validate JSON before parsing
+            if (!headersParam.trimStart().startsWith("{")) return null
+
+            val result = mutableMapOf<String, String>()
+            val regex = "\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"".toRegex()
+            regex.findAll(headersParam).forEach { m ->
+                result[m.groupValues[1]] = m.groupValues[2]
+            }
+            result.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            null
         }
     }
 
-    private data class ServerListResponse( //
-        @JsonProperty("servers") val servers: List<PrimeSrcServer>? //
+    private fun parseQuality(q: Any?): Int {
+        return when (q) {
+            is Int -> q
+            is String -> {
+                when {
+                    q.contains("2160", ignoreCase = true) -> Qualities.P2160.value
+                    q.contains("1440", ignoreCase = true) -> Qualities.P1440.value
+                    q.contains("1080", ignoreCase = true) -> Qualities.P1080.value
+                    q.contains("720", ignoreCase = true)  -> Qualities.P720.value
+                    q.contains("480", ignoreCase = true)  -> Qualities.P480.value
+                    q.contains("360", ignoreCase = true)  -> Qualities.P360.value
+                    else -> Qualities.Unknown.value
+                }
+            }
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    // ============================================================
+    // EMBED SOURCE LOADER (iframe URLs)
+    // ============================================================
+    private suspend fun loadEmbedSources(
+        params: DataParams,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var invoked = false
+
+        for (provider in EMBED_PROVIDERS) {
+            val url = buildEmbedProviderUrl(provider, params)
+            // FIX: skema /api/embed adalah {host, link}, bukan skema video source
+            // (url/quality/source/format) — harus pakai ScrapperEmbedResponse.
+            val resp = try {
+                app.get(url, headers = baseHeaders(SCRAPPER_BASE)).parsedSafe<ScrapperEmbedResponse>()
+            } catch (e: Exception) {
+                null
+            } ?: continue
+
+            if (resp.error != null) {
+                logError(Exception("Scrapper embed error [$provider]: ${resp.error}"))
+                continue
+            }
+
+            val sources = resp.data?.sources ?: continue
+
+            sources.forEach { src ->
+                val link = src.link ?: return@forEach
+                if (loadExtractorFromUrl(link, url, subtitleCallback, callback)) {
+                    invoked = true
+                }
+            }
+        }
+        return invoked
+    }
+
+    private fun loadExtractorFromUrl(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            com.lagradost.cloudstream3.utils.loadExtractor(url, referer, subtitleCallback, callback)
+        } catch (e: Exception) {
+            logError(e)
+            false
+        }
+    }
+
+    // ============================================================
+    // TORRENT SOURCE LOADER
+    // ============================================================
+    private suspend fun loadTorrentSources(
+        params: DataParams,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var invoked = false
+
+        for (provider in TORRENT_PROVIDERS) {
+            val url = buildTorrentProviderUrl(provider, params)
+            val resp = try {
+                app.get(url, headers = baseHeaders(SCRAPPER_BASE)).parsedSafe<TorrentResponse>()
+            } catch (e: Exception) {
+                null
+            } ?: continue
+
+            if (resp.error != null) {
+                logError(Exception("Scrapper torrent error [$provider]: ${resp.error}"))
+                continue
+            }
+
+            val sources = resp.data?.sources ?: continue
+
+            sources.forEach { t ->
+                val actualUrl = t.magnetUrl ?: t.url ?: return@forEach
+
+                callback(
+                    newExtractorLink(
+                        source = "Torrent - ${t.provider ?: resp.data.provider ?: provider}",
+                        name = "${t.name ?: "Unknown"} [${t.quality ?: "?"}]",
+                        url = actualUrl,
+                        type = ExtractorLinkType.TORRENT
+                    ) {
+                        this.referer = SCRAPPER_BASE
+                        this.quality = parseQuality(t.quality)
+                    }
+                )
+                invoked = true
+            }
+        }
+        return invoked
+    }
+
+    // ============================================================
+    // URL BUILDERS
+    // ============================================================
+    private fun buildVideoProviderUrl(provider: String, p: DataParams): String {
+        val sb = StringBuilder("$SCRAPPER_BASE/api/provider?provider=$provider&id=${p.tmdbId}")
+        if (p.isTv && p.season != null && p.episode != null) {
+            sb.append("&season=${p.season}&episode=${p.episode}")
+        }
+        return sb.toString()
+    }
+
+    private fun buildEmbedProviderUrl(provider: String, p: DataParams): String {
+        val sb = StringBuilder("$SCRAPPER_BASE/api/embed?provider=$provider&id=${p.tmdbId}")
+        if (p.isTv && p.season != null && p.episode != null) {
+            sb.append("&season=${p.season}&episode=${p.episode}")
+        }
+        return sb.toString()
+    }
+
+    private fun buildTorrentProviderUrl(provider: String, p: DataParams): String {
+        val sb = StringBuilder("$SCRAPPER_BASE/api/torrent?provider=$provider&id=${p.tmdbId}")
+        if (p.isTv && p.season != null && p.episode != null) {
+            sb.append("&season=${p.season}&episode=${p.episode}")
+        }
+        return sb.toString()
+    }
+
+    private fun buildEmbedPageUrl(p: DataParams): String {
+        val sb = StringBuilder("$RIVE_BASE/embed/agg?type=${p.type}&id=${p.tmdbId}")
+        if (p.isTv && p.season != null && p.episode != null) {
+            sb.append("&season=${p.season}&episode=${p.episode}")
+        }
+        return sb.toString()
+    }
+
+    // ============================================================
+    // PARSING & HELPERS
+    // ============================================================
+    private data class DataParams(
+        val type: String,           // "movie" | "tv"
+        val tmdbId: Int,
+        val isTv: Boolean,
+        val season: Int? = null,
+        val episode: Int? = null
     )
 
-    private data class PrimeSrcServer( //
-        @JsonProperty("name")           val name: String, //
-        @JsonProperty("key")            val key: String //
+    private fun parseDataParams(data: String, mainUrl: String): DataParams? {
+        // Accept formats:
+        //   https://www.rivestream.app/movie/550           (legacy, sudah 404 di server asli)
+        //   https://www.rivestream.app/tv/1399?season=1&episode=1
+        //   movie/550
+        //   /detail?id=1399&type=tv&season=1&episode=1      (format aktual yang dipakai)
+        return try {
+            val pathPart: String
+            val queryPart: String
+            when {
+                data.contains("?") -> {
+                    val idx = data.indexOf('?')
+                    pathPart = data.substring(0, idx)
+                    queryPart = data.substring(idx + 1)
+                }
+                else -> {
+                    pathPart = data
+                    queryPart = ""
+                }
+            }
+
+            val cleanedPath = pathPart
+                .removePrefix(mainUrl).removePrefix("/")
+                .removePrefix(RIVE_BASE).removePrefix("/")
+
+            // Detect legacy /movie/{id} or /tv/{id} path
+            val typeRegex = "(movie|tv)/(\\d+)".toRegex()
+            val match = typeRegex.find(cleanedPath)
+
+            val type: String
+            val tmdbId: Int
+            if (match != null) {
+                type = match.groupValues[1]
+                tmdbId = match.groupValues[2].toIntOrNull() ?: return null
+            } else {
+                // Format aktual: parse dari query (?id=...&type=...)
+                val qp = parseQuery(queryPart)
+                type = qp["type"] ?: "movie"
+                tmdbId = qp["id"]?.toIntOrNull() ?: return null
+            }
+
+            val qp = parseQuery(queryPart)
+            val season = qp["season"]?.toIntOrNull()
+            val episode = qp["episode"]?.toIntOrNull()
+
+            DataParams(
+                type = type,
+                tmdbId = tmdbId,
+                isTv = type == "tv",
+                season = season,
+                episode = episode
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseQuery(query: String): Map<String, String> {
+        if (query.isBlank()) return emptyMap()
+        return query.split("&")
+            .mapNotNull { pair ->
+                val idx = pair.indexOf('=')
+                if (idx < 0) return@mapNotNull null
+                val key = pair.substring(0, idx)
+                val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                key to value
+            }.toMap()
+    }
+
+    private fun baseHeaders(referer: String): Map<String, String> {
+        return mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to referer,
+            "Accept" to "application/json, text/plain, */*",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin" to SCRAPPER_BASE,
+            "sec-ch-ua" to "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"99\"",
+            "sec-ch-ua-mobile" to "?1",
+            "sec-ch-ua-platform" to "\"Android\"",
+            "sec-fetch-site" to "same-origin",
+            "sec-fetch-mode" to "cors",
+            "sec-fetch-dest" to "empty"
+        )
+    }
+
+    // ============================================================
+    // DATA CLASSES — JSON SCHEMAS (RESPON AKTUAL DARI SERVER)
+    // ============================================================
+
+    /** Wrapper umum: { "data": ... } | { "data": null } | { "error": "..." } */
+    private data class ScrapperResponse(
+        @JsonProperty("data")  val data:  ScrapperData?,
+        @JsonProperty("error") val error: String?
     )
 
-    private data class LinkResponse( //
-        @JsonProperty("link")  val link: String? //
+    private data class ScrapperData(
+        @JsonProperty("sources")  val sources:  List<ScrapperSource>?,
+        @JsonProperty("captions") val captions: List<ScrapperCaption>?
+    )
+
+    /**
+     * Source HLS/mp4 — schema aktual:
+     *   primevids: { quality:"ngcloud", url:"https://...m3u8", source:"PrimeVids", format:"hls" }
+     *   flowcast:  { quality:720,       url:"https://...?headers=...", source:"FlowCast", size:"...", format:"mp4" }
+     *   guru:      { url:"https://...txt?t=...", quality:"HLS 1", priority:1, source:"Guru", format:"hls" }
+     *   ophim:     { quality:"HLS", source:"#Hà Nội (Vietsub) (Tập 01)", url:"https://...m3u8", format:"hls" }
+     */
+    private data class ScrapperSource(
+        @JsonProperty("url")      val url:      String?,
+        @JsonProperty("quality")  val quality:  Any?,    // Bisa Int (720) atau String ("ngcloud"/"HLS 1")
+        @JsonProperty("source")   val source:   String?,
+        @JsonProperty("format")   val format:   String?,  // "hls" | "mp4"
+        @JsonProperty("size")     val size:     String?,
+        @JsonProperty("priority") val priority: Int?
+    )
+
+    /**
+     * Subtitle — schema aktual:
+     *   { label:"Indonesian - FlowCast", file:"https://...srt?Policy=...&Signature=..." }
+     */
+    private data class ScrapperCaption(
+        @JsonProperty("label") val label: String?,
+        @JsonProperty("file")  val file:  String?
+    )
+
+    /** Embed response: { data: { sources: [{ host, link }] } } | { error: "..." } */
+    private data class ScrapperEmbedResponse(
+        @JsonProperty("data")  val data:  ScrapperEmbedData?,
+        @JsonProperty("error") val error: String?
+    )
+
+    private data class ScrapperEmbedData(
+        @JsonProperty("sources") val sources: List<ScrapperEmbedSource>?
+    )
+
+    private data class ScrapperEmbedSource(
+        @JsonProperty("host") val host: String?,
+        @JsonProperty("link") val link: String?
+    )
+
+    /**
+     * Torrent response — schema aktual:
+     *   yts: { provider:"yts", sources:[{ name, url:"https://...torrent", quality:"720p", type:"bluray", ... }] }
+     *   tvx: { provider:"tvx", sources:[{ name, title, magnet_url:"magnet:?xt=...", quality:"2160p", ... }] }
+     */
+    private data class TorrentResponse(
+        @JsonProperty("data")  val data:  TorrentData?,
+        @JsonProperty("error") val error: String?
+    )
+
+    private data class TorrentData(
+        @JsonProperty("provider") val provider: String?,
+        @JsonProperty("sources")  val sources:  List<TorrentSource>?
+    )
+
+    private data class TorrentSource(
+        @JsonProperty("name")          val name:          String?,
+        @JsonProperty("title")         val title:         String?,
+        @JsonProperty("url")           val url:           String?,    // .torrent file URL (yts)
+        @JsonProperty("magnet_url")    val magnetUrl:     String?,    // magnet URI (tvx)
+        @JsonProperty("quality")       val quality:       String?,
+        @JsonProperty("type")          val type:          String?,
+        @JsonProperty("video_codec")   val videoCodec:    String?,
+        @JsonProperty("seeds")         val seeds:         Int?,
+        @JsonProperty("peers")         val peers:         Int?,
+        @JsonProperty("size")          val size:          String?,
+        @JsonProperty("size_bytes")    val sizeBytes:     String?,    // kadang int, kadang string
+        @JsonProperty("date_uploaded") val dateUploaded:  Long?
     )
 }
