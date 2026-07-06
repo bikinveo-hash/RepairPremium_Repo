@@ -182,7 +182,7 @@ class PrimeSrcHelper {
     }
 
     /** @param url versi non-null dari src.url yang sudah divalidasi caller */
-    private fun emitSource(src: ScrapperSource, url: String, callback: (ExtractorLink) -> Unit) {
+    private suspend fun emitSource(src: ScrapperSource, url: String, callback: (ExtractorLink) -> Unit) {
         val type = when (src.format?.lowercase()) {
             "hls" -> ExtractorLinkType.M3U8
             "mp4" -> ExtractorLinkType.VIDEO
@@ -298,7 +298,7 @@ class PrimeSrcHelper {
         return invoked
     }
 
-    private fun loadExtractorFromUrl(
+    private suspend fun loadExtractorFromUrl(
         url: String,
         referer: String,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -334,14 +334,15 @@ class PrimeSrcHelper {
                 continue
             }
 
-            val sources = resp.data?.sources ?: continue
+            val torrentData = resp.data ?: continue
+            val sources = torrentData.sources ?: continue
 
             sources.forEach { t ->
                 val actualUrl = t.magnetUrl ?: t.url ?: return@forEach
 
                 callback(
                     newExtractorLink(
-                        source = "Torrent - ${t.provider ?: resp.data.provider ?: provider}",
+                        source = "Torrent - ${torrentData.provider ?: provider}",
                         name = "${t.name ?: "Unknown"} [${t.quality ?: "?"}]",
                         url = actualUrl,
                         type = ExtractorLinkType.TORRENT
