@@ -5,10 +5,22 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.net.URLDecoder
 import java.net.URLEncoder
 
 /**
  * RiveStream Provider - Core Plugin Cloudstream Terkalibrasi Standar MainAPI
+ *
+ * FIXED (lihat CHANGELOG):
+ *  - load() sekarang parsing type/id dari QUERY STRING (?id=..&type=..), bukan
+ *    dari path segment. Sebelumnya bug karena semua URL item dibuat dalam format
+ *    "$mainUrl/detail?id=X&type=Y" (path "detail" doang, tanpa id di path),
+ *    tapi load() lama mengasumsikan format path "$mainUrl/{type}/{id}" yang
+ *    sudah dikonfirmasi 404 di server asli.
+ *  - hasNext di getMainPage()/search() sekarang mengikuti data aktual
+ *    (total_pages dari TMDB), bukan di-hardcode true.
+ *  - useProxy default di-nonaktifkan sesuai catatan bahwa TMDB sudah CORS-ready;
+ *    proxy tetap tersedia sebagai opsi manual kalau suatu saat dibutuhkan lagi.
  */
 class RiveStreamProvider : MainAPI() {
     override var name    = "RiveStream"
@@ -18,10 +30,16 @@ class RiveStreamProvider : MainAPI() {
     override val hasQuickSearch = false
 
     companion object {
+        // Shared API key untuk backward compat. Sangat disarankan pakai API key
+        // sendiri dari themoviedb.org kalau plugin ini didistribusikan secara luas,
+        // supaya tidak kena rate-limit/revoke bareng-bareng dengan user lain.
         const val SHARED_API_KEY = "d64117f26031a428449f102ced3aba73"
         private const val TMDB_BASE  = "https://api.themoviedb.org/3"
+
+        // TMDB sudah mendukung CORS secara native, jadi proxy tidak lagi diperlukan
+        // secara default. Tetap disimpan sebagai fallback opsional.
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
     }
 
     override val mainPage = mainPageOf(
@@ -31,7 +49,7 @@ class RiveStreamProvider : MainAPI() {
         Pair("trending/tv/week",   "Trending TV Shows")
     )
 
-    private fun buildUrl(path: String, useProxy: Boolean = true): String {
+    private fun buildUrl(path: String, useProxy: Boolean = false): String {
         val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$SHARED_API_KEY"
         return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
@@ -41,6 +59,19 @@ class RiveStreamProvider : MainAPI() {
         "Referer"    to "$mainUrl/"
     )
 
+    /** Parse a raw query string ("a=1&b=2") into a Map, URL-decoding values. */
+    private fun parseUrlQuery(query: String): Map<String, String> {
+        if (query.isBlank()) return emptyMap()
+        return query.split("&")
+            .mapNotNull { pair ->
+                val idx = pair.indexOf('=')
+                if (idx < 0) return@mapNotNull null
+                val key = pair.substring(0, idx)
+                val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                key to value
+            }.toMap()
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val path     = "${request.data}?page=$page"
         val url      = buildUrl(path)
@@ -49,7 +80,12 @@ class RiveStreamProvider : MainAPI() {
 
         val homeItems = parsed.results?.mapNotNull { item ->
             val isMovie  = item.title != null || request.data.contains("movie")
-            val itemUrl  = if (isMovie) "$mainUrl/movie/${item.id}" else "$mainUrl/tv/${item.id}"
+            // Path detail Rive yang valid adalah /detail?id=...&type=... (bukan /movie/{id})
+            val itemUrl  = if (isMovie) {
+                "$mainUrl/detail?id=${item.id}&type=movie"
+            } else {
+                "$mainUrl/detail?id=${item.id}&type=tv"
+            }
             val title    = item.title ?: item.name ?: return@mapNotNull null
             val poster   = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
@@ -60,7 +96,8 @@ class RiveStreamProvider : MainAPI() {
             }
         } ?: emptyList()
 
-        return newHomePageResponse(request.name, homeItems, hasNext = true)
+        val hasNext = homeItems.isNotEmpty() && (parsed.totalPages == null || page < parsed.totalPages)
+        return newHomePageResponse(request.name, homeItems, hasNext = hasNext)
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
@@ -73,7 +110,7 @@ class RiveStreamProvider : MainAPI() {
             val title       = item.title ?: item.name ?: return@mapNotNull null
             val poster    = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
             val mediaType = item.mediaType ?: (if (item.title != null) "movie" else "tv")
-            val itemUrl   = "$mainUrl/$mediaType/${item.id}"
+            val itemUrl   = "$mainUrl/detail?id=${item.id}&type=$mediaType"
 
             when (mediaType) {
                 "movie" -> newMovieSearchResponse(title, itemUrl, TvType.Movie) { this.posterUrl = poster }
@@ -82,14 +119,19 @@ class RiveStreamProvider : MainAPI() {
             }
         } ?: emptyList()
 
-        return newSearchResponseList(items, hasNext = items.isNotEmpty())
+        val hasNext = items.isNotEmpty() && (parsed.totalPages == null || page < parsed.totalPages)
+        return newSearchResponseList(items, hasNext = hasNext)
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val cleanPath  = url.replace("$mainUrl/", "")
-        val type       = cleanPath.substringBefore("/")
-        val id         = cleanPath.substringAfter("/")
-        val detailsUrl = buildUrl("$cleanPath?append_to_response=external_ids")
+        // URL yang masuk selalu dalam format "$mainUrl/detail?id=X&type=Y[...]"
+        // (lihat getMainPage/search), jadi type & id harus diambil dari QUERY, bukan path.
+        val queryPart = url.substringAfter("?", "")
+        val qp = parseUrlQuery(queryPart)
+        val type = qp["type"] ?: return null
+        val id   = qp["id"] ?: return null
+
+        val detailsUrl = buildUrl("$type/$id?append_to_response=external_ids")
         val response   = app.get(detailsUrl, headers = tmdbHeaders).text
         val item       = tryParseJson<TmdbDetailResult>(response) ?: return null
 
@@ -117,7 +159,8 @@ class RiveStreamProvider : MainAPI() {
 
                         seasonData?.episodes?.mapNotNull { ep ->
                             val epNum = ep.episodeNumber ?: return@mapNotNull null
-                            val epData = "$url?season=$seasonNum&episode=$epNum"
+                            // url sudah mengandung "type=tv", jadi cukup tambahkan season & episode
+                            val epData = "$url&season=$seasonNum&episode=$epNum"
                             newEpisode(epData) {
                                 this.name    = ep.name
                                 this.season  = seasonNum
@@ -152,13 +195,13 @@ class RiveStreamProvider : MainAPI() {
     ): Boolean {
         val primeSrcHelper = PrimeSrcHelper()
 
-        val nonEmbedResult = primeSrcHelper.invokePrimeSrc(
-            data            = data,
-            mainUrl         = mainUrl,
-            providerName    = this.name,
-            apiKey          = SHARED_API_KEY,
+        val videoResult = primeSrcHelper.invokePrimeSrc(
+            data             = data,
+            mainUrl          = mainUrl,
+            providerName     = this.name,
+            apiKey           = SHARED_API_KEY,
             subtitleCallback = subtitleCallback,
-            callback        = callback
+            callback         = callback
         )
 
         val embedResult = primeSrcHelper.invokeEmbedMode(
@@ -168,13 +211,14 @@ class RiveStreamProvider : MainAPI() {
             callback         = callback
         )
 
-        return nonEmbedResult || embedResult
+        return videoResult || embedResult
     }
 
     // ===== DATA CLASSES TMDB =====================================================
 
     data class TmdbResultsResponse(
-        @JsonProperty("results") val results: List<TmdbItem>?
+        @JsonProperty("results")     val results:    List<TmdbItem>?,
+        @JsonProperty("total_pages") val totalPages: Int?
     )
 
     data class TmdbItem(
