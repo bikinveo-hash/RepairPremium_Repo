@@ -352,7 +352,14 @@ class PrimeSrcHelper {
         callback(
             newExtractorLink(
                 source = src.source ?: "Rive",
-                name = "${src.source ?: "Rive"} - ${src.quality ?: "Auto"}",
+                // [v3.3 FIX 3] Name include priority kalau ada — supaya user lihat
+                // ordering di player UI. Flowcast sering kirim priority (1=primary, 2=fallback).
+                name = buildString {
+                    append(src.source ?: "Rive")
+                    append(" - ")
+                    append(src.quality ?: "Auto")
+                    src.priority?.let { p -> append(" [p$p]") }
+                },
                 url = url,
                 type = type
             ) {
@@ -370,6 +377,13 @@ class PrimeSrcHelper {
      *   https://proxy.valhallastream.dpdns.org/proxy?url=...&headers=%7B%22Referer%22%3A...%7D
      *
      * Defensive: skip leading '=' chars untuk handle hypothetical malformed query.
+     *
+     * [v3.3 FIX 1] Support MULTIPLE formats:
+     *   - JSON object: `{"Referer":"...","Origin":"..."}` (primary)
+     *   - URL-encoded: `Referer=...&Origin=...` (fallback)
+     *
+     * [v3.3 FIX 2] Auto-add default `Origin = SCRAPPER_BASE` kalau gak ada di headers.
+     * Beberapa Cloudflare-protected flowcast proxy reject request tanpa Origin header.
      */
     private fun decodeFlowcastHeaders(url: String): Map<String, String>? {
         return try {
@@ -385,15 +399,34 @@ class PrimeSrcHelper {
             while (value.startsWith("=")) value = value.substring(1)
 
             val headersParam = URLDecoder.decode(value, "UTF-8")
-
-            // Validate JSON before parsing
-            if (!headersParam.trimStart().startsWith("{")) return null
-
             val result = mutableMapOf<String, String>()
-            val regex = "\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"".toRegex()
-            regex.findAll(headersParam).forEach { m ->
-                result[m.groupValues[1]] = m.groupValues[2]
+
+            // [v3.3 FIX 1] Try multiple parsing strategies
+            val parsed = when {
+                // Strategy 1: JSON object format {"key":"value"}
+                headersParam.trimStart().startsWith("{") -> {
+                    val jsonRegex = "\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"".toRegex()
+                    jsonRegex.findAll(headersParam).map { it.groupValues[1] to it.groupValues[2] }.toList()
+                }
+                // Strategy 2: URL-encoded format key=value&key2=value2
+                headersParam.contains("=") -> {
+                    headersParam.split("&").mapNotNull { pair ->
+                        val idx = pair.indexOf('=')
+                        if (idx < 0) return@mapNotNull null
+                        URLDecoder.decode(pair.substring(0, idx), "UTF-8") to
+                        URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                    }
+                }
+                else -> emptyList()
             }
+
+            parsed.forEach { (k, v) -> result[k] = v }
+
+            // [v3.3 FIX 2] Auto-add default Origin kalau gak ada (Cloudflare protection)
+            if (!result.containsKey("Origin") && !result.containsKey("origin")) {
+                result["Origin"] = SCRAPPER_BASE
+            }
+
             result.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
             null
