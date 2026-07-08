@@ -5,7 +5,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import kotlinx.coroutines.amap
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -42,15 +44,21 @@ class RiveStreamProvider : MainAPI() {
     // Default di MainAPI adalah `false` (parallel) — TMDB tidak suka parallel banyak
     // request dari satu IP, terutama saat cold start ketika user pertama buka homepage
     // (4 sections = 4 request paralel = 429 risk). Pattern sesuai referensi CloudStream.
-    override val sequentialMainPage            = true
-    override val sequentialMainPageDelay       = 500L   // 500ms antar request di first load
-    override val sequentialMainPageScrollDelay = 200L   // 200ms saat scrolling
+    //
+    // [v2.1 FIX] Parent MainAPI punya `var` (bukan `val`) untuk property ini —
+    // override harus pakai `var` juga, bukan `val`. Kalau pakai `val` di child,
+    // Kotlin complain: "'var' property ... cannot be overridden by 'val' property".
+    override var sequentialMainPage            = true
+    override var sequentialMainPageDelay       = 500L   // 500ms antar request di first load
+    override var sequentialMainPageScrollDelay = 200L   // 200ms saat scrolling
 
     // [v2 PATCH C] Settings toggle untuk useProxy. Default `false` karena TMDB
     // sudah CORS-ready, tapi user bisa override lewat settings kalau suatu saat
     // diblokir. Implementasi dibaca dari `overrideData` di MainAPI.init().
     // (Lihat catatan di companion object di bawah untuk detail.)
-    override val canBeOverridden = true  // agar overrideData diproses saat init
+    //
+    // [v2.1 FIX] Sama — parent `var`, child juga `var`.
+    override var canBeOverridden = true  // agar overrideData diproses saat init
 
     companion object {
         // Shared API key untuk backward compat. Sangat disarankan pakai API key
@@ -240,32 +248,44 @@ class RiveStreamProvider : MainAPI() {
                 item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
+            // [v2.1 FIX] Replace `amap` (which is not in kotlinx.coroutines) with
+            // explicit `coroutineScope` + `async`/`awaitAll` pattern. This is portable
+            // across all CloudStream versions since it uses only standard
+            // kotlinx.coroutines APIs.
             val episodes = item.seasons
                 ?.filter { (it.seasonNumber ?: 0) > 0 }
-                ?.amap { season ->
-                    val seasonNum = season.seasonNumber ?: return@amap null
-                    try {
-                        val seasonUrl      = buildUrl("$type/$id/season/$seasonNum")
-                        val seasonResponse = app.get(seasonUrl, headers = tmdbHeaders).text
-                        val seasonData     = tryParseJson<TmdbSeasonResponse>(seasonResponse)
+                ?.let { seasons ->
+                    coroutineScope {
+                        seasons
+                            .map { season ->
+                                async {
+                                    val seasonNum = season.seasonNumber ?: return@async null
+                                    try {
+                                        val seasonUrl      = buildUrl("$type/$id/season/$seasonNum")
+                                        val seasonResponse = app.get(seasonUrl, headers = tmdbHeaders).text
+                                        val seasonData     = tryParseJson<TmdbSeasonResponse>(seasonResponse)
 
-                        seasonData?.episodes?.mapNotNull { ep ->
-                            val epNum = ep.episodeNumber ?: return@mapNotNull null
-                            // url sudah mengandung "type=tv", jadi cukup tambahkan season & episode
-                            val epData = "$url&season=$seasonNum&episode=$epNum"
-                            newEpisode(epData) {
-                                this.name    = ep.name
-                                this.season  = seasonNum
-                                this.episode = epNum
+                                        seasonData?.episodes?.mapNotNull { ep ->
+                                            val epNum = ep.episodeNumber ?: return@mapNotNull null
+                                            // url sudah mengandung "type=tv", jadi cukup tambahkan season & episode
+                                            val epData = "$url&season=$seasonNum&episode=$epNum"
+                                            newEpisode(epData) {
+                                                this.name    = ep.name
+                                                this.season  = seasonNum
+                                                this.episode = epNum
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        logError(e)
+                                        null
+                                    }
+                                }
                             }
-                        }
-                    } catch (e: Exception) {
-                        logError(e)
-                        null
+                            .awaitAll()
+                            .filterNotNull()
+                            .flatten()
                     }
                 }
-                ?.filterNotNull()
-                ?.flatten()
                 ?.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
                 ?: emptyList()
 
