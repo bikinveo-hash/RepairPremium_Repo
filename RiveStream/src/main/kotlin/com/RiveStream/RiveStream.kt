@@ -5,10 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -25,40 +21,13 @@ import java.net.URLEncoder
  *    (total_pages dari TMDB), bukan di-hardcode true.
  *  - useProxy default di-nonaktifkan sesuai catatan bahwa TMDB sudah CORS-ready;
  *    proxy tetap tersedia sebagai opsi manual kalau suatu saat dibutuhkan lagi.
- *
- * v2 PATCH (2026-07-09) berdasarkan analisis MainApi.kt + ExtractorApi.kt referensi:
- *  - [A] sequentialMainPage = true + delays (anti 429 rate-limit)
- *  - [B] hasQuickSearch = false dihapus (default sudah false di MainAPI)
- *  - [C] useProxy jadi companion setting (toggle-able lewat settings panel)
- *  - [D] Error hardening di load() — wrap TMDB request dengan try/catch +
- *        retry sederhana untuk 429, plus ErrorLoadingException untuk empty result
  */
 class RiveStreamProvider : MainAPI() {
     override var name    = "RiveStream"
     override var mainUrl = "https://www.rivestream.app"
     override var lang    = "en"
     override val hasMainPage    = true
-    // [v2 PATCH B] hasQuickSearch dihapus — default MainAPI sudah `false`.
-
-    // [v2 PATCH A] Sequential main page requests to avoid TMDB rate-limiting (429).
-    // Default di MainAPI adalah `false` (parallel) — TMDB tidak suka parallel banyak
-    // request dari satu IP, terutama saat cold start ketika user pertama buka homepage
-    // (4 sections = 4 request paralel = 429 risk). Pattern sesuai referensi CloudStream.
-    //
-    // [v2.1 FIX] Parent MainAPI punya `var` (bukan `val`) untuk property ini —
-    // override harus pakai `var` juga, bukan `val`. Kalau pakai `val` di child,
-    // Kotlin complain: "'var' property ... cannot be overridden by 'val' property".
-    override var sequentialMainPage            = true
-    override var sequentialMainPageDelay       = 500L   // 500ms antar request di first load
-    override var sequentialMainPageScrollDelay = 200L   // 200ms saat scrolling
-
-    // [v2 PATCH C] Settings toggle untuk useProxy. Default `false` karena TMDB
-    // sudah CORS-ready, tapi user bisa override lewat settings kalau suatu saat
-    // diblokir. Implementasi dibaca dari `overrideData` di MainAPI.init().
-    // (Lihat catatan di companion object di bawah untuk detail.)
-    //
-    // [v2.1 FIX] Sama — parent `var`, child juga `var`.
-    override var canBeOverridden = true  // agar overrideData diproses saat init
+    override val hasQuickSearch = false
 
     companion object {
         // Shared API key untuk backward compat. Sangat disarankan pakai API key
@@ -71,16 +40,6 @@ class RiveStreamProvider : MainAPI() {
         // secara default. Tetap disimpan sebagai fallback opsional.
         private const val PROXY_BASE = "https://proxy.valhallastream.com/?destination="
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-
-        // [v2 PATCH C] Setting key untuk useProxy toggle.
-        // Disimpan sebagai konstanta supaya bisa direferensikan dari init() dan
-        // dari call site buildUrl() (opsional, kalau lo nanti mau expose ke settings UI).
-        const val SETTING_USE_PROXY = "use_proxy"
-
-        // [v2 PATCH C] Default useProxy — `false` karena TMDB sudah CORS-ready.
-        // Bisa di-override lewat settings panel.
-        @JvmStatic
-        var useProxy: Boolean = false
     }
 
     override val mainPage = mainPageOf(
@@ -90,10 +49,7 @@ class RiveStreamProvider : MainAPI() {
         Pair("trending/tv/week",   "Trending TV Shows")
     )
 
-    private fun buildUrl(path: String): String {
-        // [v2 PATCH C] Baca useProxy dari companion setting, bukan parameter.
-        // Tetap backward-compat dengan signature lama (parameter useProxy di-ignore,
-        // baca dari companion `useProxy` yang bisa di-toggle lewat settings).
+    private fun buildUrl(path: String, useProxy: Boolean = false): String {
         val fullUrl = "$TMDB_BASE/$path${if (path.contains("?")) "&" else "?"}api_key=$SHARED_API_KEY"
         return if (useProxy) "$PROXY_BASE${URLEncoder.encode(fullUrl, "UTF-8")}" else fullUrl
     }
@@ -114,49 +70,6 @@ class RiveStreamProvider : MainAPI() {
                 val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
                 key to value
             }.toMap()
-    }
-
-    // [v2 PATCH D] Retry helper untuk TMDB request. Kalau kena 429 (rate-limit),
-    // tunggu sebentar lalu retry sekali. Pattern ini simple tapi efektif untuk
-    // kebanyakan kasus rate-limit short-window.
-    private suspend fun <T> tmdbRequestWithRetry(
-        url: String,
-        parse: (String) -> T?,
-        maxRetries: Int = 1
-    ): T? {
-        var attempt = 0
-        var lastError: Exception? = null
-
-        while (attempt <= maxRetries) {
-            try {
-                val response = app.get(url, headers = tmdbHeaders)
-                // Kalau 429, tunggu 1 detik lalu retry.
-                if (response.code == 429 && attempt < maxRetries) {
-                    kotlinx.coroutines.delay(1000L)
-                    attempt++
-                    continue
-                }
-                return parse(response.text)
-            } catch (e: Exception) {
-                lastError = e
-                if (attempt < maxRetries) {
-                    kotlinx.coroutines.delay(1000L)
-                    attempt++
-                    continue
-                }
-                throw e
-            }
-        }
-        return null
-    }
-
-    /** Convenience wrapper untuk TMDB detail request dengan retry. */
-    private suspend fun fetchDetailWithRetry(type: String, id: String): TmdbDetailResult? {
-        val url = buildUrl("$type/$id?append_to_response=external_ids")
-        return tmdbRequestWithRetry(
-            url = url,
-            parse = { response -> tryParseJson<TmdbDetailResult>(response) }
-        )
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -218,22 +131,9 @@ class RiveStreamProvider : MainAPI() {
         val type = qp["type"] ?: return null
         val id   = qp["id"] ?: return null
 
-        // [v2 PATCH D] Error hardening — wrap dengan try/catch supaya
-        // - Network error / parse error tidak crash provider
-        // - ErrorLoadingException di-throw supaya CloudStream bisa tampil UI yang sesuai
-        // - Retry sederhana untuk 429 (rate-limit) — 1x retry dengan delay singkat
-        val item: TmdbDetailResult? = try {
-            fetchDetailWithRetry(type, id)
-        } catch (e: Exception) {
-            logError(e)
-            null
-        }
-
-        if (item == null) {
-            // Item tidak ditemukan atau error — lempar ErrorLoadingException
-            // supaya UI bisa handle gracefully (daripada return null silent).
-            throw ErrorLoadingException("Cannot load $type/$id from TMDB")
-        }
+        val detailsUrl = buildUrl("$type/$id?append_to_response=external_ids")
+        val response   = app.get(detailsUrl, headers = tmdbHeaders).text
+        val item       = tryParseJson<TmdbDetailResult>(response) ?: return null
 
         val title  = item.title ?: item.name ?: return null
         val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
@@ -248,44 +148,32 @@ class RiveStreamProvider : MainAPI() {
                 item.voteAverage?.let { this.score = Score.from10(it) }
             }
         } else {
-            // [v2.1 FIX] Replace `amap` (which is not in kotlinx.coroutines) with
-            // explicit `coroutineScope` + `async`/`awaitAll` pattern. This is portable
-            // across all CloudStream versions since it uses only standard
-            // kotlinx.coroutines APIs.
             val episodes = item.seasons
                 ?.filter { (it.seasonNumber ?: 0) > 0 }
-                ?.let { seasons ->
-                    coroutineScope {
-                        seasons
-                            .map { season ->
-                                async {
-                                    val seasonNum = season.seasonNumber ?: return@async null
-                                    try {
-                                        val seasonUrl      = buildUrl("$type/$id/season/$seasonNum")
-                                        val seasonResponse = app.get(seasonUrl, headers = tmdbHeaders).text
-                                        val seasonData     = tryParseJson<TmdbSeasonResponse>(seasonResponse)
+                ?.amap { season ->
+                    val seasonNum = season.seasonNumber ?: return@amap null
+                    try {
+                        val seasonUrl      = buildUrl("$type/$id/season/$seasonNum")
+                        val seasonResponse = app.get(seasonUrl, headers = tmdbHeaders).text
+                        val seasonData     = tryParseJson<TmdbSeasonResponse>(seasonResponse)
 
-                                        seasonData?.episodes?.mapNotNull { ep ->
-                                            val epNum = ep.episodeNumber ?: return@mapNotNull null
-                                            // url sudah mengandung "type=tv", jadi cukup tambahkan season & episode
-                                            val epData = "$url&season=$seasonNum&episode=$epNum"
-                                            newEpisode(epData) {
-                                                this.name    = ep.name
-                                                this.season  = seasonNum
-                                                this.episode = epNum
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        logError(e)
-                                        null
-                                    }
-                                }
+                        seasonData?.episodes?.mapNotNull { ep ->
+                            val epNum = ep.episodeNumber ?: return@mapNotNull null
+                            // url sudah mengandung "type=tv", jadi cukup tambahkan season & episode
+                            val epData = "$url&season=$seasonNum&episode=$epNum"
+                            newEpisode(epData) {
+                                this.name    = ep.name
+                                this.season  = seasonNum
+                                this.episode = epNum
                             }
-                            .awaitAll()
-                            .filterNotNull()
-                            .flatten()
+                        }
+                    } catch (e: Exception) {
+                        logError(e)
+                        null
                     }
                 }
+                ?.filterNotNull()
+                ?.flatten()
                 ?.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
                 ?: emptyList()
 
