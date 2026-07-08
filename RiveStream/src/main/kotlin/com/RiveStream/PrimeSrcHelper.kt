@@ -331,7 +331,23 @@ class PrimeSrcHelper {
         }
 
         // Decode headers dari query string (khusus flowcast URL)
-        val headers = decodeFlowcastHeaders(url) ?: emptyMap()
+        val flowcastHeaders = decodeFlowcastHeaders(url) ?: emptyMap()
+
+        // [v3.2 FIX B] Default headers untuk SEMUA source — bukan cuma flowcast.
+        // Alasan: dari Logcat runtime test (03:56:23.056), ExoPlayer gagal seekTo()
+        // dengan error `MediaHTTPConnection.readAt → IOException`. Ini terjadi kalau
+        // server tidak terima HTTP Range request tanpa User-Agent yang recognizable
+        // sebagai browser. Beberapa CDN/proxy (khususnya Cloudflare-protected) reject
+        // request dengan default ExoPlayer User-Agent.
+        //
+        // Fix: set default User-Agent + Accept header di SEMUA source. Flowcast headers
+        // (kalau ada) di-merge sebagai override — flowcast-specific headers menang.
+        val defaultHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9"
+        )
+        val mergedHeaders = defaultHeaders + flowcastHeaders.filterKeys { it != "Referer" }
 
         callback(
             newExtractorLink(
@@ -340,9 +356,9 @@ class PrimeSrcHelper {
                 url = url,
                 type = type
             ) {
-                this.referer = headers["Referer"] ?: SCRAPPER_BASE
-                // Attach headers lain kalau ada (Origin, dll)
-                this.headers = headers.filterKeys { it != "Referer" }
+                // [v3.2 FIX B] Prioritas: flowcast Referer > SCRAPPER_BASE
+                this.referer = flowcastHeaders["Referer"] ?: SCRAPPER_BASE
+                this.headers = mergedHeaders
                 this.quality = parseQuality(src.quality)
             }
         )
@@ -525,18 +541,26 @@ class PrimeSrcHelper {
             sources.forEach { t ->
                 val actualUrl = t.magnetUrl ?: t.url ?: return@forEach
 
-                // [v3] Type detection fix: biarkan upstream `inferTypeFromUrl()` auto-detect
-                // berdasarkan URL. Magnet links (magnet:?xt=...) jadi ExtractorLinkType.MAGNET,
-                // .torrent file jadi ExtractorLinkType.TORRENT. Sebelumnya selalu hardcode
-                // TORRENT — bug minor karena exoplayer perlu tau MAGNET vs TORRENT untuk hint.
+                // [v3.2 FIX D] Explicit type detection untuk magnet links.
+                // Sebelumnya: `type = null` (INFER_TYPE) — berharap upstream
+                // `inferTypeFromUrl()` auto-detect. TAPI dari Logcat runtime test,
+                // `Mp4PreviewGenerator.setDataSource` fail saat ada link non-video
+                // yang lolos ke ExoPlayer dengan type yang salah.
                 //
-                // Pattern sesuai ExtractorApi.kt referensi: `type = null` artinya `INFER_TYPE`.
+                // Fix: Deteksi manual. Magnet link SELALU type MAGNET (bukan INFER_TYPE),
+                // supaya ExoPlayer tidak coba process sebagai video stream.
+                val torrentType = when {
+                    actualUrl.startsWith("magnet:", ignoreCase = true) -> ExtractorLinkType.MAGNET
+                    actualUrl.endsWith(".torrent", ignoreCase = true) -> ExtractorLinkType.TORRENT
+                    else -> ExtractorLinkType.TORRENT  // default fallback
+                }
+
                 callback(
                     newExtractorLink(
                         source = "Torrent - ${torrentData.provider ?: provider}",
                         name = "${t.name ?: "Unknown"} [${t.quality ?: "?"}]",
                         url = actualUrl,
-                        type = null  // INFER_TYPE — auto-detect dari URL
+                        type = torrentType
                     ) {
                         this.referer = SCRAPPER_BASE
                         this.quality = parseQuality(t.quality)
