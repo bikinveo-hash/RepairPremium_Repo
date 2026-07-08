@@ -485,7 +485,12 @@ class PrimeSrcHelper {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            utils.loadExtractor(url, referer, subtitleCallback, callback)
+            // [v3.1 FIX] Pakai top-level function `loadExtractor()` dari
+            // com.lagradost.cloudstream3.utils (ExtractorApi.kt).
+            // Sebelumnya pakai `utils.loadExtractor()` (object call) — itu unresolved
+            // di build environment plugin karena `utils` object tidak ter-import via wildcard
+            // di beberapa versi CloudStream. Top-level function lebih reliable.
+            loadExtractor(url, referer, subtitleCallback, callback)
         } catch (e: Exception) {
             logError(e)
             false
