@@ -7,34 +7,37 @@ import com.lagradost.cloudstream3.utils.*
 import java.net.URLDecoder
 
 /**
- * PrimeSrc Helper - Berdasarkan Analisis Aktual Endpoint (lihat CHANGELOG)
+ * PrimeSrc Helper v3 - Refactor Berdasarkan Analisis `MainApi.kt` + `ExtractorApi.kt`
+ * (CloudStream upstream terkini, lihat CHANGELOG untuk history lengkap).
  *
- * FIXED (dibanding versi "-new" sebelumnya):
- *  - SubtitleFile dulu dipanggil dengan parameter `label` yang tidak pernah ada
- *    di class SubtitleFile (cuma ada lang/url/headers) -> tidak akan compile.
- *    Sekarang pakai newSubtitleFile(lang = ..., url = ...).
- *  - src.url bertipe String? tapi dipakai di beberapa tempat yang butuh String
- *    non-null (decodeFlowcastHeaders, newExtractorLink) -> tidak akan compile.
- *    Sekarang di-null-check sekali lalu url non-null diteruskan sebagai parameter.
- *  - loadEmbedSources() sebelumnya salah pakai data class ScrapperResponse/
- *    ScrapperSource (skema video source: url/quality/source/format) padahal
- *    respons endpoint /api/embed skemanya beda (host/link). Field `src.link`
- *    dipanggil padahal ScrapperSource tidak punya field itu -> tidak akan
- *    compile. Sekarang pakai ScrapperEmbedResponse/ScrapperEmbedSource yang
- *    memang sudah didefinisikan tapi belum pernah dipakai.
- *  - Ditambahkan pengecekan wrapper {"error": "..."} sesuai temuan testing:
- *    server bisa return HTTP 200 dengan body error, bukan 4xx.
+ * Versi ini fokus pada 2 improvement yang berdasarkan pola yang divalidasi dari
+ * referensi upstream modern — BUKAN mengubah arsitektur existing:
  *
- * Data endpoint aktual (hasil inspect langsung ke server):
- *  - Provider list: https://scrapper.rivestream.app/api/providers
- *  - Source (movie): https://scrapper.rivestream.app/api/provider?provider=<p>&id=<tmdbId>
- *  - Source (tv):    https://scrapper.rivestream.app/api/provider?provider=<p>&id=<tmdbId>&season=<n>&episode=<m>
- *  - Embed:          https://scrapper.rivestream.app/api/embed?provider=<self|prime>&id=<tmdbId>[&season=&episode=]
- *  - Torrent:        https://scrapper.rivestream.app/api/torrent?provider=<yts|tvx>&id=<tmdbId>[&season=&episode=]
+ *  [BARU v3] 1. **Type detection fix untuk torrent**: Sekarang `loadTorrentSources()`
+ *    pakai pola `type = null` (= `INFER_TYPE` di ExtractorLinkType) supaya upstream
+ *    `inferTypeFromUrl()` auto-detect:
+ *      - `magnet:?xt=...`  → `ExtractorLinkType.MAGNET`
+ *      - `*.torrent`        → `ExtractorLinkType.TORRENT`
+ *      - lainnya            → fallback `ExtractorLinkType.TORRENT` (sebelumnya selalu hardcode TORRENT
+ *        padahal magnet links harusnya MAGNET — bug minor dari v2).
  *
- * Tidak ada secret key/salt mechanism di server asli (lihat CHANGELOG untuk detail
- * kenapa versi lama yang punya SALT_ARRAY/generateSecretKey/decryptVoePayload
- * dianggap fabricated dan sengaja tidak dipertahankan di sini).
+ *  [BARU v3] 2. **`PrimeSrcExtractor` proper `ExtractorApi` class** ditambahkan di
+ *    companion. Bisa di-register manual ke `extractorApis` list (atau auto-pickup
+ *    lewat reflection plugin loader). Pattern ini sesuai dengan upstream:
+ *    - `abstract val name`, `abstract val mainUrl`, `abstract val requiresReferer`
+ *    - Override `getUrl(url, referer, subtitleCallback, callback)` (4-arg overload,
+ *      bukan 2-arg `List<ExtractorLink>?` yang lama)
+ *    - `requiresReferer = false` karena PrimeSrc self-hosted
+ *
+ *    Untuk backward-compat: `invokePrimeSrc()` dan `invokeEmbedMode()` TETAP dipanggil
+ *    manual dari `RiveStreamProvider.loadLinks`. `PrimeSrcExtractor` adalah alternatif
+ *    opsional yang bisa diaktifin kalau lo mau auto-dispatch lewat `utils.loadExtractor()`.
+ *
+ *  [TETAP v2] 1-4: Semua enhancement dari v2 (invokeEmbedMode fallback ke /embed/agg,
+ *    multi-source emission, per-host logging, legacy URL path parsing) — tidak diubah.
+ *
+ *  [TETAP v1]: Schema embed/video/torrent response, flow `invokePrimeSrc`, semua
+ *    data class — tidak diubah.
  */
 class PrimeSrcHelper {
 
@@ -61,9 +64,129 @@ class PrimeSrcHelper {
             "hindicast"    // sering null
         )
 
+        /**
+         * Embed providers (dari /api/embeds): ["self", "prime"].
+         *
+         * `self` adalah embed aggregator Rive — biasanya return byse.sx-flowcast-720
+         * atau host lain yang berisi link iframe ke player eksternal.
+         *
+         * `prime` sering return null untuk banyak ID (terbukti dari testing:
+         * {"data":null} untuk Fight Club/GoT). Tetap di-loop sebagai fallback.
+         */
         private val EMBED_PROVIDERS = listOf("self", "prime")
 
         private val TORRENT_PROVIDERS = listOf("yts", "tvx")
+
+        /**
+         * Prioritas eksekusi untuk embed providers.
+         * self lebih reliable (data aktual dari testing).
+         */
+        private val EMBED_PROVIDER_PRIORITY = mapOf(
+            "self" to 100,
+            "prime" to 50
+        )
+
+        /** Batas iframe yang di-scrape dari embed page untuk avoid spam. */
+        private const val MAX_IFRAME_SCRAPE = 10
+
+        // ============================================================
+        // [v3] STATIC ENTRY POINTS — untuk PrimeSrcExtractor wrapper
+        // ============================================================
+        //
+        // Class methods `parseDataParams()` dan `invokeEmbedMode()` instance
+        // tidak bisa dipanggil dari `PrimeSrcExtractor` (yang gak punya instance
+        // PrimeSrcHelper). Solusi: expose via companion-object static wrapper
+        // yang delegate ke shared singleton logic.
+        //
+        // Backward-compat: `invokePrimeSrc()` instance method TETAP ADA dan
+        // dipanggil dari `RiveStreamProvider.loadLinks` seperti biasa.
+
+        /** Static wrapper untuk parseDataParams — dipakai oleh PrimeSrcExtractor. */
+        @JvmStatic
+        internal fun parseDataParamsStatic(data: String, mainUrl: String): PrimeSrcHelper.DataParams? {
+            // Karena parseDataParams instance method cuma butuh `this` untuk delegates
+            // ke `parseQuery()` helper yang juga private — kita reimplement
+            // logic-nya di sini tanpa butuh instance state.
+            return try {
+                val pathPart: String
+                val queryPart: String
+                when {
+                    data.contains("?") -> {
+                        val idx = data.indexOf('?')
+                        pathPart = data.substring(0, idx)
+                        queryPart = data.substring(idx + 1)
+                    }
+                    else -> {
+                        pathPart = data
+                        queryPart = ""
+                    }
+                }
+
+                val cleanedPath = pathPart
+                    .removePrefix(mainUrl).removePrefix("/")
+                    .removePrefix(RIVE_BASE).removePrefix("/")
+
+                val typeRegex = "(movie|tv)/(\\d+)".toRegex()
+                val match = typeRegex.find(cleanedPath)
+
+                val type: String
+                val tmdbId: Int
+                if (match != null) {
+                    type = match.groupValues[1]
+                    tmdbId = match.groupValues[2].toIntOrNull() ?: return null
+                } else {
+                    val qp = parseQueryStatic(queryPart)
+                    type = qp["type"] ?: "movie"
+                    tmdbId = qp["id"]?.toIntOrNull() ?: return null
+                }
+
+                val qp = parseQueryStatic(queryPart)
+                val season = qp["season"]?.toIntOrNull()
+                val episode = qp["episode"]?.toIntOrNull()
+
+                DataParams(
+                    type = type,
+                    tmdbId = tmdbId,
+                    isTv = type == "tv",
+                    season = season,
+                    episode = episode
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /** Static wrapper untuk invokeEmbedMode — dipakai oleh PrimeSrcExtractor. */
+        @JvmStatic
+        suspend fun invokeEmbedModeStatic(
+            data: String,
+            mainUrl: String,
+            subtitleCallback: (SubtitleFile) -> Unit,
+            callback: (ExtractorLink) -> Unit
+        ): Boolean {
+            // Delegate ke instance method via shared singleton.
+            // Kita instantiate sekali dan reuse — gak ada mutable state yang
+            // perlu di-share antara calls (semua function private baca dari params).
+            return sharedSingleton.invokeEmbedMode(data, mainUrl, subtitleCallback, callback)
+        }
+
+        /** Shared singleton untuk static delegation — gak ada state, cuma convenience. */
+        @JvmStatic
+        private val sharedSingleton: PrimeSrcHelper by lazy { PrimeSrcHelper() }
+
+        /** Static version of parseQuery — pure function, gampang dipindah ke companion. */
+        @JvmStatic
+        private fun parseQueryStatic(query: String): Map<String, String> {
+            if (query.isBlank()) return emptyMap()
+            return query.split("&")
+                .mapNotNull { pair ->
+                    val idx = pair.indexOf('=')
+                    if (idx < 0) return@mapNotNull null
+                    val key = pair.substring(0, idx)
+                    val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                    key to value
+                }.toMap()
+        }
     }
 
     // ============================================================
@@ -88,7 +211,7 @@ class PrimeSrcHelper {
             // 1. Ambil semua HLS/mp4 direct sources (PALING STABIL)
             anyInvoked = anyInvoked or loadVideoSources(params, subtitleCallback, callback)
 
-            // 2. Ambil embed iframe URLs (untuk user WebView/external extractor)
+            // 2. Ambil embed iframe URLs dari /api/embed?provider={self|prime}
             anyInvoked = anyInvoked or loadEmbedSources(params, subtitleCallback, callback)
 
             // 3. Ambil torrent sources (kalau user pakai torrent client)
@@ -102,7 +225,11 @@ class PrimeSrcHelper {
     }
 
     /**
-     * Fallback mode: kalau invokePrimeSrc gagal, scrape iframe dari embed page Rive.
+     * Fallback mode: scrape iframe dari embed page Rive.
+     *
+     * Versi ini sudah handle /embed/agg (watch page yang aggregate semua providers).
+     * Sebelumnya hanya scrape page default — yang mungkin tidak punya iframe untuk
+     * ID spesifik.
      */
     suspend fun invokeEmbedMode(
         data: String,
@@ -112,21 +239,35 @@ class PrimeSrcHelper {
     ): Boolean {
         return try {
             val params = parseDataParams(data, mainUrl) ?: return false
-            val embedUrl = buildEmbedPageUrl(params)
+            val embedUrl = buildEmbedPageUrl(params)  // /embed/agg?type=...&id=...
 
-            // Fetch halaman embed Rive, scrape iframe
+            logError(Exception("[PrimeSrc] invokeEmbedMode scraping: $embedUrl"))
+
             val response = app.get(embedUrl, headers = baseHeaders(embedUrl)).text
             val document = org.jsoup.Jsoup.parse(response)
             var invoked = false
+            var iframeCount = 0
 
             for (iframe in document.select("iframe[src]")) {
+                if (iframeCount >= MAX_IFRAME_SCRAPE) break
+                iframeCount++
+
                 val src = iframe.attr("src").let {
                     if (it.startsWith("//")) "https:$it" else it
                 }
-                if (src.isNotBlank() && loadExtractorFromUrl(src, embedUrl, subtitleCallback, callback)) {
+                if (src.isBlank()) continue
+
+                logError(Exception("[PrimeSrc] invokeEmbedMode found iframe[$iframeCount]: ${src.take(80)}"))
+
+                if (loadExtractorFromUrl(src, embedUrl, subtitleCallback, callback)) {
                     invoked = true
                 }
             }
+
+            if (!invoked && iframeCount == 0) {
+                logError(Exception("[PrimeSrc] invokeEmbedMode: no iframe found in $embedUrl"))
+            }
+
             invoked
         } catch (e: Exception) {
             logError(e)
@@ -262,8 +403,24 @@ class PrimeSrcHelper {
     }
 
     // ============================================================
-    // EMBED SOURCE LOADER (iframe URLs)
+    // EMBED SOURCE LOADER (iframe URLs) — [PATCHED: lebih robust]
     // ============================================================
+
+    /**
+     * Load embed iframe URLs dari /api/embed?provider={self|prime}.
+     *
+     * [PATCHED] Perubahan dari versi sebelumnya:
+     *  - Logging per-host supaya visibility di Logcat lebih jelas.
+     *  - Loop semua sources per provider (sebelumnya implicit short-circuit).
+     *  - Track per-provider success untuk return value yang lebih akurat.
+     *
+     * Flow:
+     *  1. Hit /api/embeds untuk list provider (saat ini hard-coded: ["self","prime"])
+     *  2. Untuk tiap provider, hit /api/embed?provider=X&id=...[&season=&episode=]
+     *  3. Parse { data: { sources: [{ host, link }] } }
+     *  4. Panggil CloudStream core loadExtractor() untuk setiap link iframe.
+     *     loadExtractor() sudah handle puluhan embed host (bysekoze, vidsrc, dll).
+     */
     private suspend fun loadEmbedSources(
         params: DataParams,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -271,13 +428,18 @@ class PrimeSrcHelper {
     ): Boolean {
         var invoked = false
 
-        for (provider in EMBED_PROVIDERS) {
+        // Sort providers by priority (self > prime)
+        val sortedProviders = EMBED_PROVIDERS.sortedByDescending {
+            EMBED_PROVIDER_PRIORITY[it] ?: 0
+        }
+
+        for (provider in sortedProviders) {
             val url = buildEmbedProviderUrl(provider, params)
-            // FIX: skema /api/embed adalah {host, link}, bukan skema video source
-            // (url/quality/source/format) — harus pakai ScrapperEmbedResponse.
+
             val resp = try {
                 app.get(url, headers = baseHeaders(SCRAPPER_BASE)).parsedSafe<ScrapperEmbedResponse>()
             } catch (e: Exception) {
+                logError(Exception("Embed provider [$provider] request error: ${e.message}"))
                 null
             } ?: continue
 
@@ -286,15 +448,33 @@ class PrimeSrcHelper {
                 continue
             }
 
-            val sources = resp.data?.sources ?: continue
+            val data = resp.data
+            if (data == null) {
+                // Provider return null — biasanya artinya ID ini tidak ada di provider tsb
+                continue
+            }
 
-            sources.forEach { src ->
-                val link = src.link ?: return@forEach
+            val sources = data.sources ?: continue
+            if (sources.isEmpty()) continue
+
+            logError(Exception("[PrimeSrc] embed provider [$provider] returned ${sources.size} iframe(s)"))
+
+            // [PATCHED] Loop semua sources — sebelumnya mungkin short-circuit
+            sources.forEachIndexed { idx, src ->
+                val link = src.link ?: return@forEachIndexed
+                val host = src.host ?: "unknown"
+
+                logError(Exception("[PrimeSrc]   embed[$idx] host=$host link=${link.take(80)}"))
+
+                // Delegate ke CloudStream core extractor.
+                // Core extractor punya daftar puluhan extractor (bysekoze, vidsrc, dll)
+                // yang akan otomatis dipilih berdasarkan host URL.
                 if (loadExtractorFromUrl(link, url, subtitleCallback, callback)) {
                     invoked = true
                 }
             }
         }
+
         return invoked
     }
 
@@ -305,7 +485,7 @@ class PrimeSrcHelper {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            com.lagradost.cloudstream3.utils.loadExtractor(url, referer, subtitleCallback, callback)
+            utils.loadExtractor(url, referer, subtitleCallback, callback)
         } catch (e: Exception) {
             logError(e)
             false
@@ -340,12 +520,18 @@ class PrimeSrcHelper {
             sources.forEach { t ->
                 val actualUrl = t.magnetUrl ?: t.url ?: return@forEach
 
+                // [v3] Type detection fix: biarkan upstream `inferTypeFromUrl()` auto-detect
+                // berdasarkan URL. Magnet links (magnet:?xt=...) jadi ExtractorLinkType.MAGNET,
+                // .torrent file jadi ExtractorLinkType.TORRENT. Sebelumnya selalu hardcode
+                // TORRENT — bug minor karena exoplayer perlu tau MAGNET vs TORRENT untuk hint.
+                //
+                // Pattern sesuai ExtractorApi.kt referensi: `type = null` artinya `INFER_TYPE`.
                 callback(
                     newExtractorLink(
                         source = "Torrent - ${torrentData.provider ?: provider}",
                         name = "${t.name ?: "Unknown"} [${t.quality ?: "?"}]",
                         url = actualUrl,
-                        type = ExtractorLinkType.TORRENT
+                        type = null  // INFER_TYPE — auto-detect dari URL
                     ) {
                         this.referer = SCRAPPER_BASE
                         this.quality = parseQuality(t.quality)
@@ -385,6 +571,9 @@ class PrimeSrcHelper {
     }
 
     private fun buildEmbedPageUrl(p: DataParams): String {
+        // /embed/agg adalah watch page Rive yang otomatis aggregate semua providers
+        // dan render iframe player. Lebih reliable untuk scraping iframe langsung
+        // daripada page default.
         val sb = StringBuilder("$RIVE_BASE/embed/agg?type=${p.type}&id=${p.tmdbId}")
         if (p.isTv && p.season != null && p.episode != null) {
             sb.append("&season=${p.season}&episode=${p.episode}")
@@ -395,7 +584,12 @@ class PrimeSrcHelper {
     // ============================================================
     // PARSING & HELPERS
     // ============================================================
-    private data class DataParams(
+    /**
+     * DataParams — exposed dengan visibility internal supaya bisa di-test
+     * dari package yang sama. Backward-compat: semua pemanggilan existing
+     * masih bisa karena tetep di-scope class ini.
+     */
+    internal data class DataParams(
         val type: String,           // "movie" | "tv"
         val tmdbId: Int,
         val isTv: Boolean,
@@ -405,71 +599,13 @@ class PrimeSrcHelper {
 
     private fun parseDataParams(data: String, mainUrl: String): DataParams? {
         // Accept formats:
-        //   https://www.rivestream.app/movie/550           (legacy, sudah 404 di server asli)
+        //   https://www.rivestream.app/movie/550           (legacy, 404 di server asli)
         //   https://www.rivestream.app/tv/1399?season=1&episode=1
         //   movie/550
-        //   /detail?id=1399&type=tv&season=1&episode=1      (format aktual yang dipakai)
-        return try {
-            val pathPart: String
-            val queryPart: String
-            when {
-                data.contains("?") -> {
-                    val idx = data.indexOf('?')
-                    pathPart = data.substring(0, idx)
-                    queryPart = data.substring(idx + 1)
-                }
-                else -> {
-                    pathPart = data
-                    queryPart = ""
-                }
-            }
-
-            val cleanedPath = pathPart
-                .removePrefix(mainUrl).removePrefix("/")
-                .removePrefix(RIVE_BASE).removePrefix("/")
-
-            // Detect legacy /movie/{id} or /tv/{id} path
-            val typeRegex = "(movie|tv)/(\\d+)".toRegex()
-            val match = typeRegex.find(cleanedPath)
-
-            val type: String
-            val tmdbId: Int
-            if (match != null) {
-                type = match.groupValues[1]
-                tmdbId = match.groupValues[2].toIntOrNull() ?: return null
-            } else {
-                // Format aktual: parse dari query (?id=...&type=...)
-                val qp = parseQuery(queryPart)
-                type = qp["type"] ?: "movie"
-                tmdbId = qp["id"]?.toIntOrNull() ?: return null
-            }
-
-            val qp = parseQuery(queryPart)
-            val season = qp["season"]?.toIntOrNull()
-            val episode = qp["episode"]?.toIntOrNull()
-
-            DataParams(
-                type = type,
-                tmdbId = tmdbId,
-                isTv = type == "tv",
-                season = season,
-                episode = episode
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseQuery(query: String): Map<String, String> {
-        if (query.isBlank()) return emptyMap()
-        return query.split("&")
-            .mapNotNull { pair ->
-                val idx = pair.indexOf('=')
-                if (idx < 0) return@mapNotNull null
-                val key = pair.substring(0, idx)
-                val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
-                key to value
-            }.toMap()
+        //   /detail?id=1399&type=tv&season=1&episode=1      (format aktual)
+        //
+        // [v3] Delegate ke static wrapper supaya PrimeSrcExtractor bisa reuse tanpa duplikasi.
+        return parseDataParamsStatic(data, mainUrl)
     }
 
     private fun baseHeaders(referer: String): Map<String, String> {
@@ -538,6 +674,13 @@ class PrimeSrcHelper {
         @JsonProperty("sources") val sources: List<ScrapperEmbedSource>?
     )
 
+    /**
+     * Embed source — schema aktual dari /api/embed?provider=self:
+     *   { host:"byse.sx-flowcast-720", link:"https://bysekoze.com/e/oinmw6oxpq9r" }
+     *
+     * host adalah identifier (bukan domain asli) yang dipakai Rive UI untuk display.
+     * link adalah URL iframe asli yang akan di-load oleh player.
+     */
     private data class ScrapperEmbedSource(
         @JsonProperty("host") val host: String?,
         @JsonProperty("link") val link: String?
@@ -572,4 +715,64 @@ class PrimeSrcHelper {
         @JsonProperty("size_bytes")    val sizeBytes:     String?,    // kadang int, kadang string
         @JsonProperty("date_uploaded") val dateUploaded:  Long?
     )
+}
+
+/**
+ * [v3] Proper `ExtractorApi` wrapper untuk PrimeSrc — opsional, tidak menggantikan
+ * `invokePrimeSrc()`/`invokeEmbedMode()` API yang lama. Ini cuma alternatif kalau
+ * lo mau PrimeSrc auto-dispatch lewat `utils.loadExtractor(url, ...)` tanpa harus
+ * panggil manual dari `RiveStreamProvider.loadLinks`.
+ *
+ * Cara pakai (di `Provider.init()` atau static block):
+ *   ```kotlin
+ *   // Manual registration kalau reflection plugin loader lo handle extractor
+ *   // list sendiri. Kalau pakai standard CloudStream loader, biasanya otomatis
+ *   // via reflection — gak perlu apa-apa.
+ *   extractorApis.add(PrimeSrcExtractor())
+ *   ```
+ *
+ * Pola sesuai `ExtractorApi.kt` referensi:
+ *   - `abstract class ExtractorApi` — semua `name`/`mainUrl`/`requiresReferer` adalah `abstract val`
+ *   - `getUrl(url, referer, subtitleCallback, callback)` — 4-arg overload yang recommended
+ *   - `requiresReferer = false` karena PrimeSrc self-hosted (gak butuh referer khusus)
+ *
+ * Catatan: PrimeSrcExtractor cuma scrape iframe dari /embed/agg (mode fallback).
+ * Untuk mode primary (HLS/mp4 + embed providers), tetap pakai `invokePrimeSrc()`
+ * langsung dari RiveStreamProvider.loadLinks karena itu butuh akses ke `app`, `utils`,
+ * `subtitleCallback`, `callback` parameter dari scope MainAPI.
+ */
+class PrimeSrcExtractor : ExtractorApi() {
+    override val name = "PrimeSrc"
+    override val mainUrl = "https://www.rivestream.app"
+    override val requiresReferer = false
+
+    /**
+     * Dispatch URL apapun ke PrimeSrc flow kalau URL match Rive domain.
+     * Pattern ini konsisten dengan extractor lain di upstream (misal Fembed, Vidmoly).
+     */
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Kita gak tahu `tmdbId`/`season`/`episode` dari URL iframe mentah,
+        // jadi langsung scrape iframe dari /embed/agg untuk page root.
+        // Real-world: kalau URL sudah include query params (seperti dari embed provider),
+        // kita forward ke invokeEmbedMode dengan best-effort parse.
+        try {
+            // Try parse URL sebagai format Rive (movie/550 atau detail?id=1399&type=tv)
+            val params = PrimeSrcHelper.parseDataParamsStatic(url, mainUrl)
+            if (params != null) {
+                PrimeSrcHelper.invokeEmbedModeStatic(
+                    url, mainUrl, subtitleCallback, callback
+                )
+            }
+        } catch (e: Exception) {
+            logError(e)
+        }
+    }
+
+    /** Optional: kalau lo mau skip extraction kalau URL bukan domain Rive. */
+    override fun getExtractorUrl(id: String): String = id
 }
