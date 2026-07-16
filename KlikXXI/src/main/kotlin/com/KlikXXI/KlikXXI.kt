@@ -6,7 +6,8 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class KlikXXI : MainAPI() {
-    override var mainUrl = "https://klikxxi.me"
+    // Pemulihan Domain Utama berdasarkan Hasil Analisis SPA Berkas Artefak Aktual
+    override var mainUrl = "https://klikxxi.shop"
     override var name    = "KlikXXI"
     override val hasMainPage       = true
     override var lang              = "id"
@@ -40,7 +41,7 @@ class KlikXXI : MainAPI() {
                 if (page <= 1) request.data
                 else "${request.data.removeSuffix("/")}/page/$page/"
         }
-        val items = app.get(url).document
+        val items = app.get(url, headers = mapOf("Referer" to "$mainUrl/")).document
             .select("article.item, article.item-infinite, div.gmr-item-modulepost")
             .mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
@@ -50,15 +51,15 @@ class KlikXXI : MainAPI() {
     //  SEARCH
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun search(query: String): List<SearchResponse> =
-        app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
+        app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv", headers = mapOf("Referer" to "$mainUrl/")).document
             .select("article.item, article.item-infinite")
             .mapNotNull { it.toSearchResult() }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  LOAD (detail halaman film/series)
+    //  LOAD (Detail Halaman Film/Series)
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun load(url: String): LoadResponse {
-        val doc   = app.get(url).document
+        val doc   = app.get(url, headers = mapOf("Referer" to "$mainUrl/")).document
         val title = doc.selectFirst("h1.entry-title")?.text()
             ?.replace("Streaming Film", "")?.trim() ?: ""
 
@@ -98,7 +99,7 @@ class KlikXXI : MainAPI() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  LOAD LINKS
+    //  LOAD LINKS (Gerbang Utama Ekstraksi Kompatibilitas Framework)
     // ─────────────────────────────────────────────────────────────────────────
     override suspend fun loadLinks(
         data: String,
@@ -108,7 +109,7 @@ class KlikXXI : MainAPI() {
     ): Boolean {
         Log.d(TAG, "══ loadLinks ══ $data")
 
-        val doc    = app.get(data).document
+        val doc    = app.get(data, headers = mapOf("Referer" to "$mainUrl/")).document
         val ajaxId = doc.selectFirst(".gmr-server-wrap, #muvipro_player_content_id")
             ?.attr("data-id")
 
@@ -116,8 +117,9 @@ class KlikXXI : MainAPI() {
             Log.e(TAG, "❌ data-id tidak ditemukan di halaman.")
             return false
         }
-        Log.d(TAG, "✅ data-id: $ajaxId")
+        Log.d(TAG, "✅ data-id terpilih: $ajaxId")
 
+        // NOT VERIFIED: Struktur player tabs dapat berganti bergantung pada pembaruan tema WordPress
         val servers = doc
             .select("ul.muvipro-player-tabs li a, .gmr-player-nav li a")
             .mapNotNull { a ->
@@ -125,15 +127,14 @@ class KlikXXI : MainAPI() {
                 if (href.startsWith("#p")) href.removePrefix("#p") else null
             }.distinct()
 
-        Log.d(TAG, "✅ ${servers.size} server tab ditemukan: $servers")
-
+        Log.d(TAG, "✅ ${servers.size} Server Tab Ditemukan: $servers")
         if (servers.isEmpty()) {
-            Log.e(TAG, "❌ Tidak ada server tab.")
+            Log.e(TAG, "❌ Tidak ada server tab tersedia.")
             return false
         }
 
         servers.forEach { serverNum ->
-            Log.d(TAG, "→ Tab p$serverNum")
+            Log.d(TAG, "→ Memproses Tab Server: p$serverNum")
 
             val ajaxResponse = try {
                 app.post(
@@ -144,157 +145,43 @@ class KlikXXI : MainAPI() {
                         "post_id" to ajaxId
                     ),
                     referer = data,
-                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+                    headers = mapOf(
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+                    )
                 ).text
             } catch (e: Exception) {
-                Log.e(TAG, "❌ AJAX gagal p$serverNum: ${e.message}")
+                Log.e(TAG, "❌ Jaringan AJAX gagal pada p$serverNum: ${e.message}")
                 return@forEach
             }
 
-            // Ekstrak src iframe — coba kutip tunggal dulu, lalu kutip ganda
+            // Ekstraksi rute src iframe dari payload markup WordPress
             val rawSrc =
                 Regex("""(?i)src='([^"']+)""").find(ajaxResponse)?.groupValues?.get(1)
                     ?: Regex("""(?i)src="([^"']+)""").find(ajaxResponse)?.groupValues?.get(1)
 
             if (rawSrc == null) {
-                Log.w(TAG, "⚠️  Tidak ada iframe src di p$serverNum")
+                Log.w(TAG, "⚠️ Tidak ada tautan iframe src di p$serverNum")
                 return@forEach
             }
 
             val iframeUrl = if (rawSrc.startsWith("//")) "https:$rawSrc" else rawSrc
-            Log.d(TAG, "   iframe: $iframeUrl")
+            Log.d(TAG, "   Iframe Target URL: $iframeUrl")
 
-            when {
-                // ── STRP2P + UPNS.ONE ───────────────────────────────────────
-                // Menangkap semua domain alias Strp2p yang dikonfirmasi:
-                //   • klikxxi.strp2p.site  (domain utama)
-                //   • klikxxi.upns.one     (domain alias, API identik)
-                // Format URL yang didukung Strp2p.kt:
-                //   • /e/{videoId}   (format lama)
-                //   • /#{videoId}    (format baru — hash fragment)
-                //
-                // WAJIB pakai getSafeUrl(), bukan getUrl() langsung!
-                // getSafeUrl = suspend wrapper dari ExtractorApi base class,
-                // aman dipanggil dari dalam forEach di konteks suspend ini.
-                iframeUrl.contains("strp2p.site", ignoreCase = true)
-                        || iframeUrl.contains("upns.one", ignoreCase = true) -> {
-                    Log.d(TAG, "   → Strp2p extractor")
-                    Strp2p().getSafeUrl(iframeUrl, data, subtitleCallback, callback)
-                    Log.d(TAG, "   ← Strp2p done")
-                }
-
-                // ── HGCLOUD ─────────────────────────────────────────────────
-                iframeUrl.contains("hgcloud.to", ignoreCase = true) -> {
-                    Log.d(TAG, "   → HGCloud extractor")
-                    try {
-                        val fileId     = iframeUrl.substringAfter("/e/")
-                        val playerUrl  = "https://masukestin.com/e/$fileId"
-                        val html       = app.get(playerUrl,
-                            headers = mapOf("Referer" to "https://hgcloud.to/")).text
-                        val unpacked   = getAndUnpack(html)
-                        val masterUrl  = extractHlsUrl(unpacked) ?: run {
-                            Log.w(TAG, "   HGCloud: HLS URL tidak ada, fallback")
-                            loadExtractor(iframeUrl, data, subtitleCallback, callback)
-                            return@forEach
-                        }
-                        parseMasterM3u8(masterUrl, playerUrl, name,
-                            extractQualityLabels(unpacked), callback)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "   HGCloud error: ${e.message}, fallback")
-                        loadExtractor(iframeUrl, data, subtitleCallback, callback)
-                    }
-                }
-
-                // ── SERVER LAIN → fallback framework ────────────────────────
-                else -> {
-                    Log.d(TAG, "   → loadExtractor fallback")
-                    loadExtractor(iframeUrl, data, subtitleCallback, callback)
-                }
+            // Pendelegasian ke Modul Ekstraktor Regex Murni
+            if (iframeUrl.contains("strp2p.site", ignoreCase = true) 
+                || iframeUrl.contains("upns.one", ignoreCase = true)
+                || iframeUrl.contains("klikxxi", ignoreCase = true)) {
+                Log.d(TAG, "   → Mendelegasikan ke Mesin Ekstraktor Strp2p")
+                Strp2p().getSafeUrl(iframeUrl, data, subtitleCallback, callback)
+            } else {
+                Log.d(TAG, "   → Menggunakan Fallback Core Ekstraktor Framework")
+                loadExtractor(iframeUrl, data, subtitleCallback, callback)
             }
         }
         return true
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  HELPERS — HGCloud M3U8 parsing
-    // ─────────────────────────────────────────────────────────────────────────
-    private fun extractHlsUrl(js: String): String? {
-        listOf("hls4", "hls3", "hls2").forEach { key ->
-            val url = (Regex(""""$key"\s*:\s*"([^"]+)"""").find(js)
-                ?: Regex("""'$key'\s*:\s*'([^']+)'""").find(js))
-                ?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: return@forEach
-            return when {
-                url.startsWith("http") -> url
-                url.startsWith("//")   -> "https:$url"
-                url.startsWith("/")    -> "https://masukestin.com$url"
-                else                   -> "https://masukestin.com/$url"
-            }
-        }
-        return null
-    }
-
-    private fun extractQualityLabels(js: String): Map<Int, Int> {
-        val result = mutableMapOf<Int, Int>()
-        val block  = Regex("""['"]qualityLabels['"]\s*:\s*\{([^}]+)\}""")
-            .find(js)?.groupValues?.get(1) ?: return result
-        Regex(""""(\d+)"\s*:\s*"(\d+)p"""").findAll(block).forEach { m ->
-            result[m.groupValues[1].toIntOrNull() ?: return@forEach] =
-                m.groupValues[2].toIntOrNull() ?: return@forEach
-        }
-        return result
-    }
-
-    private suspend fun parseMasterM3u8(
-        masterUrl: String, referer: String, sourceName: String,
-        qualityLabels: Map<Int, Int>, callback: (ExtractorLink) -> Unit
-    ) {
-        val content = try {
-            app.get(masterUrl, headers = mapOf("Referer" to referer)).text
-        } catch (e: Exception) {
-            callback(newExtractorLink(sourceName, "HGCloud", masterUrl, ExtractorLinkType.M3U8) {
-                this.referer = referer; this.quality = Qualities.Unknown.value })
-            return
-        }
-
-        if (!content.contains("#EXT-X-STREAM-INF")) {
-            callback(newExtractorLink(sourceName, "HGCloud", masterUrl, ExtractorLinkType.M3U8) {
-                this.referer = referer; this.quality = Qualities.Unknown.value })
-            return
-        }
-
-        val baseUrl = masterUrl.substringBeforeLast("/")
-        var pendingH = -1
-
-        content.lines().forEach { line ->
-            when {
-                line.startsWith("#EXT-X-STREAM-INF") -> {
-                    val bw = Regex("""BANDWIDTH=(\d+)""").find(line)
-                        ?.groupValues?.get(1)?.toIntOrNull() ?: -1
-                    pendingH = Regex("""RESOLUTION=\d+x(\d+)""").find(line)
-                        ?.groupValues?.get(1)?.toIntOrNull()
-                        ?: (if (bw > 0) qualityLabels[bw / 1000] ?: -1 else -1)
-                }
-                !line.startsWith("#") && line.isNotBlank() && pendingH != -1 -> {
-                    val variantUrl = when {
-                        line.trim().startsWith("http") -> line.trim()
-                        line.trim().startsWith("/")    -> "https://masukestin.com${line.trim()}"
-                        else                           -> "$baseUrl/${line.trim()}"
-                    }
-                    val label = if (pendingH > 0) "${pendingH}p" else "HGCloud"
-                    callback(newExtractorLink(sourceName, "HGCloud $label", variantUrl,
-                        ExtractorLinkType.M3U8) {
-                        this.referer = referer
-                        this.quality = if (pendingH > 0) pendingH else Qualities.Unknown.value
-                    })
-                    pendingH = -1
-                }
-            }
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  HELPER — SearchResponse builder
-    // ─────────────────────────────────────────────────────────────────────────
     private fun Element.toSearchResult(): SearchResponse? {
         val a     = selectFirst(".entry-title a") ?: return null
         val title = a.text()
@@ -307,7 +194,7 @@ class KlikXXI : MainAPI() {
         val quality = getQualityFromString(
             selectFirst(".gmr-quality-item, .quality, .qualitylabel, span.quality")?.text())
         val score = Score.from10(
-            selectFirst(".gmr-rating-item, .rating, .star-rating")
+            selectFirst(".gmr-rating-item, .rating, star-rating")
                 ?.text()?.trim()?.replace(",", ".")?.toDoubleOrNull())
         val isTv = selectFirst(".gmr-numbeps") != null || href.contains("/tv/")
         return if (isTv)
