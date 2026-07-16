@@ -58,15 +58,17 @@ class Strp2p : ExtractorApi() {
 
             Log.d(TAG, "[+] Sukses mengunci aliran video hulu: $streamUrl | Token Params: $authParams")
             
+            // FIX: Properti referer, quality, dan headers dimasukkan ke dalam lambda block closure sesuai arsitektur Cloudstream utils
             callback(newExtractorLink(
                 source = this.name,
                 name = currentServerName,
                 url = streamUrl,
-                referer = "$mainUrl/",
-                quality = qualityLabel,
-                type = ExtractorLinkType.M3U8,
-                headers = buildHeaders(url)
-            ))
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = qualityLabel
+                this.headers = buildHeaders(url)
+            })
         }
         Log.d(TAG, "══════════ PILOT EKSTRAKSI STRIP REGEX END ══════════")
     }
@@ -75,7 +77,8 @@ class Strp2p : ExtractorApi() {
     //  LOGIKA PENCARIAN & PEMBONGKARAN ARTEFAK (PIPELINE SEPARATED)
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun fetchPage(url: String): String {
+    // FIX: Ditambahkan modifier 'suspend' karena memanggil app.get() yang asinkron
+    suspend fun fetchPage(url: String): String {
         return try {
             Log.d(TAG, "[+] Membuka sambungan HTTP GET ke: $url")
             val response = app.get(url, headers = buildHeaders(url)).text
@@ -135,7 +138,7 @@ class Strp2p : ExtractorApi() {
             return null
         }
 
-        var cleanUrl = url.replace("\\/", "/") // Bersihkan escape karakter bawaan JSON JSON format jika ada
+        var cleanUrl = url.replace("\\/", "/") // Bersihkan escape karakter bawaan JSON format jika ada
 
         // Transformasi skema protokol palsu '1d://' hasil obfuskasi player menjadi skema web 'https://'
         if (cleanUrl.startsWith("1d://")) {
