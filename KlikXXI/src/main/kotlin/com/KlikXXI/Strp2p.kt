@@ -8,13 +8,25 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.json.JSONObject
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class Strp2p : ExtractorApi() {
-    override val name            = "KlikXXI Vite SPA Unpacker"
-    override val mainUrl         = "https://klikxxi.shop"
+    override val name            = "Strp2p Premium"
+    override val mainUrl         = "klikxxi.shop"
     override val requiresReferer = true
 
-    private val TAG = "Strp2p_SPA_Core"
+    // Hasil Dekripsi Operasi Kriptografi Berkas index-*.js Aktual
+    private val AES_KEY = "efkegitfknmua911ca"
+    private val AES_IV  = "1234567890oiuytr"
+    
+    private val UA = "Mozilla/5.0 (Linux; Android 10; K) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/139.0.0.0 Mobile Safari/537.36"
+
+    private val TAG = "Strp2p_SPA_Crypt"
 
     override suspend fun getUrl(
         url: String,
@@ -22,144 +34,172 @@ class Strp2p : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d(TAG, "══════════ PILOT EKSTRAKSI SPA STRP2P START ══════════")
+        Log.d(TAG, "══════════ STRP2P DECRYPTION CORE START ══════════")
         val baseDomain = Regex("""^(https?://[^/#?]+)""").find(url)?.groupValues?.get(1) ?: "https://klikxxi.strp2p.site"
+        val videoId = Regex("""[/#]([A-Za-z0-9]{4,})$""").find(url.substringBefore("?"))?.groupValues?.get(1)?.trim() ?: return
+
+        // Penentuan Host Referer Asli secara Dinamis
+        val parentHost = referer?.let { Regex("""https?://([^/]+)""").find(it)?.groupValues?.get(1) } ?: "klikxxi.shop"
+        val apiUrl = "$baseDomain/api/v1/video?id=$videoId&w=360&h=800&r=$parentHost"
         
-        // 1. Ambil shell HTML awal dari URL Iframe
-        val htmlContent = fetchPage(url)
-        if (htmlContent.isBlank()) {
-            Log.e(TAG, "[-] Halaman shell HTML kosong atau gagal diakses.")
-            return
-        }
-
-        // 2. Ekstrak dan unduh isi kode dari bundle JavaScript utama Vite secara statis
-        val jsContent = extractPlayerScript(htmlContent, baseDomain)
-        
-        // Gabungkan konteks pencarian: jika download JS gagal, gunakan HTML sebagai fallback
-        val searchContext = jsContent.ifEmpty { htmlContent }
-
-        // 3. Bongkar manifes HLS stream (.m3u8) dari teks kode
-        val rawCandidates = extractM3u8Urls(searchContext)
-        Log.d(TAG, "[+] Menemukan sebanyak ${rawCandidates.size} kandidat URL potensial.")
-
-        // 4. Lakukan validasi skema dan buang duplikasi data
-        val tervalidasi = rawCandidates.mapNotNull { candidate ->
-            validateCandidate(candidate, url)
-        }.distinct()
-
-        // 5. Daftarkan tautan video manifest yang valid langsung ke basis sistem Cloudstream
-        tervalidasi.forEach { streamUrl ->
-            val authParams = extractAuthParameters(streamUrl)
-            val qualityLabel = if (streamUrl.contains("hls4")) Qualities.P1080.value else Qualities.P720.value
-            val currentServerName = if (streamUrl.contains("brightcrest")) "Strp2p Premium" else "Strp2p Standar"
-
-            Log.d(TAG, "[+] Sukses mengunci aliran video hulu: $streamUrl")
-            
-            callback(newExtractorLink(
-                source = this.name,
-                name = currentServerName,
-                url = streamUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "$mainUrl/"
-                this.quality = qualityLabel
-                this.headers = buildHeaders(url)
-            })
-        }
-        Log.d(TAG, "══════════ PILOT EKSTRAKSI SPA STRP2P END ══════════")
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  PIPELINE LOGIC IMPLEMENTATION
-    // ─────────────────────────────────────────────────────────────────────────
-
-    suspend fun fetchPage(url: String): String {
-        return try {
-            Log.d(TAG, "[+] Membuka sambungan HTTP GET ke: $url")
-            val response = app.get(url, headers = buildHeaders(url)).text
-            response
-        } catch (e: Exception) {
-            Log.e(TAG, "[-] Aliran request gagal dieksekusi: ${e.message}")
-            ""
-        }
-    }
-
-    suspend fun extractPlayerScript(html: String, baseDomain: String): String {
-        Log.d(TAG, "[+] Mendeteksi aset JavaScript utama dari bundler Vite...")
-        
-        // Regex untuk menangkap jalur file index-xxx.js dari struktur script type="module"
-        val viteJsRegex = Regex("""src=["'](/assets/index-[A-Za-z0-9_-]+\.js)["']""")
-        val match = viteJsRegex.find(html)
-        
-        if (match != null) {
-            val relativeJsPath = match.groupValues[1]
-            val absoluteJsUrl = "$baseDomain$relativeJsPath"
-            Log.d(TAG, "[+] Aset JS Ditemukan: $absoluteJsUrl. Mengunduh kode mentah secara statis...")
-            
-            return try {
-                app.get(absoluteJsUrl, headers = buildHeaders(baseDomain)).text
-            } catch (e: Exception) {
-                Log.e(TAG, "[-] Gagal mengunduh file berkas JS: ${e.message}")
-                ""
-            }
-        }
-        Log.w(TAG, "[-] Tidak dapat menemukan aset kompilasi berkas index.js milik Vite di DOM HTML.")
-        return ""
-    }
-
-    fun extractM3u8Urls(script: String): List<String> {
-        Log.d(TAG, "[+] Memindai pola teks manifest stream di dalam kode...")
-        val candidates = mutableListOf<String>()
-        
-        // Regex menangkap string literal .m3u8 absolut maupun relatif
-        val m3u8Pattern = Regex("""["']((?:https?://[^"']+|/[^"']+)\.m3u8(?:\?[^"']+)?)["']""")
-        val matches = m3u8Pattern.findAll(script)
-        
-        for (match in matches) {
-            candidates.add(match.groupValues[1])
-        }
-        
-        // NOT VERIFIED: Jika JS menggunakan teknik penyusunan string terpisah (string concatenation), regex literal di atas akan menghasilkan list kosong.
-        return candidates
-    }
-
-    fun extractAuthParameters(url: String): Map<String, String> {
-        val paramMap = mutableMapOf<String, String>()
-        val authPattern = Regex("""[?&](t|s|e)=([^&#"']+)""")
-        val matches = authPattern.findAll(url)
-        
-        for (match in matches) {
-            paramMap[match.groupValues[1]] = match.groupValues[2]
-        }
-        return paramMap
-    }
-
-    fun validateCandidate(url: String, parentUrl: String): String? {
-        if (url.contains("googletagmanager") || url.contains("google-analytics")) {
-            return null
-        }
-
-        var cleanUrl = url.replace("\\/", "/") 
-
-        if (cleanUrl.startsWith("1d://")) {
-            cleanUrl = cleanUrl.replace("1d://", "https://")
-        }
-
-        if (cleanUrl.startsWith("/")) {
-            val baseDomain = Regex("""^(https?://[^/#?]+)""").find(parentUrl)?.groupValues?.get(1) ?: "https://klikxxi.strp2p.site"
-            cleanUrl = "$baseDomain$cleanUrl"
-        }
-
-        return if (cleanUrl.contains(".m3u8")) cleanUrl else null
-    }
-
-    fun buildHeaders(currentUrl: String): Map<String, String> {
-        val baseDomain = Regex("""^(https?://[^/#?]+)""").find(currentUrl)?.groupValues?.get(1) ?: "https://klikxxi.strp2p.site"
-        return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-            "Referer" to "https://klikxxi.shop/",
+        val playerHeaders = mapOf(
+            "User-Agent" to UA, 
+            "Referer" to "$baseDomain/", 
             "Origin" to baseDomain,
             "Accept" to "*/*"
         )
+
+        Log.d(TAG, "[+] Menghubungi API Endpoint: $apiUrl")
+        val resp = try { app.get(apiUrl, headers = playerHeaders) } catch (e: Exception) { return }
+        if (resp.code != 200) {
+            Log.e(TAG, "[-] Gagal mendapatkan respon valid dari API. HTTP Code: ${resp.code}")
+            return
+        }
+
+        val hexStr = resp.text.trim()
+        if (hexStr.isBlank() || hexStr.length % 2 != 0) {
+            Log.e(TAG, "[-] Payload data bukan struktur Hex String yang valid.")
+            return
+        }
+
+        // Eksekusi Pembongkaran Payload Berbasis Kunci Hasil Reverse Engineering
+        val rawJson = try { 
+            decryptAesCbc(hexStr, AES_KEY.toByteArray(), AES_IV.toByteArray()) 
+        } catch (e: Exception) { 
+            Log.e(TAG, "[-] Gagal melakukan dekripsi AES-CBC: ${e.message}")
+            return 
+        }
+        
+        Log.d(TAG, "[+] Sukses Mendekripsi Payload JSON.")
+        val jsonObj = try { JSONObject(rawJson) } catch (e: Exception) { null }
+
+        // ── SERVER UTAMA: DOMAIN SWAPPING ROUTINE (Cloudflare Edge) ──
+        val cfRaw     = Regex(""""cf"\s*:\s*"([^"]+)"""").find(rawJson)?.groupValues?.get(1)?.unescapeJsonSlashes()
+        val sourceRaw = Regex(""""source"\s*:\s*"([^"]+)"""").find(rawJson)?.groupValues?.get(1)?.unescapeJsonSlashes()
+
+        val cfHost  = cfRaw?.let { Regex("""^(https?://[^/]+)""").find(it)?.groupValues?.get(1) }
+        val srcPath = sourceRaw?.let { 
+            val idx = it.indexOf("/", it.indexOf("://") + 3)
+            if (idx >= 0) it.substring(idx) else null
+        }
+
+        val swappedUrl = if (cfHost != null && srcPath != null && sourceRaw != null && isRawIp(sourceRaw)) {
+            "$cfHost$srcPath"
+        } else cfRaw // Fallback langsung ke cf jika tidak mengandung IP mentah
+
+        if (!swappedUrl.isNullOrBlank() && cfHost != null) {
+            try {
+                Log.d(TAG, "[+] Membaca Master Playlist HLS: $swappedUrl")
+                val masterContent = app.get(swappedUrl, headers = playerHeaders).text
+                
+                if (masterContent.contains("#EXT-X-STREAM-INF")) {
+                    var pendingH = -1
+                    masterContent.lines().forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                            pendingH = Regex("""RESOLUTION=\d+x(\d+)""").find(trimmed)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                        } else if (!trimmed.startsWith("#") && trimmed.isNotBlank() && pendingH != -1) {
+                            val variantUrl = resolveAndRewrite(trimmed, swappedUrl, cfHost)
+                            val label = if (pendingH > 0) "${pendingH}p" else "Auto"
+                            
+                            callback(newExtractorLink(name, "Strp2p - $label", variantUrl, ExtractorLinkType.M3U8) {
+                                this.referer = "$baseDomain/"
+                                this.quality = if (pendingH > 0) pendingH else Qualities.Unknown.value
+                                this.headers = playerHeaders
+                            })
+                            pendingH = -1
+                        }
+                    }
+                } else {
+                    callback(newExtractorLink(name, "Strp2p - Direct", swappedUrl, ExtractorLinkType.M3U8) {
+                        this.referer = "$baseDomain/"
+                        this.quality = Qualities.Unknown.value
+                        this.headers = playerHeaders
+                    })
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "[-] Gagal parsing master HLS: ${e.message}")
+            }
+        }
+
+        // ── SERVER CADANGAN 1: GOOGLE DRIVE FALLBACK HLS ──
+        val googleUrl = Regex(""""hlsVideoGoogle"\s*:\s*"([^"]+)"""").find(rawJson)?.groupValues?.get(1)?.unescapeJsonSlashes()
+        if (!googleUrl.isNullOrBlank()) {
+            Log.d(TAG, "[+] Menemukan Jalur Google Drive Fallback HLS")
+            callback(newExtractorLink(name, "Strp2p - Google Backup", googleUrl, ExtractorLinkType.M3U8) {
+                this.referer = "$baseDomain/"
+                this.quality = Qualities.Unknown.value
+                this.headers = playerHeaders
+            })
+        }
+
+        // ── SERVER CADANGAN 2: TIKTOK CDN BACKUP ──
+        val tiktokPath = Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(rawJson)?.groupValues?.get(1)?.unescapeJsonSlashes()?.takeIf { ".m3u8" in it }
+        if (tiktokPath != null) {
+            val cdnBase = extractTiktokCdnBase(jsonObj, rawJson)
+            val tiktokUrl = when {
+                tiktokPath.startsWith("http") -> tiktokPath
+                tiktokPath.startsWith("/")    -> "$cdnBase$tiktokPath"
+                else                          -> "$cdnBase/$tiktokPath"
+            }
+            if (!isRawIp(tiktokUrl)) {
+                Log.d(TAG, "[+] Menemukan Jalur TikTok CDN Fallback")
+                callback(newExtractorLink(name, "Strp2p - TikTok CDN", tiktokUrl, ExtractorLinkType.M3U8) {
+                    this.referer = "$baseDomain/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = playerHeaders
+                })
+            }
+        }
+        Log.d(TAG, "══════════ STRP2P DECRYPTION CORE END ══════════")
+    }
+
+    private fun resolveAndRewrite(url: String, baseUrl: String, cfHost: String): String {
+        val fullUrl = when {
+            url.startsWith("http") -> url
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> {
+                val host = Regex("""^(https?://[^/]+)""").find(baseUrl)?.groupValues?.get(1) ?: cfHost
+                "$host$url"
+            }
+            else -> "${baseUrl.substringBeforeLast("/")}/$url"
+        }
+        if (isRawIp(fullUrl)) {
+            val path = fullUrl.substringAfter("://").substringAfter("/", "")
+            return "$cfHost/$path"
+        }
+        return fullUrl
+    }
+
+    private fun isRawIp(url: String): Boolean {
+        val host = Regex("""https?://([^/:]+)""").find(url)?.groupValues?.get(1) ?: return false
+        return host.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"""))
+    }
+
+    private fun extractTiktokCdnBase(jsonObj: JSONObject?, rawJson: String): String {
+        try {
+            val scRaw = jsonObj?.optString("streamingConfig") ?: ""
+            if (scRaw.isNotBlank()) {
+                val domain = JSONObject(scRaw).optJSONObject("adjust")?.optJSONObject("Tiktok")?.optString("domain", "") ?: ""
+                if (domain.isNotBlank()) return if (domain.startsWith("http")) domain.trimEnd('/') else "https://${domain.trimEnd('/')}"
+            }
+        } catch (_: Exception) {}
+
+        val m = Regex(""""Tiktok"\s*:\s*\{[^}]*"domain"\s*:\s*"([^"]+)"""").find(rawJson)?.groupValues?.get(1)
+        if (!m.isNullOrBlank()) return if (m.startsWith("http")) m.trimEnd('/') else "https://${m.trimEnd('/')}"
+
+        return "https://soq.corporateoperations.sbs"
+    }
+
+    private fun String.unescapeJsonSlashes() = replace("\\/", "/")
+
+    private fun String.decodeHex(): ByteArray {
+        return ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+    }
+
+    private fun decryptAesCbc(hex: String, key: ByteArray, iv: ByteArray): String {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+        return String(cipher.doFinal(hex.decodeHex()), Charsets.UTF_8)
     }
 }
