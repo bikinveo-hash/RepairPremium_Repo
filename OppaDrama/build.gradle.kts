@@ -1,0 +1,29 @@
+// use an integer for version numbers
+version = 10
+
+
+cloudstream {
+    language = "id"
+    // All of these properties are optional, you can safely remove them
+
+    // description = "Lorem Ipsum"
+    authors = listOf("aldry84")
+
+    /**
+     * Status int as the following:
+     * 0: Down
+     * 1: Ok
+     * 2: Slow
+     * 3: Beta only
+     * */
+    status = 1 // will be 3 if unspecified
+    tvTypes = listOf(
+        "AsianDrama",
+        "TvSeries",
+        "Movie",
+    )
+
+
+    iconUrl = "http://i3.wp.com/45.11.57.192/wp-content/uploads/2021/05/Oppadrama.png"
+
+}
