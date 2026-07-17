@@ -24,10 +24,7 @@ class OppaDrama : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse? {
         val url = if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
-        
-        // LANGSUNG AMBIL OBJEK DOCUMENT DARI 'app.get'. Gak perlu import Ksoup manual!
         val document = app.get(url).document
-        
         val homePages = mutableListOf<HomePageList>()
 
         // 1. Ambil baris "Update Episode Terbaru"
@@ -35,16 +32,24 @@ class OppaDrama : MainAPI() {
         val latestList = latestElements.mapNotNull { element ->
             val title = element.selectFirst("h2")?.text() ?: element.selectFirst(".tt")?.text() ?: ""
             val link = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            val poster = element.selectFirst("img")?.attr("src") ?: ""
-            val typeStr = element.selectFirst(".typez")?.text() ?: ""
+            
+            // FIX: Ambil dari data-src dahulu (lazy load), jika kosong baru ambil src biasa
+            val imgElement = element.selectFirst("img")
+            val rawPoster = imgElement?.attr("data-src").takeIf { !it.isNullOrBlank() }
+                ?: imgElement?.attr("data-lazy-src").takeIf { !it.isNullOrBlank() }
+                ?: imgElement?.attr("src") 
+                ?: ""
+            
+            // FIX: Paksa merubah http:// menjadi https:// agar diizinkan oleh Android
+            val poster = rawPoster.replace("http://", "https://")
 
-            if (typeStr.contains("Movie", ignoreCase = true)) {
+            if (typeStr(element).contains("Movie", ignoreCase = true)) {
                 newMovieSearchResponse(title, link, TvType.Movie) {
-                    this.posterUrl = poster
+                    addPoster(poster) // Menggunakan fungsi bawaan standard Cloudstream
                 }
             } else {
                 newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
-                    this.posterUrl = poster
+                    addPoster(poster)
                 }
             }
         }
@@ -59,10 +64,17 @@ class OppaDrama : MainAPI() {
             val featuredList = featuredElements.mapNotNull { element ->
                 val title = element.selectFirst("h2")?.text() ?: ""
                 val link = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                val poster = element.selectFirst("img")?.attr("src") ?: ""
+                
+                // FIX: Penanganan lazy load dan HTTPS untuk baris Film Pilihan
+                val imgElement = element.selectFirst("img")
+                val rawPoster = imgElement?.attr("data-src").takeIf { !it.isNullOrBlank() }
+                    ?: imgElement?.attr("data-lazy-src").takeIf { !it.isNullOrBlank() }
+                    ?: imgElement?.attr("src") 
+                    ?: ""
+                val poster = rawPoster.replace("http://", "https://")
                 
                 newMovieSearchResponse(title, link, TvType.Movie) {
-                    this.posterUrl = poster
+                    addPoster(poster)
                 }
             }
             
@@ -74,6 +86,11 @@ class OppaDrama : MainAPI() {
         val hasNext = document.selectFirst(".hpage a.r") != null
 
         return newHomePageResponse(homePages, hasNext)
+    }
+
+    // Helper sederhana untuk mempersingkat pengecekan tipe teks element
+    private fun typeStr(element: org.jsoup.nodes.Element): String {
+        return element.selectFirst(".typez")?.text() ?: ""
     }
 
     override suspend fun search(query: String): List<SearchResponse>? {
