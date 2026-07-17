@@ -1,12 +1,11 @@
 package com.OppaDrama
 
-import com.fleeksoft.ksoup.Ksoup
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 class OppaDrama : MainAPI() {
     override var name = "OPPADRAMA"
-    override var mainUrl = "http://45.11.57.192" // Menggunakan IP/domain aktif dari HTML
+    override var mainUrl = "http://45.11.57.192"
     override var lang = "id"
     
     override val supportedTypes = setOf(
@@ -16,7 +15,6 @@ class OppaDrama : MainAPI() {
 
     override val hasMainPage = true
 
-    // Mendeklarasikan menu beranda utama di aplikasi
     override val mainPage = mainPageOf(
         mainPage("", "Episode Terbaru")
     )
@@ -25,16 +23,14 @@ class OppaDrama : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        // Menyusun URL berdasarkan halaman aktif (Paginasi)
         val url = if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
         
-        // Melakukan HTTP GET request menggunakan client internal 'app'
-        val html = app.get(url).text
-        val document = Ksoup.parse(html)
+        // LANGSUNG AMBIL OBJEK DOCUMENT DARI 'app.get'. Gak perlu import Ksoup manual!
+        val document = app.get(url).document
         
         val homePages = mutableListOf<HomePageList>()
 
-        // 1. Ambil baris "Update Episode Terbaru" (Ada di semua halaman)
+        // 1. Ambil baris "Update Episode Terbaru"
         val latestElements = document.select("div.listupd.normal article.bs")
         val latestList = latestElements.mapNotNull { element ->
             val title = element.selectFirst("h2")?.text() ?: element.selectFirst(".tt")?.text() ?: ""
@@ -42,7 +38,6 @@ class OppaDrama : MainAPI() {
             val poster = element.selectFirst("img")?.attr("src") ?: ""
             val typeStr = element.selectFirst(".typez")?.text() ?: ""
 
-            // Mengelompokkan tipe video secara akurat
             if (typeStr.contains("Movie", ignoreCase = true)) {
                 newMovieSearchResponse(title, link, TvType.Movie) {
                     this.posterUrl = poster
@@ -58,7 +53,7 @@ class OppaDrama : MainAPI() {
             homePages.add(HomePageList("Update Episode Terbaru", latestList, isHorizontalImages = false))
         }
 
-        // 2. Ambil baris "Film Pilihan" (Biasanya hanya muncul di halaman 1 beranda)
+        // 2. Ambil baris "Film Pilihan" (Hanya di halaman 1)
         if (page == 1) {
             val featuredElements = document.select("div.listupd.flex article.stylefor")
             val featuredList = featuredElements.mapNotNull { element ->
@@ -66,7 +61,6 @@ class OppaDrama : MainAPI() {
                 val link = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
                 val poster = element.selectFirst("img")?.attr("src") ?: ""
                 
-                // Baris ini khusus untuk Film/Movie
                 newMovieSearchResponse(title, link, TvType.Movie) {
                     this.posterUrl = poster
                 }
@@ -77,20 +71,16 @@ class OppaDrama : MainAPI() {
             }
         }
 
-        // Memeriksa apakah ada halaman berikutnya (tombol "Selanjutnya")
         val hasNext = document.selectFirst(".hpage a.r") != null
 
-        // Mengembalikan kumpulan beranda dengan builder ter-anyar
         return newHomePageResponse(homePages, hasNext)
     }
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        // Langkah selanjutnya
         return null
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // Langkah selanjutnya
         return null
     }
 
