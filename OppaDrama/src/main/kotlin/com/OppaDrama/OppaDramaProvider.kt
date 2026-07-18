@@ -12,15 +12,13 @@ import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
 
-    // PENTING: pakai IP langsung, bukan oppa.biz. Server cuma ngasih
-    // cookie `user_is_human=true` di domain 45.11.57.192. Kalo kita
-    // request via oppa.biz → redirect ke IP, Cloudstream's HTTP client
-    // gak nge-send cookie itu ke domain hasil redirect (cross-domain
-    // issue), jadi request berikut kena shim 434-byte lagi.
+    // PENTING: pakai IP langsung, bukan oppa.biz. Server ngasih cookie
+    // `user_is_human=true` di domain 45.11.57.192. Kalo kita request
+    // via oppa.biz → redirect ke IP, cookie jadi cross-domain dan Cloudstream's
+    // HTTP client gak kirim ke domain hasil redirect.
     //
-    // IP bisa berubah sewaktu-waktu (cek canonical link di HTML).
-    // `canBeOverridden` default-nya `true` — user bisa "Clone site" di
-    // settings kalo IP pindah.
+    // IP bisa berubah sewaktu-waktu (cek canonical link di HTML). User bisa
+    // "Clone site" di settings kalo IP pindah.
     override var mainUrl        = "http://45.11.57.192"
     override var name           = "OppaDrama"
 
@@ -32,80 +30,62 @@ class OppaDramaProvider : MainAPI() {
     // Slow Cloudflare fronted: jalankan homepage satu-satu dengan jeda
     // supaya gak kena rate limit.
     override var sequentialMainPage            = true
-    // override var sequentialMainPageDelay       = 250L
-    // override var sequentialMainPageScrollDelay = 250L
 
     init {
-        // Log dipindah ke sini biar `mainUrl` udah ke-initialize dulu
-        // (init block jalan setelah semua property di-initialize).
         Log.i(TAG, "OppaDramaProvider instantiated, mainUrl=$mainUrl")
     }
 
     // ------------------------------------------------------------
     //  Cloudflare verify_human workaround
     // ------------------------------------------------------------
-    // CF di situs ini ngasih shim 434-byte yang cuma berisi:
-    //   <script>window.location.href += "?verify_human=1"</script>
-    // Trick-nya: request URL pake `?verify_human=1` — server langsung
-    // ngasih real content + Set-Cookie `user_is_human=true`. Request
-    // berikutnya yang ngirim cookie itu bakal lewat tanpa challenge.
+    // CF ngasih shim 434-byte yang redirect via JS ke URL + "?verify_human=1".
+    // Server response untuk `?verify_human=1` adalah:
+    //   - 302 Found
+    //   - Set-Cookie: user_is_human=true; Max-Age=86400
+    //   - Location: /
     //
-    // `?verify_human=1` adalah "bypass" yang didokumentasiin oleh shim
-    // itu sendiri — kalo browser nge-eksekusi JS, dia redirect ke URL
-    // + `?verify_human=1`. Kita "jump ahead" dengan langsung pake param
-    // itu dari awal.
+    // Setelah dapat cookie, request berikut ke `/` (atau URL lain) dengan
+    // cookie itu bakal dapet real content langsung.
     //
-    // PENTING: flag disimpan di companion object biar share across
-    // instance. Cloudstream bisa bikin instance baru per request —
-    // instance flag gak akan nyimpen state.
+    // MASALAH UTAMA: Cloudstream's HTTP client TIDAK persist cookie
+    // across requests. Cuma dapet Set-Cookie dari 302, tapi gak pake di
+    // request berikutnya.
+    //
+    // SOLUSI: kita SET COOKIE MANUAL di setiap request. Cookie value
+    // di-hardcode di sini. Kalo user buka situs di browser, browser
+    // dapet cookie yang sama persis ("user_is_human=true"). Kita pake
+    // value itu.
+    //
+    // Kalo cookie expired (Max-Age 24 jam), user perlu:
+    //   1. Buka situs di browser, solve challenge, dapet cookie baru
+    //   2. Atau update CF_COOKIE constant di sini
+    //   3. Atau "Clone site" di Cloudstream settings (mungkin)
+    //
+    // Untuk sekarang, hardcode value yang umum ("user_is_human=true").
+    // CF hanya butuh presence, value exact match "true" yang penting.
 
     private suspend fun ensureCfVerified() {
+        // Sekarang gak perlu preflight — cookie di-set manual di headers.
+        // Method ini kept untuk backward compatibility (dipanggil di fetchPage)
+        // tapi jadi no-op.
         if (cfVerified) return
-        try {
-            val response = app.get(
-                "${mainUrl}/?verify_human=1",
-                headers = uncompressedHeaders()
-            )
-            val body = response.text
-            val isShim = body.contains("verify_human") || body.contains("window.location")
-            cfVerified = body.length > 5_000 && !isShim
-            if (!cfVerified) {
-                // Log FULL content kalo kecil, biar kita bisa liat sebenernya
-                // 288 bytes itu apa (shim? 302 body? JS challenge? error page?)
-                val fullDump = if (body.length < 2000) {
-                    body.replace("\n", " ").replace("\r", " ")
-                } else {
-                    "(${body.length} bytes, first 200) '${body.take(200).replace("\n", " ")}'"
-                }
-                Log.w(TAG, "ensureCfVerified: preflight FAILED, ${body.length} bytes (shim=$isShim)")
-                Log.w(TAG, "ensureCfVerified: FULL CONTENT: $fullDump")
-            } else {
-                Log.i(TAG, "ensureCfVerified: preflight OK, ${body.length} bytes")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "ensureCfVerified: preflight failed: ${e.message}")
-        }
+        Log.i(TAG, "ensureCfVerified: using manual cookie, skipping preflight")
+        cfVerified = true
     }
 
     /**
-     * Wrapper untuk GET request yang handle CF challenge. Kalo response
-     * masih shim (kecil banget ATAU ada marker verify_human), ulang
-     * preflight + retry sekali. Safety net kalo cookie somehow ke-drop.
+     * Wrapper untuk GET request dengan CF cookie. Kalo response masih
+     * shim, log warning. Real fix kalo ini kejadian: user perlu refresh
+     * cookie (lihat comment CF_COOKIE di atas).
      */
     private suspend fun fetchPage(url: String): String? {
         ensureCfVerified()
-        var res = app.get(url, headers = uncompressedHeaders())
-        var body = res.text
-        Log.i(TAG, "fetchPage: $url → ${body.length} bytes, shim=${body.contains("verify_human") || body.contains("window.location")}")
-
-        // Detect shim by content marker
-        if (body.contains("verify_human") || body.contains("window.location")) {
-            Log.w(TAG, "fetchPage: response is shim/marker, retrying after preflight")
-            cfVerified = false
-            ensureCfVerified()
-            res = app.get(url, headers = uncompressedHeaders())
-            body = res.text
-            Log.i(TAG, "fetchPage: retry $url → ${body.length} bytes")
+        val res  = app.get(url, headers = browserHeaders())
+        val body = res.text
+        val isShim = body.contains("verify_human") || body.contains("window.location")
+        Log.i(TAG, "fetchPage: $url → ${body.length} bytes, shim=$isShim")
+        if (isShim) {
+            Log.w(TAG, "fetchPage: got CF shim. CF_COOKIE may have expired.")
         }
         return body.ifBlank { null }
     }
@@ -136,7 +116,6 @@ class OppaDramaProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // request.data adalah URL lengkap (lihat mainPage di atas).
         val html = fetchPage(request.data)
         if (html == null) {
             Log.w(TAG, "getMainPage: fetchPage returned null for ${request.name}")
@@ -431,36 +410,21 @@ class OppaDramaProvider : MainAPI() {
     }
 
     /**
-     * Browser-like headers untuk request normal (gzip OK).
+     * Browser-like headers + CF cookie. Cookie di-set manual karena
+     * Cloudstream's HTTP client gak persist cookie dari 302 ke request
+     * berikutnya.
      */
     private fun browserHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding" to "gzip, deflate",
+        "Cookie" to CF_COOKIE,
         "Sec-Fetch-Dest" to "document",
         "Sec-Fetch-Mode" to "navigate",
         "Sec-Fetch-Site" to "none",
         "Sec-Fetch-User" to "?1",
         "Upgrade-Insecure-Requests" to "1"
-    )
-
-    /**
-     * Header set untuk preflight + CF detection: paksa uncompressed response
-     * supaya shim detect by content (bukan by size, yang bisa misleading
-     * karena Cloudstream kadang return 288 bytes gzipped).
-     */
-    private fun uncompressedHeaders(): Map<String, String> = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding" to "identity",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none",
-        "Sec-Fetch-User" to "?1",
-        "Upgrade-Insecure-Requests" to "1",
-        "Connection" to "keep-alive"
     )
 
     /**
@@ -472,6 +436,12 @@ class OppaDramaProvider : MainAPI() {
 
     companion object {
         private const val TAG = "OppaDrama"
+
+        // CF cookie — set manual karena Cloudstream's HTTP client gak
+        // persist cookie dari 302. Value ini dari browser yang solve
+        // challenge. Max-Age 86400 (24 jam). Kalo expired, user perlu
+        // refresh: buka situs di browser, atau ganti value di sini.
+        private const val CF_COOKIE = "user_is_human=true"
 
         @Volatile
         private var cfVerified: Boolean = false
