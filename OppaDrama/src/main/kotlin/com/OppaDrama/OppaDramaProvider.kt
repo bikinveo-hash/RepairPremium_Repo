@@ -98,13 +98,19 @@ class OppaDramaProvider : MainAPI() {
     ): HomePageResponse {
         val url = "$mainUrl/${request.data}&page=$page"
 
-        val document = fetchDocument(url) ?: return newHomePageResponse(
-            HomePageList(request.name, emptyList(), request.horizontalImages),
-            hasNext = false,
-        )
+        val document = fetchDocument(url)
+        if (document == null) {
+            Log.w(TAG, "getMainPage: fetchDocument returned null for $url")
+            return newHomePageResponse(
+                HomePageList(request.name, emptyList(), request.horizontalImages),
+                hasNext = false,
+            )
+        }
 
-        val items = document.select("div.listupd article.bs")
-            .mapNotNull { it.toSearchResult() }
+        val articles = document.select("div.listupd article.bs")
+        Log.d(TAG, "getMainPage: found ${articles.size} article.bs in $url")
+        val items = articles.mapNotNull { it.toSearchResult() }
+        Log.d(TAG, "getMainPage: parsed ${items.size} search results for ${request.name}")
 
         return newHomePageResponse(
             HomePageList(request.name, items, request.horizontalImages),
@@ -355,44 +361,99 @@ class OppaDramaProvider : MainAPI() {
      * Wrapper around [app.get] that handles the site's
      * `?verify_human=1` challenge.
      *
-     * The challenge is a small JS shim that appends the marker to the
-     * URL. Sending the marker up-front (i.e. requesting
-     * `<url>&verify_human=1` directly) makes the server skip the shim
-     * and return the real HTML in a single round-trip. We also follow
-     * up with the plain URL in case the marker is no longer required,
-     * and fall back to a second pass if the first response still looks
-     * like a challenge page.
+     * The challenge is a small JS shim (~430 bytes) that, when loaded
+     * in a browser, appends `?verify_human=1` to the URL and reloads.
+     * Two facts make the plugin able to bypass it without a real
+     * browser:
+     *
+     * 1. The shim body is unique enough to detect after the fact (it
+     *    contains the literal "verify_human" and lacks any real
+     *    `<article>` or `<div class="bsx">` markers).
+     * 2. Sending `?verify_human=1` in the query string up-front makes
+     *    the server skip the shim and return the real HTML in a
+     *    single round-trip (it sets a `user_is_human=true` cookie
+     *    that subsequent requests reuse).
+     *
+     * Strategy:
+     *   a) First request with the marker appended – most paths.
+     *   b) If that still returns the shim, retry with the plain URL.
+     *   c) If both fail or the marker URL keeps returning the shim,
+     *      warm the cookie by hitting the site root, then retry the
+     *      original URL once more.
+     *   d) Any thrown exception is caught and triggers a plain-URL
+     *      fallback.
      */
     private suspend fun fetchDocument(url: String): Document? {
         val sep = if (url.contains("?")) "&" else "?"
+        val markedUrl = "$url${sep}verify_human=1"
 
         fun looksLikeChallenge(doc: Document?): Boolean {
             if (doc == null) return false
-            // The shim is a single ~430-byte HTML page containing the
-            // literal "verify_human" in an inline script. Anything that
-            // small and lacking the real DOM markers is the challenge.
-            val html = doc.outerHtml()
-            if (html.contains("verify_human", ignoreCase = true)) return true
+            if (doc.outerHtml().contains("verify_human", ignoreCase = true)) return true
             val body = doc.body()?.text().orEmpty()
-            return body.contains("Verifying your browser", ignoreCase = true)
+            if (body.contains("Verifying your browser", ignoreCase = true)) return true
+            // The shim is small (~430 B) and contains no real DOM
+            // markers; the homepage always renders at least one
+            // article.bsx. Combine the two heuristics for robustness.
+            return doc.select("article.bs").isEmpty() &&
+                doc.select("div.bsx").isEmpty() &&
+                doc.select("div.listupd").isEmpty()
         }
 
+        // (a) marker URL up-front
         return try {
-            val marked = app.get("$url${sep}verify_human=1").document
-            if (looksLikeChallenge(marked)) {
-                Log.w(TAG, "challenge still present, retrying once more")
-                app.get(url).document
+            val first = app.get(markedUrl).document
+            if (!looksLikeChallenge(first)) {
+                first
             } else {
-                marked
+                Log.w(TAG, "marker URL still returned challenge, retrying plain URL")
+                // (b) plain URL fallback
+                try {
+                    val second = app.get(url).document
+                    if (!looksLikeChallenge(second)) {
+                        second
+                    } else {
+                        Log.w(TAG, "plain URL also returned challenge, warming cookie via root")
+                        // (c) warm the cookie by hitting the site root,
+                        // then retry the original URL one more time.
+                        warmCookie()
+                        app.get(markedUrl).document
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "plain URL failed: ${e.message}, warming cookie")
+                    warmCookie()
+                    try {
+                        app.get(markedUrl).document
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "final retry also failed: ${e2.message}")
+                        null
+                    }
+                }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "fetchDocument failed for $url: ${e.message}, retrying")
+            Log.w(TAG, "fetchDocument failed for $url: ${e.message}")
+            // (d) top-level fallback
             try {
                 app.get(url).document
             } catch (e2: Exception) {
-                Log.e(TAG, "fetchDocument retry also failed for $url: ${e2.message}")
+                Log.e(TAG, "top-level fallback failed: ${e2.message}")
                 null
             }
+        }
+    }
+
+    /**
+     * Touch the site root with the verification marker so the upstream
+     * `NiceHttp` CookieJar stores the `user_is_human=true` cookie. Any
+     * subsequent request that goes through the same client will then
+     * skip the challenge shim automatically.
+     */
+    private suspend fun warmCookie() {
+        try {
+            app.get("$mainUrl/?verify_human=1")
+        } catch (_: Exception) {
+            // Best-effort – if the warmup fails we still try the
+            // original request.
         }
     }
 
