@@ -7,7 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class OppaDramaPlugin: Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan provider utama ke dalam ekosistem Cloudstream
         registerMainAPI(OppaDramaProvider())
     }
 }
