@@ -29,7 +29,6 @@ class OppaDramaProvider : MainAPI() {
     // Adopsi penuh susunan daftar kategori terlengkap dari WordPress Dramastream Engine
     override val mainPage = mainPageOf(
         Pair("${mainUrl}/series/?status=&type=&order=update", "Latest Update"),
-        Pair("${mainUrl}/series/?status=Ongoing&type=&order=update", "Ongoing"),
         Pair("${mainUrl}/series/?status=Completed&type=Drama&order=update", "Completed Drama"),
         Pair("${mainUrl}/series/?country%5B%5D=china&type=Drama&order=update", "Drama China"),
         Pair("${mainUrl}/series/?country%5B%5D=japan&type=Drama&order=update", "Drama Jepang"),
