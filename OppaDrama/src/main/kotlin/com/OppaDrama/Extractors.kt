@@ -18,6 +18,7 @@ import android.util.Base64
 
 /**
  * 1. EarnVids / Smoothpre Extractor
+ * Alias backend extractor: smoothpre.com menggunakan arsitektur yang sama dengan vidhidepro.com.
  */
 class Smoothpre : VidHidePro() {
     override var name = "EarnVids"
@@ -25,7 +26,9 @@ class Smoothpre : VidHidePro() {
 }
 
 /**
- * 2. BuzzServer Extractor
+ * 2. BuzzServer Extractor (Local Plugin Overrider)
+ * Memperbaiki kegagalan pembacaan hx-redirect statis huruf kecil pada core HubCloud.kt 
+ * dengan menerapkan metode multi-headers fallback (hx-redirect, HX-Redirect, location, Location).
  */
 class BuzzServer : ExtractorApi() {
     override val name = "BuzzServer"
@@ -39,15 +42,21 @@ class BuzzServer : ExtractorApi() {
         callback: (ExtractorLink) -> Unit,
     ) {
         try {
-            val page = app.get(url)
+            // Bersihkan URL dari silsilah parameter /download ganda jika terlempar dari core
+            val cleanUrl = if (url.endsWith("/download")) url.substringBeforeLast("/download") else url
+            
+            val page = app.get(cleanUrl)
             val qualityText = page.documentLarge.selectFirst("div.max-w-2xl > span")?.text()
             val quality = getQualityFromName(qualityText)
 
+            // Ambil respons headers dengan mematikan auto-redirect
             val response = app.get(
-                "$url/download",
-                referer = url,
+                "$cleanUrl/download",
+                referer = cleanUrl,
                 allowRedirects = false,
             )
+            
+            // SOLUSI MULTI-HEADERS OVERRIDE: Tangkap seluruh kemungkinan variasi nama header dari htmx engine
             val redirectUrl = response.headers["hx-redirect"]
                 ?: response.headers["HX-Redirect"]
                 ?: response.headers["location"]
@@ -57,13 +66,15 @@ class BuzzServer : ExtractorApi() {
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name = name,
+                        name = "BuzzServer Direct",
                         url = redirectUrl,
                     ) {
                         this.quality = quality
                         this.referer = "$mainUrl/"
                     }
                 )
+            } else {
+                Log.w("BuzzServer", "Bypass Failed: No valid redirect token found in response headers.")
             }
         } catch (e: Exception) {
             Log.e("BuzzServer", "Failed to resolve $url: ${e.message}")
@@ -176,6 +187,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 
 /**
  * 4. Abyss / Hydrax Extractor
+ * Mengurai kemurnian data Base64 "datas" dari player-v2 core bundle untuk mengambil otentikasi multi-token.
  */
 class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -215,7 +227,7 @@ class AbyssExtractor : ExtractorApi() {
             if (!datasRaw.isNullOrBlank()) {
                 val decodedDatas = String(Base64.decode(datasRaw, Base64.DEFAULT), Charsets.UTF_8)
                 
-                // PERBAIKAN: Menggunakan format String escaping standar agar polanya terbaca sempurna tanpa terganggu triple-quotes
+                // Menggunakan format String escaping standar Kotlin untuk akurasi pembacaan Regex
                 if (slug.isNullOrBlank()) {
                     slug = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim()
                 }
