@@ -1,6 +1,5 @@
 package com.OppaDrama
 
-import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -25,7 +24,6 @@ import com.lagradost.cloudstream3.newSearchResponseList
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.getPacked
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.Jsoup
@@ -38,75 +36,70 @@ import org.jsoup.nodes.Element
  *
  * Notes on the site:
  *  - WordPress + "dramastream" theme.
- *  - Backend serves a human-verification redirect on first hit (no CF challenge,
- *    just a tiny JS shim that appends `?verify_human=1`). The shared `app` handles
- *    this transparently because we issue GETs and follow redirects.
- *  - All listing cards live under `article.bs` inside `div.listupd`.
- *  - Series detail page exposes `div.eplister ul li > a` for the episode list.
+ *  - Backend serves a human-verification redirect on first hit (no CF
+ *    challenge, just a tiny JS shim that appends `?verify_human=1`). The
+ *    shared `app` handles this transparently because it follows redirects.
+ *  - Listing cards live under `article.bs` inside `div.listupd`.
+ *  - Series detail page exposes `div.eplister ul > li > a` for the episode
+ *    list, with a `data-index` attribute and `div.epl-num` / `div.epl-title`
+ *    / `div.epl-date` children.
  *  - Episode page exposes:
  *      1) `div.player-embed iframe`            – primary player
  *      2) `select.mirror option[value]`        – server mirror dropdown,
- *         each value is a **base64-encoded `<iframe>` tag** (decoded with
- *         `base64Decode` then parsed for `src` / `data-src`).
+ *         each value is a base64-encoded `<iframe>` tag.
  *      3) `div.dlbox li span.e a`              – direct download links.
  */
 class OppaDramaProvider : MainAPI() {
 
-    // Use the canonical Cloudflare-fronted domain. If the user reports a domain
-    // change, they can override it from the "Clone site" settings because
-    // `canBeOverridden` stays `true` (the default in MainAPI).
+    // The canonical Cloudflare-fronted domain. Because the underlying server
+    // IP rotates frequently, the user can override `mainUrl` from the "Clone
+    // site" settings in CloudStream (canBeOverridden defaults to `true`).
     override var mainUrl = "https://oppa.biz"
     override var name = "OppaDrama"
 
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-
-    // Disable synchronous playback casting to keep behaviour predictable; the
-    // site returns direct m3u8 / file URLs and CloudStream handles casting.
     override val hasChromecastSupport = true
     override val hasDownloadSupport = true
 
     // ------------------------------------------------------------
     // Homepage
     // ------------------------------------------------------------
-    // Each pair is (relative URL, label). The trailing `&page=` placeholder is
-    // appended in getMainPage() to keep query strings tidy.
     override val mainPage = mainPageOf(
-        "series/?status=&type=&order=update"                       to "Latest Update",
-        "series/?status=Ongoing&type=&order=update"                to "Ongoing",
-        "series/?status=Completed&type=Drama&order=update"         to "Completed Drama",
-        "series/?country%5B%5D=china&type=Drama&order=update"      to "Drama China",
-        "series/?country%5B%5D=japan&type=Drama&order=update"      to "Drama Jepang",
-        "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
-        "series/?country%5B%5D=philippines&type=Drama&order=update" to "Drama Philippines",
-        "series/?country%5B%5D=taiwan&type=Drama&order=update"     to "Drama Taiwan",
-        "series/?country%5B%5D=thailand&type=Drama&order=update"   to "Drama Thailand",
-        "series/?country%5B%5D=usa&type=Drama&order=update"        to "Drama Western",
-        "series/?type=Movie&order=update"                          to "All Movies",
-        "series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
-        "series/?country%5B%5D=japan&type=Movie&order=update"      to "Japan Movie",
-        "series/?country%5B%5D=china&type=Movie&order=update"      to "Chinese Movie",
-        "series/?country%5B%5D=thailand&type=Movie&order=update"   to "Thailand Movie",
-        "series/?country%5B%5D=taiwan&type=Movie&order=update"     to "Taiwan Movie",
-        "series/?country%5B%5D=philippines&type=Movie&order=update" to "Philippines Movie",
-        "series/?country%5B%5D=india&type=Movie&order=update"      to "India Movie",
-        "series/?country%5B%5D=united-states&type=Movie&order=update" to "Western Movie",
+        "series/?status=&type=&order=update"                                   to "Latest Update",
+        "series/?status=Ongoing&type=&order=update"                            to "Ongoing",
+        "series/?status=Completed&type=Drama&order=update"                     to "Completed Drama",
+        "series/?country%5B%5D=china&type=Drama&order=update"                  to "Drama China",
+        "series/?country%5B%5D=japan&type=Drama&order=update"                  to "Drama Jepang",
+        "series/?country%5B%5D=south-korea&status=&type=Drama&order=update"    to "Drama Korea",
+        "series/?country%5B%5D=philippines&type=Drama&order=update"            to "Drama Philippines",
+        "series/?country%5B%5D=taiwan&type=Drama&order=update"                 to "Drama Taiwan",
+        "series/?country%5B%5D=thailand&type=Drama&order=update"               to "Drama Thailand",
+        "series/?country%5B%5D=usa&type=Drama&order=update"                    to "Drama Western",
+        "series/?type=Movie&order=update"                                      to "All Movies",
+        "series/?country%5B%5D=south-korea&status=&type=Movie&order=update"    to "Korean Movie",
+        "series/?country%5B%5D=japan&type=Movie&order=update"                  to "Japan Movie",
+        "series/?country%5B%5D=china&type=Movie&order=update"                  to "Chinese Movie",
+        "series/?country%5B%5D=thailand&type=Movie&order=update"               to "Thailand Movie",
+        "series/?country%5B%5D=taiwan&type=Movie&order=update"                 to "Taiwan Movie",
+        "series/?country%5B%5D=philippines&type=Movie&order=update"            to "Philippines Movie",
+        "series/?country%5B%5D=india&type=Movie&order=update"                  to "India Movie",
+        "series/?country%5B%5D=united-states&type=Movie&order=update"          to "Western Movie",
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest,
     ): HomePageResponse {
-        // The site already paginates via `&page=N` for these listing endpoints.
         val url = "$mainUrl/${request.data}&page=$page"
 
         val document = try {
             app.get(url).document
         } catch (e: Exception) {
-            // If first request was blocked by the verify_human shim, retry once
-            // with the marker parameter so the upstream app can drop the cookie
-            // it set during the redirect.
+            // Some deployments emit a `?verify_human=1` shim. Re-trying with
+            // the marker forces the upstream app to drop the cookie set by
+            // the verification shim.
             app.get("$url&verify_human=1").document
         }
 
@@ -123,13 +116,11 @@ class OppaDramaProvider : MainAPI() {
     // Search
     // ------------------------------------------------------------
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        // Site uses WordPress-style `?s=...`. Pagination is achieved with
-        // `&paged=N` (otherwise the page argument is ignored and we get the
-        // same first page over and over).
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
         val url = if (page <= 1) {
-            "$mainUrl/?s=${java.net.URLEncoder.encode(query, "UTF-8")}"
+            "$mainUrl/?s=$encoded"
         } else {
-            "$mainUrl/page/$page/?s=${java.net.URLEncoder.encode(query, "UTF-8")}"
+            "$mainUrl/page/$page/?s=$encoded"
         }
 
         val document = try {
@@ -141,15 +132,13 @@ class OppaDramaProvider : MainAPI() {
         val results = document.select("div.listupd article.bs")
             .mapNotNull { it.toSearchResult() }
 
-        // Detect "no results" sentinel – the page renders a "Nothing Found" block.
-        val hasNext = results.isNotEmpty() &&
-            document.selectFirst("div.navigation, nav.navigation, .nav-links") != null
-
-        return newSearchResponseList(results, hasNext = hasNext)
+        // WordPress returns an empty .listupd with a "Nothing Found" block
+        // when no results match – treat that as `hasNext = false`.
+        return newSearchResponseList(results, hasNext = results.isNotEmpty())
     }
 
     // ------------------------------------------------------------
-    // Load – fetch detail / episode data
+    // Load
     // ------------------------------------------------------------
     override suspend fun load(url: String): LoadResponse? {
         val document = try {
@@ -158,25 +147,18 @@ class OppaDramaProvider : MainAPI() {
             return null
         }
 
-        // Two distinct page shapes live under this template:
-        //   (A) Single-episode page  ->  div#embed_holder + div.dlbox
-        //   (B) Series index page    ->  div.epcheck > div.eplister > ul > li
-        // We detect (B) first because if an episode lives inside a series, the
-        // canonical URL is still the episode page and the series link can be
-        // recovered from the `naveps` block.
-
-        val episodeListItems = document.select("div.eplister ul > li > a")
-        val hasEpisodeList = episodeListItems.isNotEmpty()
-
-        if (hasEpisodeList) {
-            return buildSeriesLoadResponse(url, document)
+        // Two page shapes live under this template:
+        //   (A) Series index page – has `div.eplister ul > li > a`
+        //   (B) Single episode page – has `div.player-embed` but no list
+        return if (document.selectFirst("div.eplister ul > li > a") != null) {
+            buildSeriesLoadResponse(url, document)
+        } else {
+            buildEpisodeLoadResponse(url, document)
         }
-
-        return buildEpisodeLoadResponse(url, document)
     }
 
     // ------------------------------------------------------------
-    // loadLinks – extract playable URLs
+    // loadLinks
     // ------------------------------------------------------------
     override suspend fun loadLinks(
         data: String,
@@ -195,28 +177,26 @@ class OppaDramaProvider : MainAPI() {
         // (1) Primary player iframe – usually the default server.
         document.selectFirst("div.player-embed iframe")?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
-            if (src.isNotBlank()) {
-                if (loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
-                    dispatched = true
-                }
+            if (src.isNotBlank() && loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
+                dispatched = true
             }
         }
 
-        // (2) Mirror dropdown – each `<option value=...>` is a base64-encoded
+        // (2) Mirror dropdown – each <option value=...> is a base64-encoded
         // <iframe> tag. Decode, parse the iframe, dispatch to loadExtractor.
         val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
         for (option in mirrorOptions) {
             val encoded = option.attr("value").trim()
-            if (encoded.isBlank() || encoded == "Pilih Server Video") continue
+            if (encoded.isBlank() || encoded.equals("Pilih Server Video", ignoreCase = true)) continue
             try {
                 val decoded = base64Decode(encoded.replace("\\s".toRegex(), ""))
                 val mirrorSrc = Jsoup.parse(decoded).selectFirst("iframe")?.let { el ->
                     el.attr("src").ifBlank { el.attr("data-src") }
                 }
-                if (!mirrorSrc.isNullOrBlank()) {
-                    if (loadExtractor(httpsify(mirrorSrc), data, subtitleCallback, callback)) {
-                        dispatched = true
-                    }
+                if (!mirrorSrc.isNullOrBlank() &&
+                    loadExtractor(httpsify(mirrorSrc), data, subtitleCallback, callback)
+                ) {
+                    dispatched = true
                 }
             } catch (_: Exception) {
                 // Skip broken mirrors silently.
@@ -227,10 +207,8 @@ class OppaDramaProvider : MainAPI() {
         val downloadLinks = document.select("div.dlbox li span.e a[href]")
         for (a in downloadLinks) {
             val href = a.attr("href").trim()
-            if (href.isNotBlank()) {
-                if (loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
-                    dispatched = true
-                }
+            if (href.isNotBlank() && loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
+                dispatched = true
             }
         }
 
@@ -241,22 +219,19 @@ class OppaDramaProvider : MainAPI() {
     //  Builders
     // ============================================================
 
-    private fun buildSeriesLoadResponse(
+    private suspend fun buildSeriesLoadResponse(
         url: String,
         document: org.jsoup.nodes.Document,
     ): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim()
             ?: return null
 
-        // The series page can use either `.bigcontent img` (older theme) or
-        // `div.thumb img` (single info block). Fall back through both.
-        val poster = document
-            .selectFirst("div.bigcontent img, div.thumb img")
-            ?.getImageAttr()
-            ?.let { fixUrlNull(it) }
+        val poster = pickPoster(document)
 
         val info = parseInfoBlock(document)
-        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val tags = document.select("div.genxed a")
+            .map { it.text().trim() }
+            .filter { it.isNotBlank() }
 
         val actors = document
             .select("div.spe span:has(b:matchesOwn(^Artis$)) a")
@@ -271,24 +246,32 @@ class OppaDramaProvider : MainAPI() {
             .select("div.listupd article.bs")
             .mapNotNull { it.toRecommendation() }
 
-        // Episode list – newest on top in DOM order, so reverse for natural numbering.
+        // Episode list – newest on top in DOM order, so reverse for natural
+        // numbering (1, 2, 3, ...).
         val episodeAnchors = document.select("div.eplister ul > li > a").toList()
-        val episodes = episodeAnchors.reversed().mapIndexedNotNull { index, anchor ->
-            val hrefRaw = anchor.attr("href").ifBlank { return@mapIndexedNotNull null }
-            val href = fixUrl(hrefRaw)
+        val episodes = episodeAnchors.reversed().mapIndexed { index, anchor ->
+            val href = anchor.attr("href")
             val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull()
                 ?: (index + 1)
+            val epTitle = anchor.selectFirst("div.epl-title")?.text()?.trim()
+                ?: "Episode $epNumber"
+            val epDate = anchor.selectFirst("div.epl-date")?.text()?.trim()
+            // Resolve the poster through fixUrlNull OUTSIDE the lambda so we
+            // keep the MainAPI receiver (the lambda receiver is Episode, not
+            // MainAPI, and `fixUrlNull` is an extension on MainAPI).
+            val epPoster = anchor.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
             newEpisode(href) {
-                this.name = anchor.selectFirst("div.epl-title")?.text()?.trim()
-                    ?: "Episode $epNumber"
-                this.episode = epNumber
-                this.date = anchor.selectFirst("div.epl-date")?.text()?.trim()
-                    ?.let { runCatching { parseRelativeDate(it) }.getOrNull() }
-                this.posterUrl = anchor.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+                name = epTitle
+                episode = epNumber
+                // The "epl-date" text is a localised Indonesian date
+                // (e.g. "Juli 18, 2026") that Cloudstream's `addDate` does
+                // not understand out of the box. Leave the field null –
+                // the player will simply omit the release date.
+                posterUrl = epPoster
             }
         }
 
-        val response = newTvSeriesLoadResponse(
+        return newTvSeriesLoadResponse(
             name = title,
             url = url,
             type = TvType.TvSeries,
@@ -305,10 +288,9 @@ class OppaDramaProvider : MainAPI() {
             if (actors.isNotEmpty()) addActors(actors)
             if (!trailer.isNullOrBlank()) addTrailer(trailer)
         }
-        return response
     }
 
-    private fun buildEpisodeLoadResponse(
+    private suspend fun buildEpisodeLoadResponse(
         url: String,
         document: org.jsoup.nodes.Document,
     ): LoadResponse? {
@@ -320,13 +302,12 @@ class OppaDramaProvider : MainAPI() {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
 
-        val poster = document
-            .selectFirst("div.bigcontent img, div.thumb img")
-            ?.getImageAttr()
-            ?.let { fixUrlNull(it) }
+        val poster = pickPoster(document)
 
         val info = parseInfoBlock(document)
-        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val tags = document.select("div.genxed a")
+            .map { it.text().trim() }
+            .filter { it.isNotBlank() }
 
         val actors = document
             .select("div.spe span:has(b:matchesOwn(^Artis$)) a")
@@ -343,8 +324,6 @@ class OppaDramaProvider : MainAPI() {
 
         // For a single episode page the playable URL is the page itself –
         // loadLinks will extract iframes / mirror dropdown / download links.
-        val dataUrl = url
-
         val displayTitle = if (seriesName != null && !title.contains(seriesName, ignoreCase = true)) {
             "$seriesName – $title"
         } else title
@@ -353,7 +332,7 @@ class OppaDramaProvider : MainAPI() {
             name = displayTitle,
             url = url,
             type = TvType.Movie,
-            dataUrl = dataUrl,
+            dataUrl = url,
         ) {
             this.posterUrl = poster
             this.year = info.year
@@ -365,6 +344,19 @@ class OppaDramaProvider : MainAPI() {
             if (actors.isNotEmpty()) addActors(actors)
             if (!trailer.isNullOrBlank()) addTrailer(trailer)
         }
+    }
+
+    /**
+     * Pulls the poster image URL from whichever container the current theme
+     * uses. Strips the Jetpack `?resize=...` query so the player receives
+     * the full-resolution asset.
+     */
+    private fun pickPoster(document: org.jsoup.nodes.Document): String? {
+        val raw = document
+            .selectFirst("div.bigcontent img, div.thumb img")
+            ?.getImageAttr()
+            ?: return null
+        return fixUrlNull(raw)
     }
 
     // ============================================================
@@ -380,14 +372,12 @@ class OppaDramaProvider : MainAPI() {
     )
 
     private fun parseInfoBlock(document: org.jsoup.nodes.Document): SeriesInfo {
-        // Description block.
         val plot = document
             .select("div.entry-content p, div.desc p")
             .joinToString("\n") { it.text() }
             .trim()
             .ifBlank { null }
 
-        // Walk every <span> in div.spe and pull values by the bold label.
         var status: ShowStatus = ShowStatus.Completed
         var year: Int? = null
         var durationMinutes: Int? = null
@@ -406,11 +396,7 @@ class OppaDramaProvider : MainAPI() {
                     //   "Jul 10, 2026 - ?"
                     //   "Jun 26, 2026 - Jul 25, 2026"
                     //   "Dec 18, 2025 - Jan 8, 2026"
-                    year = value
-                        .substringBefore('-')
-                        .trim()
-                        .takeLast(4)
-                        .toIntOrNull()
+                    year = value.substringBefore('-').trim().takeLast(4).toIntOrNull()
                 }
                 "durasi" -> durationMinutes = parseDurationMinutes(value)
                 "rating" -> rating = value.toDoubleOrNull()
@@ -439,48 +425,36 @@ class OppaDramaProvider : MainAPI() {
         return if (total > 0) total else null
     }
 
-    /**
-     * Light-weight relative-date parser for strings like "Juli 18, 2026" or
-     * already-ISO strings. Falls back to null on any failure so that addDate
-     * simply does not populate the field.
-     */
-    private fun parseRelativeDate(text: String): Long? {
-        // First try ISO 8601 (used in some JSON-LD blocks).
-        runCatching {
-            return kotlinx.datetime.Instant.parse(text).toEpochMilliseconds()
-        }
-        // Otherwise just return null – addDate() tolerates null and the UI
-        // simply shows no date.
-        return null
-    }
-
     // ------------------------------------------------------------
     // Element -> SearchResponse / Recommendation
+    //
+    // These are declared as MEMBER functions (not extensions) on the
+    // provider class so we can call `fixUrl` / `fixUrlNull` directly inside
+    // `?.let` blocks. As an extension on Element, `this` inside `?.let`
+    // would change to the chained receiver, hiding the MainAPI receiver.
     // ------------------------------------------------------------
     private fun Element.toSearchResult(): SearchResponse? {
         val anchor = selectFirst("a") ?: return null
-        val href = fixUrl(anchor.attr("href"))
+        val hrefRaw = anchor.attr("href")
+        if (hrefRaw.isBlank()) return null
+        val href = fixUrl(hrefRaw)
+
         val title = anchor.attr("title").ifBlank {
             this.selectFirst("div.tt")?.text()?.trim()
         }?.takeIf { it.isNotBlank() } ?: return null
 
-        val poster = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+        val posterAttr = selectFirst("img")?.getImageAttr()
+        val poster = posterAttr?.let { fixUrlNull(it) }
 
-        // Heuristic: listing cards link either to a series index page
-        // (`/series-name/`) or to a single episode page (`/...-episode-N/`).
-        // When in doubt, default to TvSeries because the user can navigate
-        // from the series page even for movies.
-        val looksLikeEpisode = Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
-        val isMovie = href.contains("/genre/movie", true) ||
-            href.contains("type=Movie", true)
+        val looksLikeEpisode =
+            Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
 
         return when {
-            isMovie && !looksLikeEpisode -> newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = poster
-            }
             looksLikeEpisode -> {
-                // Pull the human-readable title (without "- Episode N") when possible.
-                val cleanTitle = title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim()
+                val cleanTitle = title.replace(
+                    Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE),
+                    "",
+                ).trim()
                 newTvSeriesSearchResponse(cleanTitle.ifBlank { title }, href, TvType.TvSeries) {
                     this.posterUrl = poster
                 }
@@ -493,27 +467,32 @@ class OppaDramaProvider : MainAPI() {
 
     private fun Element.toRecommendation(): SearchResponse? {
         val anchor = selectFirst("a") ?: return null
-        val href = fixUrl(anchor.attr("href"))
+        val hrefRaw = anchor.attr("href")
+        if (hrefRaw.isBlank()) return null
+        val href = fixUrl(hrefRaw)
+
         val title = anchor.attr("title").ifBlank {
             this.selectFirst("div.tt")?.text()?.trim()
         }?.takeIf { it.isNotBlank() } ?: return null
-        val poster = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        val looksLikeEpisode = Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
-        return if (looksLikeEpisode) {
-            newTvSeriesSearchResponse(
-                title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim(),
-                href,
-                TvType.TvSeries,
-            ) { this.posterUrl = poster }
-        } else {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = poster
-            }
+
+        val posterAttr = selectFirst("img")?.getImageAttr()
+        val poster = posterAttr?.let { fixUrlNull(it) }
+
+        val looksLikeEpisode =
+            Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
+        val type = if (looksLikeEpisode) TvType.TvSeries else TvType.Movie
+
+        val cleanTitle = if (looksLikeEpisode) {
+            title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim()
+        } else title
+
+        return newMovieSearchResponse(cleanTitle, href, type) {
+            this.posterUrl = poster
         }
     }
 
     // ------------------------------------------------------------
-    // Image attr picker – handles lazy loaders, srcset, wpx embeds
+    // Image attribute picker
     // ------------------------------------------------------------
     private fun Element.getImageAttr(): String? {
         // The wpx-hosted images (i1.wp.com, i2.wp.com) ship an extra query
