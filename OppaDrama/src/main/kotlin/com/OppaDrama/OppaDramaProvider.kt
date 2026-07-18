@@ -1,16 +1,27 @@
-// Bu plugin CloudStream OppaDrama — berdasarkan hasil uji riil Termux
+// Bu plugin CloudStream OppaDrama — sumber https://oppa.biz
 
 package com.OppaDrama
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.api.Log
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
 
-    override var mainUrl        = "https://oppa.biz"
+    // PENTING: pakai IP langsung, bukan oppa.biz. Server cuma ngasih
+    // cookie `user_is_human=true` di domain 45.11.57.192. Kalo kita
+    // request via oppa.biz → redirect ke IP, Cloudstream's HTTP client
+    // gak nge-send cookie itu ke domain hasil redirect (cross-domain
+    // issue), jadi request berikut kena shim 434-byte lagi.
+    //
+    // IP bisa berubah sewaktu-waktu (cek canonical link di HTML).
+    // `canBeOverridden` default-nya `true` — user bisa "Clone site" di
+    // settings kalo IP pindah.
+    override var mainUrl        = "http://45.11.57.192"
     override var name           = "OppaDrama"
 
     override val hasMainPage    = true
@@ -18,7 +29,78 @@ class OppaDramaProvider : MainAPI() {
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
+    // Slow Cloudflare fronted: jalankan homepage satu-satu dengan jeda
+    // supaya gak kena rate limit.
     override var sequentialMainPage            = true
+    // override var sequentialMainPageDelay       = 250L
+    // override var sequentialMainPageScrollDelay = 250L
+
+    // ------------------------------------------------------------
+    //  Cloudflare verify_human workaround
+    // ------------------------------------------------------------
+    // CF di situs ini ngasih shim 434-byte yang cuma berisi:
+    //   <script>window.location.href += "?verify_human=1"</script>
+    // Trick-nya: request URL pake `?verify_human=1` — server langsung
+    // ngasih real content + Set-Cookie `user_is_human=true`. Request
+    // berikutnya yang ngirim cookie itu bakal lewat tanpa challenge.
+    //
+    // `?verify_human=1` adalah "bypass" yang didokumentasiin oleh shim
+    // itu sendiri — kalo browser nge-eksekusi JS, dia redirect ke URL
+    // + `?verify_human=1`. Kita "jump ahead" dengan langsung pake param
+    // itu dari awal.
+    //
+    // PENTING: flag disimpan di companion object biar share across
+    // instance. Cloudstream bisa bikin instance baru per request —
+    // instance flag gak akan nyimpen state.
+    companion object {
+        @Volatile
+        private var cfVerified: Boolean = false
+    }
+
+    private suspend fun ensureCfVerified() {
+        if (cfVerified) return
+        try {
+            // URL paling simple yang bakal return real page + Set-Cookie.
+            // Cookie di-set di domain 45.11.57.192 (sama dengan mainUrl),
+            // jadi request berikutnya di session yang sama bakal pake itu.
+            val response = app.get(
+                "${mainUrl}/?verify_human=1",
+                headers = browserHeaders()
+            )
+            // Hanya set flag kalo kita bener-bener dapet real page.
+            // Shim = 434 byte. Real page biasanya 80-180KB.
+            cfVerified = response.text.length > 5_000
+            if (!cfVerified) {
+                Log.w(TAG, "ensureCfVerified: preflight returned suspicious payload (${response.text.length} bytes), will retry")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureCfVerified: preflight failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Wrapper untuk GET request yang handle CF challenge. Kalo response
+     * masih shim (kecil banget), ulang preflight + retry sekali. Ini
+     * safety net kalo cookie somehow ke-drop antar request.
+     */
+    private suspend fun fetchPage(url: String): String? {
+        ensureCfVerified()
+        return try {
+            val res = app.get(url, headers = browserHeaders())
+            if (res.text.length < 5_000) {
+                // Kemungkinan kena shim — reset flag + retry
+                Log.w(TAG, "fetchPage: got tiny response (${res.text.length} bytes) for $url, retrying after preflight")
+                cfVerified = false
+                ensureCfVerified()
+                app.get(url, headers = browserHeaders()).text
+            } else {
+                res.text
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchPage: failed to fetch $url: ${e.message}")
+            null
+        }
+    }
 
     // ------------------------------------------------------------
     //  Homepage
@@ -46,7 +128,8 @@ class OppaDramaProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data, headers = browserHeaders()).document
+        // request.data adalah URL lengkap (lihat mainPage di atas).
+        val document = fetchPage(request.data)?.let { Jsoup.parse(it) } ?: return newHomePageResponse(request.name, emptyList())
         val home = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
@@ -58,6 +141,7 @@ class OppaDramaProvider : MainAPI() {
         val title    = titleRaw?.takeIf { it.isNotBlank() } ?: return null
         val poster   = fixUrlNull(this.selectFirst("img")?.getImageAttr())
 
+        // URL mengandung "episode-N" untuk halaman episode tunggal.
         val looksLikeEpisode = Regex(
             "[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE
         ).containsMatchIn(href)
@@ -68,7 +152,6 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
             this.posterUrl = poster
-            this.posterHeaders = imageHeaders()
         }
     }
 
@@ -76,10 +159,8 @@ class OppaDramaProvider : MainAPI() {
     //  Search
     // ------------------------------------------------------------
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get(
-            "${mainUrl}/?s=${query.encodeUrl()}",
-            headers = browserHeaders()
-        ).document
+        val html = fetchPage("${mainUrl}/?s=${query.encodeUrl()}") ?: return emptyList()
+        val document = Jsoup.parse(html)
         return document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
     }
 
@@ -89,11 +170,14 @@ class OppaDramaProvider : MainAPI() {
     //  Load
     // ------------------------------------------------------------
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = browserHeaders()).document
+        val html = fetchPage(url) ?: return null
+        val document = Jsoup.parse(html)
 
+        // Halaman series -> div.eplister
         if (document.selectFirst("div.eplister ul > li > a") != null) {
             return loadSeries(url, document)
         }
+        // Halaman episode tunggal
         return loadEpisode(url, document)
     }
 
@@ -110,6 +194,7 @@ class OppaDramaProvider : MainAPI() {
         val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
         val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
 
+        // Episode list – newest first di DOM; reverse untuk natural numbering
         val episodeAnchors = document.select("div.eplister ul > li > a").toList()
         val episodes = episodeAnchors.reversed().mapIndexed { index, anchor ->
             val href     = anchor.attr("href")
@@ -126,7 +211,6 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl       = poster
-            this.posterHeaders   = imageHeaders()
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -166,7 +250,6 @@ class OppaDramaProvider : MainAPI() {
 
         return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
             this.posterUrl       = poster
-            this.posterHeaders   = imageHeaders()
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -199,7 +282,6 @@ class OppaDramaProvider : MainAPI() {
         } else title
         return newMovieSearchResponse(cleanTitle, href, type) {
             this.posterUrl = poster
-            this.posterHeaders = imageHeaders()
         }
     }
 
@@ -212,15 +294,12 @@ class OppaDramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = try {
-            app.get(data, headers = browserHeaders()).document
-        } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: failed to fetch $data: ${e.message}")
-            return false
-        }
+        val html = fetchPage(data) ?: return false
+        val document = Jsoup.parse(html)
 
         var dispatched = false
 
+        // (1) Primary player iframe
         document.selectFirst("div.player-embed iframe")?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.isNotBlank() && loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
@@ -228,6 +307,7 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
+        // (2) Mirror dropdown – value-nya adalah base64-encoded <iframe>
         val mirrors = document.select("select.mirror option[value]:not([disabled])")
         for (option in mirrors) {
             val encoded = option.attr("value").trim()
@@ -247,6 +327,7 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
+        // (3) Direct download links
         for (a in document.select("div.dlbox li span.e a[href]")) {
             val href = a.attr("href").trim()
             if (href.isNotBlank() && loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
@@ -316,19 +397,28 @@ class OppaDramaProvider : MainAPI() {
         return if (total > 0) total else null
     }
 
-    // BERDASARKAN HASIL TERMUX: Kita ambil URL Jetpack CDN asli secara utuh beserta parameternya, 
-    // namun kita paksa ganti menjadi jalur HTTPS agar lolos restriksi Cleartext internal Android OS.
     private fun Element.getImageAttr(): String? {
-        val url = attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
-        if (url.isBlank()) return null
-        
-        return if (url.startsWith("http://")) {
-            "https://" + url.removePrefix("http://")
-        } else {
-            url
+        // Hapus query Jetpack "resize=" agar dapat gambar original.
+        fun cleanup(url: String?): String? {
+            if (url.isNullOrBlank()) return null
+            return url
+                .replace(Regex("[?&]resize=\\d+,\\d+"), "")
+                .replace(Regex("[?&]quality=\\d+"), "")
+        }
+        return when {
+            hasAttr("data-src")      -> cleanup(attr("abs:data-src"))
+            hasAttr("data-lazy-src") -> cleanup(attr("abs:data-lazy-src"))
+            hasAttr("srcset")        -> cleanup(attr("abs:srcset").substringBefore(" "))
+            hasAttr("src")           -> cleanup(attr("abs:src"))
+            else                     -> null
         }
     }
 
+    /**
+     * Browser-like headers supaya request dari plugin gak gampang di-flag
+     * Cloudflare sebagai bot. Cloudflare fronted situs ini melakukan
+     * challenge kalau header terlalu "default NiceHttp".
+     */
     private fun browserHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -341,12 +431,10 @@ class OppaDramaProvider : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
-    private fun imageHeaders(): Map<String, String> = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-        "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Referer" to mainUrl
-    )
-
+    /**
+     * URL-encoding helper yang aman – ganti spasi jadi "+" dan
+     * escape karakter khusus. Mengikuti konvensi query WordPress.
+     */
     private fun String.encodeUrl(): String =
         java.net.URLEncoder.encode(this, "UTF-8").replace("+", "%20")
 
