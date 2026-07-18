@@ -12,10 +12,6 @@ import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
 
-    init {
-        Log.i(TAG, "OppaDramaProvider instantiated, mainUrl=$mainUrl")
-    }
-
     // PENTING: pakai IP langsung, bukan oppa.biz. Server cuma ngasih
     // cookie `user_is_human=true` di domain 45.11.57.192. Kalo kita
     // request via oppa.biz → redirect ke IP, Cloudstream's HTTP client
@@ -38,6 +34,12 @@ class OppaDramaProvider : MainAPI() {
     override var sequentialMainPage            = true
     // override var sequentialMainPageDelay       = 250L
     // override var sequentialMainPageScrollDelay = 250L
+
+    init {
+        // Log dipindah ke sini biar `mainUrl` udah ke-initialize dulu
+        // (init block jalan setelah semua property di-initialize).
+        Log.i(TAG, "OppaDramaProvider instantiated, mainUrl=$mainUrl")
+    }
 
     // ------------------------------------------------------------
     //  Cloudflare verify_human workaround
