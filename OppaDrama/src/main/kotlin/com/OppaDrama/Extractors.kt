@@ -45,7 +45,6 @@ class BuzzServer : ExtractorApi() {
             val qualityText = page.documentLarge.selectFirst("div.max-w-2xl > span")?.text()
             val quality = getQualityFromName(qualityText)
 
-            // Mematikan auto-redirect untuk menangkap header hx-redirect dari htmx pattern
             val response = app.get(
                 "$url/download",
                 referer = url,
@@ -97,7 +96,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                 "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
             )
 
-            // Menahan pengalihan 301/302 Cloudflare secara manual agar cookie tidak gugur di tengah jalan
             val firstRequest = app.get(url, headers = headers, allowRedirects = false)
             var finalUrl = url
 
@@ -111,7 +109,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             val html = app.get(finalUrl, headers = headers).text
             val document = Jsoup.parse(html)
 
-            // Membaca langsung atribut data-hash DOM yang kebal dari gangguan skrip iklan minified
             val masterUrl = document.select("div#video_player").attr("data-hash").trim().takeIf { it.isNotBlank() }
                 ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.getOrNull(1)?.trim()
 
@@ -140,7 +137,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                 val nextLine = lines.getOrNull(i + 1)?.trim().orEmpty()
                 if (nextLine.isBlank() || nextLine.startsWith("#")) continue
 
-                // SOLUSI SINKRONISASI JALUR: Menggunakan java.net.URI bawaan Java asli yang stabil
                 val variantUrl = when {
                     nextLine.startsWith("//") -> "https:$nextLine"
                     nextLine.startsWith("/") -> "https://" + URI(masterUrl).host + nextLine
@@ -183,7 +179,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 
 /**
  * 4. Abyss / Hydrax Extractor
- * Bypass lingkaran jebakan popunder force-crash loop dengan menembak langsung endpoint core API v2 backend.
+ * Perbaikan Forensik Pemecah Proteksi Enkripsi Multi-Token & Perutean Cluster API Dinamis.
  */
 class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -215,27 +211,50 @@ class AbyssExtractor : ExtractorApi() {
 
             val html = app.get(url, headers = headers).text
             
-            // SOLUSI QUERY PARSING MANUAl: Membaca parameter "v" menggunakan Regex string universal demi keandalan kompilasi
+            // STRATEGI BYPASS UTAMA: Bongkar muatan data biner rahasia 'datas' Base64
+            val datasRaw = Regex("""const\s+datas\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
+            
             var slug = Regex("[?&]v=([^&#]+)").find(url)?.groupValues?.getOrNull(1)?.trim()
+            var md5Id = ""
+            var userId = ""
+
+            if (!datasRaw.isNullOrBlank()) {
+                val decodedDatas = base64Decode(datasRaw)
+                if (slug.isNullOrBlank()) {
+                    slug = Regex("""\"slug\"\s*:\s*\"([^\"]+)\"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim()
+                }
+                md5Id = Regex("""\"md5_id\"\s*:\s*\"?(\d+)\"?"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
+                userId = Regex("""\"user_id\"\s*:\s*\"?(\d+)\"?"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
+            }
+
+            // Mekanisme Fallback Cadangan jika penargetan string datas bermasalah
             if (slug.isNullOrBlank()) {
-                slug = Regex("""["']slug["']\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
-                    ?: Regex("""v\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
+                slug = Regex("""(?:v|slug)\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)?.trim()
+            }
+            if (userId.isNullOrBlank()) {
+                userId = Regex("""userID\s*:\s*["']?(\d+)["']?""").find(html)?.groupValues?.getOrNull(1)?.trim() ?: ""
             }
 
             if (slug.isNullOrBlank()) return
 
-            val apiUrl = "https://abyss.to/api/player/v2"
-            
-            // SOLUSI ARGUMENT TYPE MISMATCH: Mengunci penulisan map secara eksplisit berupa mapOf<String, String>
+            // BYPASS DOMAIN ROTATION: Ikat langsung host asal iframe (abyss.to / iamcdn.net) secara dinamis
+            val host = URI(url).host
+            val apiUrl = "https://$host/api/player/v2"
+
             val apiResponse = app.post(
                 apiUrl,
                 headers = mapOf(
                     "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
                     "Referer" to url,
-                    "Origin" to "https://abyss.to",
+                    "Origin" to "https://$host",
+                    "X-Requested-With" to "XMLHttpRequest",
                     "Content-Type" to "application/x-www-form-urlencoded"
                 ),
-                data = mapOf<String, String>("slug" to slug)
+                data = mapOf<String, String>(
+                    "slug" to slug,
+                    "md5_id" to md5Id,
+                    "user_id" to userId
+                )
             ).parsedSafe<AbyssResponse>()
 
             apiResponse?.sources?.forEach { source ->
@@ -259,7 +278,7 @@ class AbyssExtractor : ExtractorApi() {
                             url = videoUrl,
                             type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
-                            this.referer = "https://abyss.to/"
+                            this.referer = "https://$host/"
                             this.quality = qualityValue
                         }
                     )
@@ -292,8 +311,6 @@ class MinochinosExtractor : ExtractorApi() {
             )
 
             val html = app.get(url, headers = headers).text
-            
-            // Unpack skrip eval javascript secara instan
             val unpackedHtml = getAndUnpack(html)
             
             val streamUrl = Regex("""https?://[^\s"'`<>]+?\.m3u8[^\s"'`<>]*""").find(unpackedHtml)?.value
