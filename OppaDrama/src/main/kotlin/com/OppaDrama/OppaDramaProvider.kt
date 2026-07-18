@@ -163,94 +163,74 @@ class OppaDramaProvider : MainAPI() {
         val html = app.get(url, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
 
-        // STRATEGI 1: Jika ini halaman episode tunggal, alihkan paksa ke halaman kumpulan serial aslinya
-        val parentUrl = document.select(".epheader .entry-info a, h2[itemprop=partOfSeries] a, div.infolimit h2 a, .bixbox.episodedl .epwrapper a").first()?.attr("href")
-        if (!parentUrl.isNullOrBlank() && parentUrl != url) {
-            val parentHtml = app.get(parentUrl, headers = desktopBypassHeaders).text
-            return loadSeries(parentUrl, Jsoup.parse(parentHtml))
+        // Deteksi tipe konten secara akurat dari kontainer informasi .spe span web target
+        var isMovie = url.contains("/movie-")
+        for (span in document.select("div.spe span")) {
+            val label = span.select("b").first()?.text()?.lowercase() ?: ""
+            if (label.contains("tipe") || label.contains("type")) {
+                if (span.text().lowercase().contains("movie")) {
+                    isMovie = true
+                }
+            }
         }
 
-        // STRATEGI 2: Proteksi tipe film pilihan. Jika terindikasi movie, buka sebagai layout film tunggal
-        val isMovie = url.contains("/movie-") || document.select(".typez").first()?.text()?.contains("Movie", ignoreCase = true) == true
-        if (document.selectFirst("div.eplister ul > li > a") != null && !isMovie) {
-            return loadSeries(url, document)
+        // Jika ini halaman episode tunggal, ambil tautan bapak serialnya lewat indeks Breadcrumb kedua
+        val breadcrumbs = document.select(".ts-breadcrumb ol li a")
+        if (breadcrumbs.size >= 3 && !isMovie) {
+            val parentUrl = breadcrumbs[1].attr("href")
+            if (!parentUrl.isNullOrBlank() && parentUrl != url) {
+                val parentHtml = app.get(parentUrl, headers = desktopBypassHeaders).text
+                return loadSeries(parentUrl, Jsoup.parse(parentHtml))
+            }
         }
-        return loadEpisode(url, document)
+
+        return if (isMovie) loadMovie(url, document) else loadSeries(url, document)
     }
 
     private suspend fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
         val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
-
         val info = parseInfo(document)
-        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
-        val actors = document.select("div.spe span:has(b:matchesOwn(^Artis\$)) a").map { it.text().trim() }.filter { it.isNotBlank() }
-        val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
 
-        val episodeAnchors = document.select("div.eplister ul > li > a").toList()
-        val episodes = episodeAnchors.reversed().mapIndexed { index, anchor ->
+        val episodes = mutableListOf<Episode>()
+        val episodeAnchors = document.select("div.eplister ul li a")
+        val reversedAnchors = episodeAnchors.toList().reversed()
+        
+        for (i in reversedAnchors.indices) {
+            val anchor = reversedAnchors[i]
             val href = anchor.attr("href")
-            val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull() ?: (index + 1)
+            val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull() ?: (i + 1)
             val epTitle = anchor.selectFirst("div.epl-title")?.text()?.trim() ?: "Episode $epNumber"
             val epPoster = fixUrlNull(anchor.selectFirst("img")?.extractPoster())
 
-            newEpisode(href) {
+            episodes.add(newEpisode(href) {
                 this.name = epTitle
                 this.episode = epNumber
                 this.posterUrl = epPoster
-            }
+            })
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
             this.year = info.year
             this.plot = info.plot
-            this.tags = tags
             this.showStatus = info.status
             this.duration = info.duration
-            this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
-            if (actors.isNotEmpty()) this.actors = actors.map { ActorData(Actor(it)) }
-            if (!trailer.isNullOrBlank()) this.trailers.add(TrailerData(trailer, null, false))
         }
     }
 
-    private suspend fun loadEpisode(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
+    private suspend fun loadMovie(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
         val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
-
         val info = parseInfo(document)
-        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
-        val actors = document.select("div.spe span:has(b:matchesOwn(^Artis\$)) a").map { it.text().trim() }.filter { it.isNotBlank() }
-        val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
             this.year = info.year
             this.plot = info.plot
-            this.tags = tags
             this.duration = info.duration
-            this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
-            if (actors.isNotEmpty()) this.actors = actors.map { ActorData(Actor(it)) }
-            if (!trailer.isNullOrBlank()) this.trailers.add(TrailerData(trailer, null, false))
-        }
-    }
-
-    private fun Element.toRecommendation(): SearchResponse? {
-        val anchor = selectFirst("a") ?: return null
-        val href = fixUrlNull(anchor.attr("href")) ?: return null
-        val title = anchor.attr("title").ifBlank { this.selectFirst("div.tt")?.text()?.trim() }?.takeIf { it.isNotBlank() } ?: return null
-        val poster = fixUrlNull(this.selectFirst("img")?.extractPoster())
-        val looksLikeEpisode = Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
-        val type = if (looksLikeEpisode) TvType.TvSeries else TvType.Movie
-        val cleanTitle = if (looksLikeEpisode) {
-            title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim()
-        } else title
-        return newMovieSearchResponse(cleanTitle, href, type) {
-            this.posterUrl = poster
         }
     }
 
@@ -290,19 +270,32 @@ class OppaDramaProvider : MainAPI() {
         val html = app.get(data, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
 
-        // Jika film layar lebar sengaja diposting memiliki sub-kualitas kualitas di eplister, urai semuanya sekaligus
-        val eplisterLinks = document.select("div.eplister ul > li > a")
-        if (eplisterLinks.isNotEmpty() && (data.contains("/movie-") || document.select(".typez").first()?.text()?.contains("Movie", ignoreCase = true) == true)) {
-            for (anchor in eplisterLinks) {
-                val href = anchor.attr("href")
-                if (!href.isNullOrBlank()) {
-                    val subHtml = app.get(href, headers = desktopBypassHeaders).text
-                    parseEmbeds(Jsoup.parse(subHtml), href, subtitleCallback, callback)
+        var isMovie = data.contains("/movie-")
+        for (span in document.select("div.spe span")) {
+            val label = span.select("b").first()?.text()?.lowercase() ?: ""
+            if (label.contains("tipe") || label.contains("type")) {
+                if (span.text().lowercase().contains("movie")) {
+                    isMovie = true
                 }
             }
-        } else {
-            parseEmbeds(document, data, subtitleCallback, callback)
         }
+
+        // Pengalihan Multi-Kualitas Film: Gabungkan seluruh link baris pseudo-episode menjadi opsi di dalam player
+        if (isMovie) {
+            val pseudoEpisodes = document.select("div.eplister ul li a")
+            if (pseudoEpisodes.isNotEmpty()) {
+                for (anchor in pseudoEpisodes) {
+                    val href = anchor.attr("href")
+                    if (!href.isNullOrBlank()) {
+                        val subHtml = app.get(href, headers = desktopBypassHeaders).text
+                        parseEmbeds(Jsoup.parse(subHtml), href, subtitleCallback, callback)
+                    }
+                }
+                return true
+            }
+        }
+
+        parseEmbeds(document, data, subtitleCallback, callback)
         return true
     }
 
@@ -316,18 +309,23 @@ class OppaDramaProvider : MainAPI() {
         var rating: Double? = null
 
         for (span in document.select("div.spe > span")) {
-            val label = span.selectFirst("b")?.text()?.trim()?.removeSuffix(":") ?: continue
-            val value = span.ownText().trim()
+            val labelElement = span.select("b").first() ?: continue
+            val label = labelElement.text().trim().removeSuffix(":")
+            val value = span.text().replace(labelElement.text(), "").trim()
+            
             when (label.lowercase()) {
-                "status" -> status = if (value.lowercase() == "ongoing") ShowStatus.Ongoing else ShowStatus.Completed
-                "dirilis" -> year = value.substringBefore('-').trim().takeLast(4).toIntOrNull()
+                "status" -> status = if (value.lowercase().contains("ongoing")) ShowStatus.Ongoing else ShowStatus.Completed
+                "dirilis" -> {
+                    val yearMatch = Regex("(\\d{4})").find(value)?.groupValues?.getOrNull(1)
+                    year = yearMatch?.toIntOrNull()
+                }
                 "durasi" -> duration = parseDurationMinutes(value)
                 "rating" -> rating = value.toDoubleOrNull()
             }
         }
 
         if (rating == null) {
-            val ratingText = document.selectFirst("div.rating strong")?.text()
+            val ratingText = document.select("div.rating strong").first()?.text()
             if (ratingText != null) {
                 rating = ratingText.replace("Rating", "", ignoreCase = true).trim().toDoubleOrNull()
             }
