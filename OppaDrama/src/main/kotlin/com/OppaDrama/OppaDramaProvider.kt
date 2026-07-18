@@ -83,14 +83,19 @@ class OppaDramaProvider : MainAPI() {
         ensureCfVerified()
         return try {
             val res = app.get(url, headers = browserHeaders())
-            if (res.text.length < 5_000) {
+            val body = res.text
+            Log.d(TAG, "fetchPage: $url → ${body.length} bytes")
+            if (body.length < 5_000) {
                 // Kemungkinan kena shim — reset flag + retry
-                Log.w(TAG, "fetchPage: got tiny response (${res.text.length} bytes) for $url, retrying after preflight")
+                Log.w(TAG, "fetchPage: got tiny response (${body.length} bytes) for $url, retrying after preflight")
                 cfVerified = false
                 ensureCfVerified()
-                app.get(url, headers = browserHeaders()).text
+                val res2 = app.get(url, headers = browserHeaders())
+                val body2 = res2.text
+                Log.d(TAG, "fetchPage: retry $url → ${body2.length} bytes")
+                body2
             } else {
-                res.text
+                body
             }
         } catch (e: Exception) {
             Log.e(TAG, "fetchPage: failed to fetch $url: ${e.message}")
@@ -125,8 +130,16 @@ class OppaDramaProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         // request.data adalah URL lengkap (lihat mainPage di atas).
-        val document = fetchPage(request.data)?.let { Jsoup.parse(it) } ?: return newHomePageResponse(request.name, emptyList())
-        val home = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        val html = fetchPage(request.data)
+        if (html == null) {
+            Log.w(TAG, "getMainPage: fetchPage returned null for ${request.name}")
+            return newHomePageResponse(request.name, emptyList())
+        }
+        val document = Jsoup.parse(html)
+        val articles = document.select("div.listupd article.bs")
+        Log.d(TAG, "getMainPage: ${request.name} → found ${articles.size} article.bs, html=${html.length}b")
+        val home = articles.mapNotNull { it.toSearchResult() }
+        Log.d(TAG, "getMainPage: ${request.name} → parsed ${home.size} search results")
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
