@@ -12,6 +12,10 @@ import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
 
+    init {
+        Log.i(TAG, "OppaDramaProvider instantiated, mainUrl=$mainUrl")
+    }
+
     // PENTING: pakai IP langsung, bukan oppa.biz. Server cuma ngasih
     // cookie `user_is_human=true` di domain 45.11.57.192. Kalo kita
     // request via oppa.biz → redirect ke IP, Cloudstream's HTTP client
@@ -56,18 +60,25 @@ class OppaDramaProvider : MainAPI() {
     private suspend fun ensureCfVerified() {
         if (cfVerified) return
         try {
-            // URL paling simple yang bakal return real page + Set-Cookie.
-            // Cookie di-set di domain 45.11.57.192 (sama dengan mainUrl),
-            // jadi request berikutnya di session yang sama bakal pake itu.
             val response = app.get(
                 "${mainUrl}/?verify_human=1",
-                headers = browserHeaders()
+                headers = uncompressedHeaders()
             )
-            // Hanya set flag kalo kita bener-bener dapet real page.
-            // Shim = 434 byte. Real page biasanya 80-180KB.
-            cfVerified = response.text.length > 5_000
+            val body = response.text
+            val isShim = body.contains("verify_human") || body.contains("window.location")
+            cfVerified = body.length > 5_000 && !isShim
             if (!cfVerified) {
-                Log.w(TAG, "ensureCfVerified: preflight returned suspicious payload (${response.text.length} bytes), will retry")
+                // Log FULL content kalo kecil, biar kita bisa liat sebenernya
+                // 288 bytes itu apa (shim? 302 body? JS challenge? error page?)
+                val fullDump = if (body.length < 2000) {
+                    body.replace("\n", " ").replace("\r", " ")
+                } else {
+                    "(${body.length} bytes, first 200) '${body.take(200).replace("\n", " ")}'"
+                }
+                Log.w(TAG, "ensureCfVerified: preflight FAILED, ${body.length} bytes (shim=$isShim)")
+                Log.w(TAG, "ensureCfVerified: FULL CONTENT: $fullDump")
+            } else {
+                Log.i(TAG, "ensureCfVerified: preflight OK, ${body.length} bytes")
             }
         } catch (e: Exception) {
             Log.w(TAG, "ensureCfVerified: preflight failed: ${e.message}")
@@ -76,31 +87,25 @@ class OppaDramaProvider : MainAPI() {
 
     /**
      * Wrapper untuk GET request yang handle CF challenge. Kalo response
-     * masih shim (kecil banget), ulang preflight + retry sekali. Ini
-     * safety net kalo cookie somehow ke-drop antar request.
+     * masih shim (kecil banget ATAU ada marker verify_human), ulang
+     * preflight + retry sekali. Safety net kalo cookie somehow ke-drop.
      */
     private suspend fun fetchPage(url: String): String? {
         ensureCfVerified()
-        return try {
-            val res = app.get(url, headers = browserHeaders())
-            val body = res.text
-            Log.d(TAG, "fetchPage: $url → ${body.length} bytes")
-            if (body.length < 5_000) {
-                // Kemungkinan kena shim — reset flag + retry
-                Log.w(TAG, "fetchPage: got tiny response (${body.length} bytes) for $url, retrying after preflight")
-                cfVerified = false
-                ensureCfVerified()
-                val res2 = app.get(url, headers = browserHeaders())
-                val body2 = res2.text
-                Log.d(TAG, "fetchPage: retry $url → ${body2.length} bytes")
-                body2
-            } else {
-                body
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchPage: failed to fetch $url: ${e.message}")
-            null
+        var res = app.get(url, headers = uncompressedHeaders())
+        var body = res.text
+        Log.i(TAG, "fetchPage: $url → ${body.length} bytes, shim=${body.contains("verify_human") || body.contains("window.location")}")
+
+        // Detect shim by content marker
+        if (body.contains("verify_human") || body.contains("window.location")) {
+            Log.w(TAG, "fetchPage: response is shim/marker, retrying after preflight")
+            cfVerified = false
+            ensureCfVerified()
+            res = app.get(url, headers = uncompressedHeaders())
+            body = res.text
+            Log.i(TAG, "fetchPage: retry $url → ${body.length} bytes")
         }
+        return body.ifBlank { null }
     }
 
     // ------------------------------------------------------------
@@ -137,9 +142,9 @@ class OppaDramaProvider : MainAPI() {
         }
         val document = Jsoup.parse(html)
         val articles = document.select("div.listupd article.bs")
-        Log.d(TAG, "getMainPage: ${request.name} → found ${articles.size} article.bs, html=${html.length}b")
+        Log.i(TAG, "getMainPage: ${request.name} → found ${articles.size} article.bs, html=${html.length}b")
         val home = articles.mapNotNull { it.toSearchResult() }
-        Log.d(TAG, "getMainPage: ${request.name} → parsed ${home.size} search results")
+        Log.i(TAG, "getMainPage: ${request.name} → parsed ${home.size} search results")
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
@@ -424,9 +429,7 @@ class OppaDramaProvider : MainAPI() {
     }
 
     /**
-     * Browser-like headers supaya request dari plugin gak gampang di-flag
-     * Cloudflare sebagai bot. Cloudflare fronted situs ini melakukan
-     * challenge kalau header terlalu "default NiceHttp".
+     * Browser-like headers untuk request normal (gzip OK).
      */
     private fun browserHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
@@ -438,6 +441,24 @@ class OppaDramaProvider : MainAPI() {
         "Sec-Fetch-Site" to "none",
         "Sec-Fetch-User" to "?1",
         "Upgrade-Insecure-Requests" to "1"
+    )
+
+    /**
+     * Header set untuk preflight + CF detection: paksa uncompressed response
+     * supaya shim detect by content (bukan by size, yang bisa misleading
+     * karena Cloudstream kadang return 288 bytes gzipped).
+     */
+    private fun uncompressedHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding" to "identity",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-User" to "?1",
+        "Upgrade-Insecure-Requests" to "1",
+        "Connection" to "keep-alive"
     )
 
     /**
