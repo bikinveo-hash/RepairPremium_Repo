@@ -18,11 +18,19 @@ class OppaDramaProvider : MainAPI() {
         TvType.Movie
     )
 
-    // Mengamankan antrean request paralel agar tidak diblokir oleh Nginx Lokal Server
     override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 1000L
+    override var sequentialMainPageDelay = 1500L
 
-    // Inisialisasi Kategori Beranda riil berdasarkan susunan Dump HTML bixbox
+    // Injeksi Headers & Cookie mutlak hasil sniffing lalu lintas paket data browser
+    private val desktopBypassHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+        "Cookie" to "user_is_human=true",
+        "Upgrade-Insecure-Requests" to "1",
+        "Cache-Control" to "max-age=0",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+    )
+
     override val mainPage = mainPageOf(
         Pair("latest", "Update Episode Terbaru"),
         Pair("movies", "Film Pilihan"),
@@ -33,7 +41,6 @@ class OppaDramaProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        // Pemetaan URL Target secara presisi berdasarkan deteksi halaman arsip Dramastream
         val targetUrl = when (request.data) {
             "latest" -> if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
             "movies" -> if (page > 1) "$mainUrl/series/page/$page/?type=Movie&order=update" else "$mainUrl/"
@@ -41,14 +48,14 @@ class OppaDramaProvider : MainAPI() {
             else -> "$mainUrl/"
         }
 
-        val html = app.get(targetUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
+        val html = app.get(targetUrl, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
 
-        // Forensik Parsing berdasarkan data kontainer bixbox riil
         when (request.data) {
             "latest" -> {
-                document.select(".listupd.normal article.bs").forEach { element: Element ->
+                // Penargetan global tag kartu episode terbaru
+                document.select("article.bs").forEach { element: Element ->
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                     val link = anchor?.attr("href")
@@ -62,8 +69,8 @@ class OppaDramaProvider : MainAPI() {
                 }
             }
             "movies" -> {
-                // Mengekstrak struktur .listupd.flex -> article.stylefor pada halaman utama
-                document.select(".listupd.flex article.stylefor").forEach { element: Element ->
+                // Penargetan global tag kartu film pilihan
+                document.select("article.stylefor").forEach { element: Element ->
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                     val link = anchor?.attr("href")
@@ -76,7 +83,7 @@ class OppaDramaProvider : MainAPI() {
                     }
                 }
                 
-                // Jika berada di page > 1, tema Dramastream melebur tipe .stylefor kembali menjadi article.bs
+                // Mekanisme jembatan penargetan jika struktur berubah pada page > 1
                 if (items.isEmpty()) {
                     document.select("article.bs").forEach { element: Element ->
                         val anchor = element.select("div.bsx a").first()
@@ -94,7 +101,6 @@ class OppaDramaProvider : MainAPI() {
             }
             "ongoing" -> {
                 if (page == 1) {
-                    // Ekstraksi data kolom widget sidebar ".ongoingseries" untuk halaman utama
                     document.select(".ongoingseries li").forEach { element: Element ->
                         val anchor = element.select("a").first()
                         val link = anchor?.attr("href")
@@ -107,7 +113,6 @@ class OppaDramaProvider : MainAPI() {
                         }
                     }
                 } else {
-                    // Ekstraksi arsip penayangan untuk page > 1
                     document.select("article.bs").forEach { element: Element ->
                         val anchor = element.select("div.bsx a").first()
                         val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
@@ -129,7 +134,7 @@ class OppaDramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         val searchUrl = "$mainUrl/?s=$query"
-        val html = app.get(searchUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
+        val html = app.get(searchUrl, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
 
