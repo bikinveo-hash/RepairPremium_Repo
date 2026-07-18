@@ -12,9 +12,6 @@ import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
 
-    // Domain bisa berubah sewaktu-waktu (canonical di-redirect ke IP baru);
-    // `canBeOverridden` default-nya `true` jadi user tinggal pakai "Clone
-    // site" di settings CloudStream.
     override var mainUrl        = "https://oppa.biz"
     override var name           = "OppaDrama"
 
@@ -23,8 +20,6 @@ class OppaDramaProvider : MainAPI() {
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
-    // Slow Cloudflare fronted: jalankan homepage satu-satu dengan jeda
-    // supaya gak kena rate limit.
     override var sequentialMainPage            = true
 
     // ------------------------------------------------------------
@@ -75,7 +70,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
             this.posterUrl = poster
-            this.posterHeaders = browserHeaders() // Buka proteksi gambar beranda
+            this.posterHeaders = imageHeaders() // FIX: Menggunakan header khusus asset gambar
         }
     }
 
@@ -133,7 +128,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl       = poster
-            this.posterHeaders   = browserHeaders() // Buka proteksi gambar utama series
+            this.posterHeaders   = imageHeaders() // FIX: Menggunakan header khusus asset gambar
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -173,7 +168,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
             this.posterUrl       = poster
-            this.posterHeaders   = browserHeaders() // Buka proteksi gambar episode tunggal
+            this.posterHeaders   = imageHeaders() // FIX: Menggunakan header khusus asset gambar
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -206,7 +201,7 @@ class OppaDramaProvider : MainAPI() {
         } else title
         return newMovieSearchResponse(cleanTitle, href, type) {
             this.posterUrl = poster
-            this.posterHeaders = browserHeaders() // Buka proteksi gambar rekomendasi
+            this.posterHeaders = imageHeaders() // FIX: Menggunakan header khusus asset gambar
         }
     }
 
@@ -228,7 +223,6 @@ class OppaDramaProvider : MainAPI() {
 
         var dispatched = false
 
-        // (1) Primary player iframe
         document.selectFirst("div.player-embed iframe")?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.isNotBlank() && loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
@@ -236,7 +230,6 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
-        // (2) Mirror dropdown – value-nya adalah base64-encoded <iframe>
         val mirrors = document.select("select.mirror option[value]:not([disabled])")
         for (option in mirrors) {
             val encoded = option.attr("value").trim()
@@ -256,7 +249,6 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
-        // (3) Direct download links
         for (a in document.select("div.dlbox li span.e a[href]")) {
             val href = a.attr("href").trim()
             if (href.isNotBlank() && loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
@@ -327,28 +319,16 @@ class OppaDramaProvider : MainAPI() {
     }
 
     private fun Element.getImageAttr(): String? {
-        fun cleanup(url: String?): String? {
-            if (url.isNullOrBlank()) return null
-            // Pertahankan struktur host Jetpack CDN asli bawaan situs agar tidak putus rute,
-            // namun paksa ganti ke jalur enkripsi aman HTTPS.
-            return url
-                .replace(Regex("[?&]resize=\\d+,\\d+"), "")
-                .replace(Regex("[?&]quality=\\d+"), "")
-                .replace("http://", "https://") 
-        }
+        val url = attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
+        if (url.isBlank()) return null
         
-        val dataSrc     = attr("abs:data-src").takeIf { it.isNotBlank() }
-        val dataLazySrc = attr("abs:data-lazy-src").takeIf { it.isNotBlank() }
-        val srcset      = attr("abs:srcset").takeIf { it.isNotBlank() }?.substringBefore(" ")
-        val src         = attr("abs:src").takeIf { it.isNotBlank() }
-
-        return cleanup(dataSrc ?: dataLazySrc ?: srcset ?: src)
+        // Mempertahankan rute Jetpack CDN IP asli dari server Wordpress namun dipaksa masuk protokol HTTPS
+        return url
+            .replace(Regex("[?&]resize=\\d+,\\d+"), "")
+            .replace(Regex("[?&]quality=\\d+"), "")
+            .replace("http://", "https://") 
     }
 
-    /**
-     * Browser-like headers supaya request dari plugin gak gampang di-flag
-     * Cloudflare sebagai bot.
-     */
     private fun browserHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -359,6 +339,13 @@ class OppaDramaProvider : MainAPI() {
         "Sec-Fetch-Site" to "none",
         "Sec-Fetch-User" to "?1",
         "Upgrade-Insecure-Requests" to "1"
+    )
+
+    // FIX BARU: Header khusus untuk pengunggah asset media gambar (Bypass WAF Cloudflare Image Blocking)
+    private fun imageHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer" to mainUrl
     )
 
     private fun String.encodeUrl(): String =
