@@ -18,58 +18,100 @@ class OppaDramaProvider : MainAPI() {
         TvType.Movie
     )
 
+    // SOLUSI LAG: Memaksa Cloudstream memuat kategori secara berurutan, bukan bersamaan[span_2](start_span)[span_2](end_span)
+    override var sequentialMainPage = true[span_3](start_span)[span_3](end_span)
+    override var sequentialMainPageDelay = 1000L // Jeda 1 detik antar request untuk menghindari rate-limit[span_4](start_span)[span_4](end_span)
+
+    // Menggunakan query identifier internal agar langsung membaca struktur dari halaman utama
     override val mainPage = mainPageOf(
-        Pair("$mainUrl/series/?status=&type=&order=update", "Update Episode Terbaru"),
-        Pair("$mainUrl/series/?type=Movie&order=update", "Film Pilihan"),
-        Pair("$mainUrl/series/?status=Ongoing&type=&order=update", "Drama Ongoing"),
-        Pair("$mainUrl/series/?status=Completed&type=Drama&order=update", "Drama Completed")
+        Pair("latest", "Update Episode Terbaru"),
+        Pair("movies", "Film Pilihan"),
+        Pair("ongoing", "Sedang Tayang (Ongoing)")
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
+        // Jika halaman > 1, arahkan ke penanganan arsip WordPress standar
         val targetUrl = if (page > 1) {
-            if (request.data.contains("?")) {
-                val parts = request.data.split("?")
-                "${parts[0]}page/$page/?${parts[1]}"
-            } else {
-                "${request.data}page/$page/"
+            when (request.data) {
+                "latest" -> "$mainUrl/series/page/$page/?status=&type=&order=update"
+                "movies" -> "$mainUrl/series/page/$page/?type=Movie&order=update"
+                "ongoing" -> "$mainUrl/series/page/$page/?status=Ongoing&type=&order=update"
+                else -> "$mainUrl/page/$page/"
             }
         } else {
-            request.data
+            "$mainUrl/"
         }
 
         val html = app.get(targetUrl, headers = mapOf("User-Agent" to USER_AGENT)).text
         val document = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
 
-        // Element ditambahkan secara eksplisit agar compiler tidak gagal inferensi tipe data
-        document.select("article.bs").forEach { element: Element ->
-            val anchor = element.select("div.bsx a").first()
-            val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-            val link = anchor?.attr("href")
-            val poster = element.select("img").first()?.attr("src")
-            val typeStr = element.select(".typez").first()?.text()
-
-            if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                val currentType = if (typeStr?.contains("Movie", ignoreCase = true) == true) TvType.Movie else TvType.AsianDrama
-                items.add(newMovieSearchResponse(title, link, currentType) {
-                    this.posterUrl = poster
-                })
+        // Pilah ekstraksi berdasarkan kategori beranda menggunakan data selector yang terverifikasi
+        when (request.data) {
+            "latest" -> {
+                // Berdasarkan struktur: .listupd.normal -> .excstf -> article.bs
+                document.select(".listupd.normal article.bs").forEach { element: Element ->
+                    val anchor = element.select("div.bsx a").first()
+                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
+                    val link = anchor?.attr("href")
+                    val poster = element.select("img").first()?.attr("src")
+                    
+                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                        items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
+                            this.posterUrl = poster
+                        })
+                    }
+                }
             }
-        }
+            "movies" -> {
+                // Berdasarkan struktur: .listupd.flex -> .excstf -> article.stylefor
+                document.select(".listupd.flex article.stylefor").forEach { element: Element ->
+                    val anchor = element.select("div.bsx a").first()
+                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
+                    val link = anchor?.attr("href")
+                    val poster = element.select("img").first()?.attr("src")
 
-        document.select("article.stylefor").forEach { element: Element ->
-            val anchor = element.select("div.bsx a").first()
-            val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-            val link = anchor?.attr("href")
-            val poster = element.select("img").first()?.attr("src")
+                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                        items.add(newMovieSearchResponse(title, link, TvType.Movie) {
+                            this.posterUrl = poster
+                        })
+                    }
+                }
+            }
+            "ongoing" -> {
+                // Berdasarkan struktur sidebar: .ongoingseries -> ul -> li
+                document.select(".ongoingseries li").forEach { element: Element ->
+                    val anchor = element.select("a").first()
+                    val link = anchor?.attr("href")
+                    // Mengambil nama drama bersih dari elemen span kelas kiri (.l)
+                    val title = anchor?.select("span.l")?.first()?.text()?.trim() 
+                    
+                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                        items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
+                            // Sidebar bawaan Dramastream tidak menyediakan gambar poster mikro, 
+                            // Kosongkan agar Cloudstream menggunakan mode card text default atau generator lokal
+                            this.posterUrl = null
+                        })
+                    }
+                }
+            }
+            else -> {
+                // Fallback jika memuat halaman arsip (page > 1)
+                document.select("article.bs").forEach { element: Element ->
+                    val anchor = element.select("div.bsx a").first()
+                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
+                    val link = anchor?.attr("href")
+                    val poster = element.select("img").first()?.attr("src")
 
-            if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                items.add(newMovieSearchResponse(title, link, TvType.Movie) {
-                    this.posterUrl = poster
-                })
+                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                        items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
+                            this.posterUrl = poster
+                        })
+                    }
+                }
             }
         }
 
