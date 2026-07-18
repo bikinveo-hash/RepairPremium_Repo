@@ -91,28 +91,18 @@ class OppaDramaProvider : MainAPI() {
     }
 
     // ------------------------------------------------------------
-    //  Homepage
+    //  Homepage — hanya 2 section sesuai halaman depan
     // ------------------------------------------------------------
+    // 1. "Update Episode Terbaru" — section teratas di homepage (URL = /)
+    // 2. "Film Pilihan" — section kedua, URL = /series/?type=Movie&order=update
+    //
+    // Di homepage, "Update Episode Terbaru" pakai article class="bs",
+    // "Film Pilihan" pakai article class="stylefor". Selector kita cover dua-duanya.
+    //
+    // PENTING: pakai literal `?` dan `=` di URL, jangan %3F/%3D (over-encoded).
     override val mainPage = mainPageOf(
-        "${mainUrl}/series/?status=&type=&order=update"                                to "Latest Update",
-        "${mainUrl}/series/?status=Ongoing&type=&order=update"                         to "Ongoing",
-        "${mainUrl}/series/?status=Completed&type=Drama&order=update"                  to "Completed Drama",
-        "${mainUrl}/series/?country%5B%5D=china&type=Drama&order=update"               to "Drama China",
-        "${mainUrl}/series/?country%5B%5D=japan&type=Drama&order=update"               to "Drama Jepang",
-        "${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
-        "${mainUrl}/series/?country%5B%5D=philippines&type=Drama&order=update"         to "Drama Philippines",
-        "${mainUrl}/series/?country%5B%5D=taiwan&type=Drama&order=update"              to "Drama Taiwan",
-        "${mainUrl}/series/?country%5B%5D=thailand&type=Drama&order=update"            to "Drama Thailand",
-        "${mainUrl}/series/?country%5B%5D=usa&type=Drama&order=update"                 to "Drama Western",
-        "${mainUrl}/series/?type=Movie&order=update"                                   to "All Movies",
-        "${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
-        "${mainUrl}/series/?country%5B%5D=japan&type=Movie&order=update"               to "Japan Movie",
-        "${mainUrl}/series/?country%5B%5D=china&type=Movie&order=update"               to "Chinese Movie",
-        "${mainUrl}/series/?country%5B%5D=thailand&type=Movie&order=update"            to "Thailand Movie",
-        "${mainUrl}/series/?country%5B%5D=taiwan&type=Movie&order=update"              to "Taiwan Movie",
-        "${mainUrl}/series/?country%5B%5D=philippines&type=Movie&order=update"         to "Philippines Movie",
-        "${mainUrl}/series/?country%5B%5D=india&type=Movie&order=update"               to "India Movie",
-        "${mainUrl}/series/?country%5B%5D=united-states&type=Movie&order=update"       to "Western Movie"
+        "${mainUrl}/"                                            to "Update Episode Terbaru",
+        "${mainUrl}/series/?type=Movie&order=update"             to "Film Pilihan"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -122,8 +112,11 @@ class OppaDramaProvider : MainAPI() {
             return newHomePageResponse(request.name, emptyList())
         }
         val document = Jsoup.parse(html)
-        val articles = document.select("div.listupd article.bs")
-        Log.i(TAG, "getMainPage: ${request.name} → found ${articles.size} article.bs, html=${html.length}b")
+
+        // Selector covers both `article.bs` (drama section) and
+        // `article.stylefor` (movie section di homepage).
+        val articles = document.select("div.listupd article")
+        Log.i(TAG, "getMainPage: ${request.name} → found ${articles.size} articles, html=${html.length}b")
         val home = articles.mapNotNull { it.toSearchResult() }
         Log.i(TAG, "getMainPage: ${request.name} → parsed ${home.size} search results")
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
@@ -156,7 +149,7 @@ class OppaDramaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val html = fetchPage("${mainUrl}/?s=${query.encodeUrl()}") ?: return emptyList()
         val document = Jsoup.parse(html)
-        return document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        return document.select("div.listupd article").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
@@ -187,9 +180,7 @@ class OppaDramaProvider : MainAPI() {
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
         val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
-
-        // Episode list – newest first di DOM; reverse untuk natural numbering
+        val recommendations = document.select("div.listupd article").mapNotNull { it.toRecommendation() }
         val episodeAnchors = document.select("div.eplister ul > li > a").toList()
         val episodes = episodeAnchors.reversed().mapIndexed { index, anchor ->
             val href     = anchor.attr("href")
@@ -237,7 +228,7 @@ class OppaDramaProvider : MainAPI() {
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
         val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
+        val recommendations = document.select("div.listupd article").mapNotNull { it.toRecommendation() }
 
         val displayTitle = if (seriesName != null && !title.contains(seriesName, ignoreCase = true)) {
             "$seriesName - $title"
