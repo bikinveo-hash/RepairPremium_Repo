@@ -75,6 +75,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
             this.posterUrl = poster
+            this.posterHeaders = browserHeaders() // Buka proteksi gambar beranda
         }
     }
 
@@ -132,6 +133,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl       = poster
+            this.posterHeaders   = browserHeaders() // Buka proteksi gambar utama series
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -171,6 +173,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
             this.posterUrl       = poster
+            this.posterHeaders   = browserHeaders() // Buka proteksi gambar episode tunggal
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -203,6 +206,7 @@ class OppaDramaProvider : MainAPI() {
         } else title
         return newMovieSearchResponse(cleanTitle, href, type) {
             this.posterUrl = poster
+            this.posterHeaders = browserHeaders() // Buka proteksi gambar rekomendasi
         }
     }
 
@@ -325,6 +329,8 @@ class OppaDramaProvider : MainAPI() {
     private fun Element.getImageAttr(): String? {
         fun cleanup(url: String?): String? {
             if (url.isNullOrBlank()) return null
+            // Pertahankan struktur host Jetpack CDN asli bawaan situs agar tidak putus rute,
+            // namun paksa ganti ke jalur enkripsi aman HTTPS.
             return url
                 .replace(Regex("[?&]resize=\\d+,\\d+"), "")
                 .replace(Regex("[?&]quality=\\d+"), "")
@@ -339,6 +345,10 @@ class OppaDramaProvider : MainAPI() {
         return cleanup(dataSrc ?: dataLazySrc ?: srcset ?: src)
     }
 
+    /**
+     * Browser-like headers supaya request dari plugin gak gampang di-flag
+     * Cloudflare sebagai bot.
+     */
     private fun browserHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
