@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 import java.net.URI
+import android.util.Base64
 
 /**
  * 1. EarnVids / Smoothpre Extractor
@@ -211,7 +212,6 @@ class AbyssExtractor : ExtractorApi() {
 
             val html = app.get(url, headers = headers).text
             
-            // STRATEGI BYPASS UTAMA: Bongkar muatan data biner rahasia 'datas' Base64
             val datasRaw = Regex("""const\s+datas\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
             
             var slug = Regex("[?&]v=([^&#]+)").find(url)?.groupValues?.getOrNull(1)?.trim()
@@ -219,7 +219,8 @@ class AbyssExtractor : ExtractorApi() {
             var userId = ""
 
             if (!datasRaw.isNullOrBlank()) {
-                val decodedDatas = base64Decode(datasRaw)
+                // Perbaikan Mutlak: Menggunakan dekoder biner bawaan Android SDK asli
+                val decodedDatas = String(Base64.decode(datasRaw, Base64.DEFAULT), Charsets.UTF_8)
                 if (slug.isNullOrBlank()) {
                     slug = Regex("""\"slug\"\s*:\s*\"([^\"]+)\"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim()
                 }
@@ -227,7 +228,6 @@ class AbyssExtractor : ExtractorApi() {
                 userId = Regex("""\"user_id\"\s*:\s*\"?(\d+)\"?"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
             }
 
-            // Mekanisme Fallback Cadangan jika penargetan string datas bermasalah
             if (slug.isNullOrBlank()) {
                 slug = Regex("""(?:v|slug)\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)?.trim()
             }
@@ -237,7 +237,6 @@ class AbyssExtractor : ExtractorApi() {
 
             if (slug.isNullOrBlank()) return
 
-            // BYPASS DOMAIN ROTATION: Ikat langsung host asal iframe (abyss.to / iamcdn.net) secara dinamis
             val host = URI(url).host
             val apiUrl = "https://$host/api/player/v2"
 
