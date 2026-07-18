@@ -3,7 +3,6 @@ package com.OppaDrama
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.VidHidePro
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -14,6 +13,7 @@ import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+import java.net.URI
 
 /**
  * 1. EarnVids / Smoothpre Extractor
@@ -140,9 +140,10 @@ open class EmturbovidExtractor : ExtractorApi() {
                 val nextLine = lines.getOrNull(i + 1)?.trim().orEmpty()
                 if (nextLine.isBlank() || nextLine.startsWith("#")) continue
 
+                // SOLUSI SINKRONISASI JALUR: Menggunakan java.net.URI bawaan Java asli yang stabil
                 val variantUrl = when {
                     nextLine.startsWith("//") -> "https:$nextLine"
-                    nextLine.startsWith("/") -> "https://" + io.ktor.http.Url(masterUrl).host + nextLine
+                    nextLine.startsWith("/") -> "https://" + URI(masterUrl).host + nextLine
                     nextLine.startsWith("http") -> nextLine
                     else -> masterUrl.substringBeforeLast("/") + "/" + nextLine
                 }
@@ -214,7 +215,8 @@ class AbyssExtractor : ExtractorApi() {
 
             val html = app.get(url, headers = headers).text
             
-            var slug = io.ktor.http.Url(url).parameters["v"]?.trim()
+            // SOLUSI QUERY PARSING MANUAl: Membaca parameter "v" menggunakan Regex string universal demi keandalan kompilasi
+            var slug = Regex("[?&]v=([^&#]+)").find(url)?.groupValues?.getOrNull(1)?.trim()
             if (slug.isNullOrBlank()) {
                 slug = Regex("""["']slug["']\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
                     ?: Regex("""v\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
@@ -223,6 +225,8 @@ class AbyssExtractor : ExtractorApi() {
             if (slug.isNullOrBlank()) return
 
             val apiUrl = "https://abyss.to/api/player/v2"
+            
+            // SOLUSI ARGUMENT TYPE MISMATCH: Mengunci penulisan map secara eksplisit berupa mapOf<String, String>
             val apiResponse = app.post(
                 apiUrl,
                 headers = mapOf(
@@ -231,7 +235,7 @@ class AbyssExtractor : ExtractorApi() {
                     "Origin" to "https://abyss.to",
                     "Content-Type" to "application/x-www-form-urlencoded"
                 ),
-                data = mapOf("slug" to slug)
+                data = mapOf<String, String>("slug" to slug)
             ).parsedSafe<AbyssResponse>()
 
             apiResponse?.sources?.forEach { source ->
