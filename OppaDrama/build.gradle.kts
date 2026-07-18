@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     description = "OppaDrama — Streaming Drama Korea, Movie and TV Series"
     language = "id"
-    authors = listOf("Miku")
+    authors = listOf("Aldry84")
 
     /**
      * Status int as the following:
