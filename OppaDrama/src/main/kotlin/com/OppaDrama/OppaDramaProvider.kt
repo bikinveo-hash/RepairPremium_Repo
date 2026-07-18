@@ -1,162 +1,412 @@
+// Bu plugin CloudStream OppaDrama — sumber https://oppa.biz
+
 package com.OppaDrama
 
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.api.Log
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 
 class OppaDramaProvider : MainAPI() {
-    override var name = "OPPADRAMA"
-    override var mainUrl = "http://45.11.57.192"
-    override var lang = "id"
-    override val hasMainPage = true
-    override val hasQuickSearch = false
 
-    override val supportedTypes = setOf(
-        TvType.AsianDrama,
-        TvType.TvSeries,
-        TvType.Movie
-    )
+    // PENTING: pakai IP langsung, bukan oppa.biz. Server cuma ngasih
+    // cookie `user_is_human=true` di domain 45.11.57.192. Kalo kita
+    // request via oppa.biz → redirect ke IP, Cloudstream's HTTP client
+    // gak nge-send cookie itu ke domain hasil redirect (cross-domain
+    // issue), jadi request berikut kena shim 434-byte lagi.
+    override var mainUrl        = "http://45.11.57.192"
+    override var name           = "OppaDrama"
 
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 1500L
+    override val hasMainPage    = true
+    override var lang           = "id"
+    override val hasQuickSearch = true
+    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
-    // Injeksi Headers & Cookie mutlak hasil sniffing lalu lintas paket data browser
-    private val desktopBypassHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-        "Cookie" to "user_is_human=true",
-        "Upgrade-Insecure-Requests" to "1",
-        "Cache-Control" to "max-age=0",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
-    )
+    // Slow Cloudflare fronted: jalankan homepage satu-satu dengan jeda
+    // supaya gak kena rate limit.
+    override var sequentialMainPage            = true
 
-    override val mainPage = mainPageOf(
-        Pair("latest", "Update Episode Terbaru"),
-        Pair("movies", "Film Pilihan"),
-        Pair("ongoing", "Sedang Tayang (Ongoing)")
-    )
-
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
-        val targetUrl = when (request.data) {
-            "latest" -> if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
-            "movies" -> if (page > 1) "$mainUrl/series/page/$page/?type=Movie&order=update" else "$mainUrl/"
-            "ongoing" -> if (page > 1) "$mainUrl/series/page/$page/?status=Ongoing&type=&order=update" else "$mainUrl/"
-            else -> "$mainUrl/"
-        }
-
-        val html = app.get(targetUrl, headers = desktopBypassHeaders).text
-        val document = Jsoup.parse(html)
-        val items = mutableListOf<SearchResponse>()
-
-        when (request.data) {
-            "latest" -> {
-                // Penargetan global tag kartu episode terbaru
-                document.select("article.bs").forEach { element: Element ->
-                    val anchor = element.select("div.bsx a").first()
-                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                    val link = anchor?.attr("href")
-                    val poster = element.select("img").first()?.attr("src")
-                    
-                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                        items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
-                            this.posterUrl = poster
-                        })
-                    }
-                }
-            }
-            "movies" -> {
-                // Penargetan global tag kartu film pilihan
-                document.select("article.stylefor").forEach { element: Element ->
-                    val anchor = element.select("div.bsx a").first()
-                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                    val link = anchor?.attr("href")
-                    val poster = element.select("img").first()?.attr("src")
-
-                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                        items.add(newMovieSearchResponse(title, link, TvType.Movie) {
-                            this.posterUrl = poster
-                        })
-                    }
-                }
-                
-                // Mekanisme jembatan penargetan jika struktur berubah pada page > 1
-                if (items.isEmpty()) {
-                    document.select("article.bs").forEach { element: Element ->
-                        val anchor = element.select("div.bsx a").first()
-                        val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                        val link = anchor?.attr("href")
-                        val poster = element.select("img").first()?.attr("src")
-
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newMovieSearchResponse(title, link, TvType.Movie) {
-                                this.posterUrl = poster
-                            })
-                        }
-                    }
-                }
-            }
-            "ongoing" -> {
-                if (page == 1) {
-                    document.select(".ongoingseries li").forEach { element: Element ->
-                        val anchor = element.select("a").first()
-                        val link = anchor?.attr("href")
-                        val title = anchor?.select("span.l")?.first()?.text()?.trim()
-                        
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
-                                this.posterUrl = null
-                            })
-                        }
-                    }
-                } else {
-                    document.select("article.bs").forEach { element: Element ->
-                        val anchor = element.select("div.bsx a").first()
-                        val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                        val link = anchor?.attr("href")
-                        val poster = element.select("img").first()?.attr("src")
-
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
-                                this.posterUrl = poster
-                            })
-                        }
-                    }
-                }
-            }
-        }
-
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+    init {
+        Log.i(TAG, "OppaDramaProvider instantiated, mainUrl=$mainUrl")
     }
 
-    override suspend fun search(query: String): List<SearchResponse>? {
-        val searchUrl = "$mainUrl/?s=$query"
-        val html = app.get(searchUrl, headers = desktopBypassHeaders).text
-        val document = Jsoup.parse(html)
-        val items = mutableListOf<SearchResponse>()
-
-        document.select("article.bs").forEach { element: Element ->
-            val anchor = element.select("div.bsx a").first()
-            val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-            val link = anchor?.attr("href")
-            val poster = element.select("img").first()?.attr("src")
-            val typeStr = element.select(".typez").first()?.text()
-
-            if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                val currentType = if (typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")) {
-                    TvType.Movie
+    // ------------------------------------------------------------
+    //  Cloudflare verify_human workaround
+    // ------------------------------------------------------------
+    private suspend fun ensureCfVerified() {
+        if (cfVerified) return
+        try {
+            val response = app.get(
+                "${mainUrl}/?verify_human=1",
+                headers = uncompressedHeaders()
+            )
+            val body = response.text
+            val isShim = body.contains("verify_human") || body.contains("window.location")
+            cfVerified = body.length > 5_000 && !isShim
+            if (!cfVerified) {
+                val fullDump = if (body.length < 2000) {
+                    body.replace("\n", " ").replace("\r", " ")
                 } else {
-                    TvType.AsianDrama
+                    "(${body.length} bytes, first 200) '${body.take(200).replace("\n", " ")}'"
                 }
-                items.add(newMovieSearchResponse(title, link, currentType) {
-                    this.posterUrl = poster
-                })
+                Log.w(TAG, "ensureCfVerified: preflight FAILED, ${body.length} bytes (shim=$isShim)")
+                Log.w(TAG, "ensureCfVerified: FULL CONTENT: $fullDump")
+            } else {
+                Log.i(TAG, "ensureCfVerified: preflight OK, ${body.length} bytes")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureCfVerified: preflight failed: ${e.message}")
+        }
+    }
+
+    private suspend fun fetchPage(url: String): String? {
+        ensureCfVerified()
+        var res = app.get(url, headers = uncompressedHeaders())
+        var body = res.text
+        Log.i(TAG, "fetchPage: $url → ${body.length} bytes, shim=${body.contains("verify_human") || body.contains("window.location")}")
+
+        if (body.contains("verify_human") || body.contains("window.location")) {
+            Log.w(TAG, "fetchPage: response is shim/marker, retrying after preflight")
+            cfVerified = false
+            ensureCfVerified()
+            res = app.get(url, headers = uncompressedHeaders())
+            body = res.text
+            Log.i(TAG, "fetchPage: retry $url → ${body.length} bytes")
+        }
+        return body.ifBlank { null }
+    }
+
+    // ------------------------------------------------------------
+    //  Homepage
+    // ------------------------------------------------------------
+    override val mainPage = mainPageOf(
+        "${mainUrl}/series/?status=&type=&order=update"                                to "Latest Update",
+        "${mainUrl}/series/?status=Ongoing&type=&order=update"                         to "Ongoing",
+        "${mainUrl}/series/?status=Completed&type=Drama&order=update"                  to "Completed Drama",
+        "${mainUrl}/series/?country%5B%5D=china&type=Drama&order=update"               to "Drama China",
+        "${mainUrl}/series/?country%5B%5D=japan&type=Drama&order=update"               to "Drama Jepang",
+        "${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
+        "${mainUrl}/series/?country%5B%5D=philippines&type=Drama&order=update"         to "Drama Philippines",
+        "${mainUrl}/series/?country%5B%5D=taiwan&type=Drama&order=update"              to "Drama Taiwan",
+        "${mainUrl}/series/?country%5B%5D=thailand&type=Drama&order=update"            to "Drama Thailand",
+        "${mainUrl}/series/?country%5B%5D=usa&type=Drama&order=update"                 to "Drama Western",
+        "${mainUrl}/series/?type=Movie&order=update"                                   to "All Movies",
+        "${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
+        "${mainUrl}/series/?country%5B%5D=japan&type=Movie&order=update"               to "Japan Movie",
+        "${mainUrl}/series/?country%5B%5D=china&type=Movie&order=update"               to "Chinese Movie",
+        "${mainUrl}/series/?country%5B%5D=thailand&type=Movie&order=update"            to "Thailand Movie",
+        "${mainUrl}/series/?country%5B%5D=taiwan&type=Movie&order=update"              to "Taiwan Movie",
+        "${mainUrl}/series/?country%5B%5D=philippines&type=Movie&order=update"         to "Philippines Movie",
+        "${mainUrl}/series/?country%5B%5D=india&type=Movie&order=update"               to "India Movie",
+        "${mainUrl}/series/?country%5B%5D=united-states&type=Movie&order=update"       to "Western Movie"
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val html = fetchPage(request.data)
+        if (html == null) {
+            Log.w(TAG, "getMainPage: fetchPage returned null for ${request.name}")
+            return newHomePageResponse(request.name, emptyList())
+        }
+        val document = Jsoup.parse(html)
+        val articles = document.select("div.listupd article.bs")
+        Log.i(TAG, "getMainPage: ${request.name} → found ${articles.size} article.bs")
+        val home = articles.mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val anchor   = selectFirst("a") ?: return null
+        val href     = fixUrlNull(anchor.attr("href")) ?: return null
+        val titleRaw = anchor.attr("title").ifBlank { this.selectFirst("div.tt")?.text()?.trim() }
+        val title    = titleRaw?.takeIf { it.isNotBlank() } ?: return null
+        val poster   = fixUrlNull(this.selectFirst("img")?.getImageAttr())
+
+        val looksLikeEpisode = Regex(
+            "[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE
+        ).containsMatchIn(href)
+
+        val cleanTitle = if (looksLikeEpisode) {
+            title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim()
+        } else title
+
+        return newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+            this.posterUrl = poster
+        }
+    }
+
+    // ------------------------------------------------------------
+    //  Search
+    // ------------------------------------------------------------
+    override suspend fun search(query: String): List<SearchResponse> {
+        val html = fetchPage("${mainUrl}/?s=${query.encodeUrl()}") ?: return emptyList()
+        val document = Jsoup.parse(html)
+        return document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+    }
+
+    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+
+    // ------------------------------------------------------------
+    //  Load
+    // ------------------------------------------------------------
+    override suspend fun load(url: String): LoadResponse? {
+        val html = fetchPage(url) ?: return null
+        val document = Jsoup.parse(html)
+
+        if (document.selectFirst("div.eplister ul > li > a") != null) {
+            return loadSeries(url, document)
+        }
+        return loadEpisode(url, document)
+    }
+
+    private suspend fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
+        val poster = pickPoster(document)
+
+        val info = parseInfo(document)
+        val tags  = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val actors = document
+            .select("div.spe span:has(b:matchesOwn(^Artis\$)) a")
+            .map { it.text().trim() }
+            .filter { it.isNotBlank() }
+        val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
+        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
+
+        val episodeAnchors = document.select("div.eplister ul > li > a").toList()
+        val episodes = episodeAnchors.reversed().mapIndexed { index, anchor ->
+            val href     = anchor.attr("href")
+            val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull() ?: (index + 1)
+            val epTitle  = anchor.selectFirst("div.epl-title")?.text()?.trim() ?: "Episode $epNumber"
+            val epPoster = fixUrlNull(anchor.selectFirst("img")?.getImageAttr())
+
+            newEpisode(href) {
+                this.name      = epTitle
+                this.episode   = epNumber
+                this.posterUrl = epPoster
             }
         }
 
-        return items
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            this.posterUrl       = poster
+            this.year            = info.year
+            this.plot            = info.plot
+            this.tags            = tags
+            this.showStatus      = info.status
+            this.duration        = info.duration
+            this.recommendations = recommendations
+            if (info.rating != null) {
+                this.score = Score.from(info.rating, 10)
+            }
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
+        }
+    }
+
+    private suspend fun loadEpisode(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
+        val title      = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
+        val seriesName = document.selectFirst("h2[itemprop=partOfSeries], div.infolimit h2")
+            ?.text()?.trim()?.takeIf { it.isNotBlank() }
+        val poster = pickPoster(document)
+
+        val info = parseInfo(document)
+        val tags  = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val actors = document
+            .select("div.spe span:has(b:matchesOwn(^Artis\$)) a")
+            .map { it.text().trim() }
+            .filter { it.isNotBlank() }
+        val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
+        val recommendations = document.select("div.listupd article.bs").mapNotNull { it.toRecommendation() }
+
+        val displayTitle = if (seriesName != null && !title.contains(seriesName, ignoreCase = true)) {
+            "$seriesName - $title"
+        } else title
+
+        return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
+            this.posterUrl       = poster
+            this.year            = info.year
+            this.plot            = info.plot
+            this.tags            = tags
+            this.duration        = info.duration
+            this.recommendations = recommendations
+            if (info.rating != null) {
+                this.score = Score.from(info.rating, 10)
+            }
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
+        }
+    }
+
+    private fun Element.toRecommendation(): SearchResponse? {
+        val anchor = selectFirst("a") ?: return null
+        val href   = fixUrlNull(anchor.attr("href")) ?: return null
+        val title  = anchor.attr("title").ifBlank { this.selectFirst("div.tt")?.text()?.trim() }
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val poster = fixUrlNull(this.selectFirst("img")?.getImageAttr())
+        val looksLikeEpisode = Regex(
+            "[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE
+        ).containsMatchIn(href)
+        val type = if (looksLikeEpisode) TvType.TvSeries else TvType.Movie
+        val cleanTitle = if (looksLikeEpisode) {
+            title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "").trim()
+        } else title
+        return newMovieSearchResponse(cleanTitle, href, type) {
+            this.posterUrl = poster
+        }
+    }
+
+    // ------------------------------------------------------------
+    //  loadLinks
+    // ------------------------------------------------------------
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val html = fetchPage(data) ?: return false
+        val document = Jsoup.parse(html)
+        var dispatched = false
+
+        document.selectFirst("div.player-embed iframe")?.let { iframe ->
+            val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
+            if (src.isNotBlank() && loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
+                dispatched = true
+            }
+        }
+
+        val mirrors = document.select("select.mirror option[value]:not([disabled])")
+        for (option in mirrors) {
+            val encoded = option.attr("value").trim()
+            if (encoded.isBlank() || encoded.equals("Pilih Server Video", ignoreCase = true)) continue
+            try {
+                val decoded = base64Decode(encoded.replace("\\s".toRegex(), ""))
+                val mirrorSrc = Jsoup.parse(decoded).selectFirst("iframe")?.let { el ->
+                    el.attr("src").ifBlank { el.attr("data-src") }
+                }
+                if (!mirrorSrc.isNullOrBlank() &&
+                    loadExtractor(httpsify(mirrorSrc), data, subtitleCallback, callback)
+                ) {
+                    dispatched = true
+                }
+            } catch (_: Exception) {
+                // skip broken mirror
+            }
+        }
+
+        for (a in document.select("div.dlbox li span.e a[href]")) {
+            val href = a.attr("href").trim()
+            if (href.isNotBlank() && loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
+                dispatched = true
+            }
+        }
+        return dispatched
+    }
+
+    // ============================================================
+    //  Helpers
+    // ============================================================
+    private data class SeriesInfo(
+        val status: ShowStatus,
+        val year: Int?,
+        val plot: String?,
+        val rating: Double?,
+        val duration: Int?
+    )
+
+    private fun pickPoster(document: org.jsoup.nodes.Document): String? {
+        val raw = document.selectFirst("div.bigcontent img, div.thumb img")?.getImageAttr() ?: return null
+        return fixUrlNull(raw)
+    }
+
+    private fun parseInfo(document: org.jsoup.nodes.Document): SeriesInfo {
+        val plot = document.select("div.entry-content p, div.desc p")
+            .joinToString("\n") { it.text() }
+            .trim()
+            .ifBlank { null }
+
+        var status: ShowStatus = ShowStatus.Completed
+        var year: Int?          = null
+        var duration: Int?      = null
+        var rating: Double?     = null
+
+        for (span in document.select("div.spe > span")) {
+            val label = span.selectFirst("b")?.text()?.trim()?.removeSuffix(":") ?: continue
+            val value = span.ownText().trim()
+            when (label.lowercase()) {
+                "status" -> status = when (value.lowercase()) {
+                    "ongoing" -> ShowStatus.Ongoing
+                    else      -> ShowStatus.Completed
+                }
+                "dirilis" -> year = value.substringBefore('-').trim().takeLast(4).toIntOrNull()
+                "durasi"  -> duration = parseDurationMinutes(value)
+                "rating"  -> rating = value.toDoubleOrNull()
+            }
+        }
+
+        if (rating == null) {
+            val ratingText = document.selectFirst("div.rating strong")?.text()
+            if (ratingText != null) {
+                rating = ratingText.replace("Rating", "", ignoreCase = true).trim().toDoubleOrNull()
+            }
+        }
+
+        return SeriesInfo(status, year, plot, rating, duration)
+    }
+
+    private fun parseDurationMinutes(text: String?): Int? {
+        if (text.isNullOrBlank()) return null
+        val hours   = Regex("(\\d+)\\s*hr").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val minutes = Regex("(\\d+)\\s*min").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val total   = hours * 60 + minutes
+        return if (total > 0) total else null
+    }
+
+    // MEMPERBAIKI EKSTRAKSI POSTER: Mengambil teks mentah atribut DOM tanpa merusak path
+    private fun Element.getImageAttr(): String? {
+        fun cleanup(url: String?): String? {
+            if (url.isNullOrBlank()) return null
+            return url
+                .replace(Regex("[?&]resize=\\d+,\\d+"), "")
+                .replace(Regex("[?&]quality=\\d+"), "")
+        }
+        val rawUrl = when {
+            hasAttr("data-src")      -> attr("data-src")
+            hasAttr("data-lazy-src") -> attr("data-lazy-src")
+            hasAttr("srcset")        -> attr("srcset").substringBefore(" ")
+            hasAttr("src")           -> attr("src")
+            else                     -> null
+        }
+        return cleanup(rawUrl)
+    }
+
+    private fun uncompressedHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding" to "identity",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-User" to "?1",
+        "Upgrade-Insecure-Requests" to "1",
+        "Connection" to "keep-alive"
+    )
+
+    private fun String.encodeUrl(): String =
+        java.net.URLEncoder.encode(this, "UTF-8").replace("+", "%20")
+
+    companion object {
+        private const val TAG = "OppaDrama"
+
+        @Volatile
+        private var cfVerified: Boolean = false
     }
 }
