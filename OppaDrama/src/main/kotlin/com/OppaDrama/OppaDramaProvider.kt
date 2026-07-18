@@ -16,6 +16,7 @@ class OppaDramaProvider : MainAPI() {
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
+    // Injeksi Headers & Cookie mutlak hasil sniffing lalu lintas paket data browser desktop
     private val desktopBypassHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
         "Cookie" to "user_is_human=true",
@@ -25,10 +26,27 @@ class OppaDramaProvider : MainAPI() {
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
+    // Adopsi penuh susunan kategori lengkap sesuai dokumentasi WordPress Dramastream API
     override val mainPage = mainPageOf(
-        Pair("latest", "Update Episode Terbaru"),
-        Pair("movies", "Film Pilihan"),
-        Pair("ongoing", "Sedang Tayang (Ongoing)")
+        Pair("${mainUrl}/series/?status=&type=&order=update", "Latest Update"),
+        Pair("${mainUrl}/series/?status=Ongoing&type=&order=update", "Ongoing"),
+        Pair("${mainUrl}/series/?status=Completed&type=Drama&order=update", "Completed Drama"),
+        Pair("${mainUrl}/series/?country%5B%5D=china&type=Drama&order=update", "Drama China"),
+        Pair("${mainUrl}/series/?country%5B%5D=japan&type=Drama&order=update", "Drama Jepang"),
+        Pair("${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Drama&order=update", "Drama Korea"),
+        Pair("${mainUrl}/series/?country%5B%5D=philippines&type=Drama&order=update", "Drama Philippines"),
+        Pair("${mainUrl}/series/?country%5B%5D=taiwan&type=Drama&order=update", "Drama Taiwan"),
+        Pair("${mainUrl}/series/?country%5B%5D=thailand&type=Drama&order=update", "Drama Thailand"),
+        Pair("${mainUrl}/series/?country%5B%5D=usa&type=Drama&order=update", "Drama Western"),
+        Pair("${mainUrl}/series/?type=Movie&order=update", "All Movies"),
+        Pair("${mainUrl}/series/?country%5B%5D=south-korea&status=&type=Movie&order=update", "Korean Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=japan&type=Movie&order=update", "Japan Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=china&type=Movie&order=update", "Chinese Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=thailand&type=Movie&order=update", "Thailand Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=taiwan&type=Movie&order=update", "Taiwan Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=philippines&type=Movie&order=update", "Philippines Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=india&type=Movie&order=update", "India Movie"),
+        Pair("${mainUrl}/series/?country%5B%5D=united-states&type=Movie&order=update", "Western Movie")
     )
 
     private fun Element.extractPoster(): String? {
@@ -45,86 +63,49 @@ class OppaDramaProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val targetUrl = when (request.data) {
-            "latest" -> if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
-            "movies" -> if (page > 1) "$mainUrl/series/page/$page/?type=Movie&order=update" else "$mainUrl/"
-            "ongoing" -> if (page > 1) "$mainUrl/series/page/$page/?status=Ongoing&type=&order=update" else "$mainUrl/"
-            else -> "$mainUrl/"
+        // Manipulasi URL dinamis untuk menyisipkan penanda halaman arsip secara presisi
+        val targetUrl = if (page > 1) {
+            if (request.data.contains("/series/?")) {
+                request.data.replace("/series/?", "/series/page/$page/?")
+            } else if (request.data.contains("?")) {
+                val parts = request.data.split("?")
+                "${parts[0]}page/$page/?${parts[1]}"
+            } else {
+                "${request.data}page/$page/"
+            }
+        } else {
+            request.data
         }
 
         val html = app.get(targetUrl, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
 
-        when (request.data) {
-            "latest" -> {
-                for (element in document.select("article.bs")) {
-                    val anchor = element.select("div.bsx a").first()
-                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                    val link = anchor?.attr("href")
-                    val poster = element.extractPoster()
-                    
-                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                        items.add(newTvSeriesSearchResponse(title, link, TvType.AsianDrama) {
-                            this.posterUrl = poster
-                        })
-                    }
-                }
-            }
-            "movies" -> {
-                for (element in document.select("article.stylefor")) {
-                    val anchor = element.select("div.bsx a").first()
-                    val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                    val link = anchor?.attr("href")
-                    val poster = element.extractPoster()
+        for (element in document.select("article.bs")) {
+            val anchor = element.select("div.bsx a").first()
+            val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
+            val link = anchor?.attr("href")
+            val poster = element.extractPoster()
+            val typeStr = element.select(".typez").first()?.text()
 
-                    if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                        items.add(newMovieSearchResponse(title, link, TvType.Movie) {
-                            this.posterUrl = poster
-                        })
-                    }
-                }
-                if (items.isEmpty()) {
-                    for (element in document.select("article.bs")) {
-                        val anchor = element.select("div.bsx a").first()
-                        val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                        val link = anchor?.attr("href")
-                        val poster = element.extractPoster()
+            if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                // Perbaikan Judul: Bersihkan teks kaku "Episode X" agar tampilan beranda rapi
+                val looksLikeEpisode = link.contains("-episode-") || title.contains("Episode", ignoreCase = true)
+                val cleanTitle = if (looksLikeEpisode) {
+                    title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
+                         .replace(Regex("\\s*Ep\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
+                         .trim()
+                } else title
 
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newMovieSearchResponse(title, link, TvType.Movie) {
-                                this.posterUrl = poster
-                            })
-                        }
-                    }
-                }
-            }
-            "ongoing" -> {
-                if (page == 1) {
-                    for (element in document.select(".ongoingseries li")) {
-                        val anchor = element.select("a").first()
-                        val link = anchor?.attr("href")
-                        val title = anchor?.select("span.l")?.first()?.text()?.trim()
-                        
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newTvSeriesSearchResponse(title, link, TvType.AsianDrama) {
-                                this.posterUrl = null
-                            })
-                        }
-                    }
+                val isMovie = request.data.contains("type=Movie") || typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")
+                if (isMovie) {
+                    items.add(newMovieSearchResponse(cleanTitle, link, TvType.Movie) {
+                        this.posterUrl = poster
+                    })
                 } else {
-                    for (element in document.select("article.bs")) {
-                        val anchor = element.select("div.bsx a").first()
-                        val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
-                        val link = anchor?.attr("href")
-                        val poster = element.extractPoster()
-
-                        if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                            items.add(newTvSeriesSearchResponse(title, link, TvType.AsianDrama) {
-                                this.posterUrl = poster
-                            })
-                        }
-                    }
+                    items.add(newTvSeriesSearchResponse(cleanTitle, link, TvType.AsianDrama) {
+                        this.posterUrl = poster
+                    })
                 }
             }
         }
@@ -146,11 +127,19 @@ class OppaDramaProvider : MainAPI() {
             val typeStr = element.select(".typez").first()?.text()
 
             if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
+                // Perbaikan Judul: Bersihkan teks episode juga pada hasil pencarian global
+                val looksLikeEpisode = link.contains("-episode-") || title.contains("Episode", ignoreCase = true)
+                val cleanTitle = if (looksLikeEpisode) {
+                    title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
+                         .replace(Regex("\\s*Ep\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
+                         .trim()
+                } else title
+
                 val isMovie = typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")
                 if (isMovie) {
-                    items.add(newMovieSearchResponse(title, link, TvType.Movie) { this.posterUrl = poster })
+                    items.add(newMovieSearchResponse(cleanTitle, link, TvType.Movie) { this.posterUrl = poster })
                 } else {
-                    items.add(newTvSeriesSearchResponse(title, link, TvType.AsianDrama) { this.posterUrl = poster })
+                    items.add(newTvSeriesSearchResponse(cleanTitle, link, TvType.AsianDrama) { this.posterUrl = poster })
                 }
             }
         }
@@ -163,7 +152,6 @@ class OppaDramaProvider : MainAPI() {
         val html = app.get(url, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
 
-        // Deteksi tipe konten secara akurat dari kontainer informasi .spe span web target
         var isMovie = url.contains("/movie-")
         for (span in document.select("div.spe span")) {
             val label = span.select("b").first()?.text()?.lowercase() ?: ""
@@ -174,7 +162,6 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
-        // Jika ini halaman episode tunggal, ambil tautan bapak serialnya lewat indeks Breadcrumb kedua
         val breadcrumbs = document.select(".ts-breadcrumb ol li a")
         if (breadcrumbs.size >= 3 && !isMovie) {
             val parentUrl = breadcrumbs[1].attr("href")
@@ -280,7 +267,6 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
-        // Pengalihan Multi-Kualitas Film: Gabungkan seluruh link baris pseudo-episode menjadi opsi di dalam player
         if (isMovie) {
             val pseudoEpisodes = document.select("div.eplister ul li a")
             if (pseudoEpisodes.isNotEmpty()) {
