@@ -26,7 +26,7 @@ class OppaDramaProvider : MainAPI() {
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
-    // Adopsi penuh susunan kategori lengkap sesuai dokumentasi WordPress Dramastream API
+    // Adopsi penuh susunan daftar kategori terlengkap dari WordPress Dramastream Engine
     override val mainPage = mainPageOf(
         Pair("${mainUrl}/series/?status=&type=&order=update", "Latest Update"),
         Pair("${mainUrl}/series/?status=Ongoing&type=&order=update", "Ongoing"),
@@ -63,16 +63,9 @@ class OppaDramaProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Manipulasi URL dinamis untuk menyisipkan penanda halaman arsip secara presisi
+        // Penanganan paginasi struktur tautan dinamis arsip kategori WordPress
         val targetUrl = if (page > 1) {
-            if (request.data.contains("/series/?")) {
-                request.data.replace("/series/?", "/series/page/$page/?")
-            } else if (request.data.contains("?")) {
-                val parts = request.data.split("?")
-                "${parts[0]}page/$page/?${parts[1]}"
-            } else {
-                "${request.data}page/$page/"
-            }
+            request.data.replace("/series/?", "/series/page/$page/?")
         } else {
             request.data
         }
@@ -89,13 +82,8 @@ class OppaDramaProvider : MainAPI() {
             val typeStr = element.select(".typez").first()?.text()
 
             if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                // Perbaikan Judul: Bersihkan teks kaku "Episode X" agar tampilan beranda rapi
-                val looksLikeEpisode = link.contains("-episode-") || title.contains("Episode", ignoreCase = true)
-                val cleanTitle = if (looksLikeEpisode) {
-                    title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
-                         .replace(Regex("\\s*Ep\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
-                         .trim()
-                } else title
+                // Pembersihan judul mutlak dari deretan nomor episode atau sub teks tambahan
+                val cleanTitle = title.replace(Regex("\\s*(?:Episode|Ep|Eps)\\s*\\d+.*$", RegexOption.IGNORE_CASE), "").trim()
 
                 val isMovie = request.data.contains("type=Movie") || typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")
                 if (isMovie) {
@@ -127,13 +115,7 @@ class OppaDramaProvider : MainAPI() {
             val typeStr = element.select(".typez").first()?.text()
 
             if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                // Perbaikan Judul: Bersihkan teks episode juga pada hasil pencarian global
-                val looksLikeEpisode = link.contains("-episode-") || title.contains("Episode", ignoreCase = true)
-                val cleanTitle = if (looksLikeEpisode) {
-                    title.replace(Regex("\\s*Episode\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
-                         .replace(Regex("\\s*Ep\\s*\\d+\\s*$", RegexOption.IGNORE_CASE), "")
-                         .trim()
-                } else title
+                val cleanTitle = title.replace(Regex("\\s*(?:Episode|Ep|Eps)\\s*\\d+.*$", RegexOption.IGNORE_CASE), "").trim()
 
                 val isMovie = typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")
                 if (isMovie) {
@@ -175,8 +157,8 @@ class OppaDramaProvider : MainAPI() {
     }
 
     private suspend fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
+        val title = document.select("h1.entry-title").first()?.text()?.trim() ?: return null
+        val poster = fixUrlNull(document.select("div.bigcontent img, div.thumb img").first()?.extractPoster())
         val info = parseInfo(document)
 
         val episodes = mutableListOf<Episode>()
@@ -186,9 +168,9 @@ class OppaDramaProvider : MainAPI() {
         for (i in reversedAnchors.indices) {
             val anchor = reversedAnchors[i]
             val href = anchor.attr("href")
-            val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull() ?: (i + 1)
-            val epTitle = anchor.selectFirst("div.epl-title")?.text()?.trim() ?: "Episode $epNumber"
-            val epPoster = fixUrlNull(anchor.selectFirst("img")?.extractPoster())
+            val epNumber = anchor.select("div.epl-num").first()?.text()?.trim()?.toIntOrNull() ?: (i + 1)
+            val epTitle = anchor.select("div.epl-title").first()?.text()?.trim() ?: "Episode $epNumber"
+            val epPoster = fixUrlNull(anchor.select("img").first()?.extractPoster())
 
             episodes.add(newEpisode(href) {
                 this.name = epTitle
@@ -197,32 +179,72 @@ class OppaDramaProvider : MainAPI() {
             })
         }
 
+        val recommendations = mutableListOf<SearchResponse>()
+        for (element in document.select("div.listupd article.bs")) {
+            element.toRecommendation()?.let { recommendations.add(it) }
+        }
+
+        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val actors = document.select("div.spe span:has(b:matchesOwn(^Artis\$)) a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val trailer = document.select("div.bixbox.trailer iframe").first()?.attr("src")
+
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
             this.year = info.year
             this.plot = info.plot
             this.showStatus = info.status
             this.duration = info.duration
+            this.tags = tags
+            this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
+            if (actors.isNotEmpty()) this.actors = actors.map { ActorData(Actor(it)) }
+            if (!trailer.isNullOrBlank()) this.trailers.add(TrailerData(trailer, null, false))
         }
     }
 
     private suspend fun loadMovie(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
+        val title = document.select("h1.entry-title").first()?.text()?.trim() ?: return null
+        val poster = fixUrlNull(document.select("div.bigcontent img, div.thumb img").first()?.extractPoster())
         val info = parseInfo(document)
+
+        val recommendations = mutableListOf<SearchResponse>()
+        for (element in document.select("div.listupd article.bs")) {
+            element.toRecommendation()?.let { recommendations.add(it) }
+        }
+
+        val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val actors = document.select("div.spe span:has(b:matchesOwn(^Artis\$)) a").map { it.text().trim() }.filter { it.isNotBlank() }
+        val trailer = document.select("div.bixbox.trailer iframe").first()?.attr("src")
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
             this.year = info.year
             this.plot = info.plot
             this.duration = info.duration
+            this.tags = tags
+            this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
+            if (actors.isNotEmpty()) this.actors = actors.map { ActorData(Actor(it)) }
+            if (!trailer.isNullOrBlank()) this.trailers.add(TrailerData(trailer, null, false))
+        }
+    }
+
+    private fun Element.toRecommendation(): SearchResponse? {
+        val anchor = this.select("a").first() ?: return null
+        val href = fixUrlNull(anchor.attr("href")) ?: return null
+        val title = anchor.attr("title").ifBlank { this.select("div.tt").first()?.text()?.trim() }?.takeIf { it.isNotBlank() } ?: return null
+        val poster = fixUrlNull(this.select("img").first()?.extractPoster())
+        val looksLikeEpisode = Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
+        val type = if (looksLikeEpisode) TvType.TvSeries else TvType.Movie
+        val cleanTitle = title.replace(Regex("\\s*(?:Episode|Ep|Eps)\\s*\\d+.*$", RegexOption.IGNORE_CASE), "").trim()
+        
+        return newMovieSearchResponse(cleanTitle, href, type) {
+            this.posterUrl = poster
         }
     }
 
     private suspend fun parseEmbeds(doc: org.jsoup.nodes.Document, dataUrl: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        doc.selectFirst("div.player-embed iframe")?.let { iframe ->
+        doc.select("div.player-embed iframe").first()?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.isNotBlank()) loadExtractor(httpsify(src), dataUrl, subtitleCallback, callback)
         }
@@ -233,7 +255,7 @@ class OppaDramaProvider : MainAPI() {
             if (encoded.isBlank() || encoded.equals("Pilih Server Video", ignoreCase = true)) continue
             try {
                 val decoded = base64Decode(encoded.replace("\\s".toRegex(), ""))
-                val mirrorSrc = Jsoup.parse(decoded).selectFirst("iframe")?.let { el ->
+                val mirrorSrc = Jsoup.parse(decoded).select("iframe").first()?.let { el ->
                     el.attr("src").ifBlank { el.attr("data-src") }
                 }
                 if (!mirrorSrc.isNullOrBlank()) {
