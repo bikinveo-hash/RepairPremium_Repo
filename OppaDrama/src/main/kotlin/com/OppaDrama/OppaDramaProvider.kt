@@ -52,10 +52,6 @@ class OppaDramaProvider : MainAPI() {
     // PENTING: flag disimpan di companion object biar share across
     // instance. Cloudstream bisa bikin instance baru per request —
     // instance flag gak akan nyimpen state.
-    companion object {
-        @Volatile
-        private var cfVerified: Boolean = false
-    }
 
     private suspend fun ensureCfVerified() {
         if (cfVerified) return
@@ -440,5 +436,8 @@ class OppaDramaProvider : MainAPI() {
 
     companion object {
         private const val TAG = "OppaDrama"
+
+        @Volatile
+        private var cfVerified: Boolean = false
     }
 }
