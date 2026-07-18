@@ -1,13 +1,9 @@
-// use an integer for version numbers
-version = 10
-
+version = 1
 
 cloudstream {
+    description = "OppaDrama — Streaming Drama Korea, Movie and TV Series"
     language = "id"
-    // All of these properties are optional, you can safely remove them
-
-    // description = "Lorem Ipsum"
-    authors = listOf("aldry84")
+    authors = listOf("Miku")
 
     /**
      * Status int as the following:
@@ -16,14 +12,12 @@ cloudstream {
      * 2: Slow
      * 3: Beta only
      * */
-    status = 1 // will be 3 if unspecified
+    status = 1
     tvTypes = listOf(
         "AsianDrama",
         "TvSeries",
         "Movie",
     )
 
-
-    iconUrl = "http://i3.wp.com/45.11.57.192/wp-content/uploads/2021/05/Oppadrama.png"
-
+    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://oppa.biz&size=128"
 }
