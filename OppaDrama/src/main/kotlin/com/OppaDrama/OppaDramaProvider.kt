@@ -109,7 +109,7 @@ class OppaDramaProvider : MainAPI() {
         return loadEpisode(url, document)
     }
 
-    private fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
+    private suspend fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
         val poster = pickPoster(document)
 
@@ -138,20 +138,26 @@ class OppaDramaProvider : MainAPI() {
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.posterUrl      = poster
-            this.year           = info.year
-            this.plot           = info.plot
-            this.tags           = tags
-            this.showStatus     = info.status
-            this.duration       = info.duration
+            this.posterUrl       = poster
+            this.year            = info.year
+            this.plot            = info.plot
+            this.tags            = tags
+            this.showStatus      = info.status
+            this.duration        = info.duration
             this.recommendations = recommendations
-            if (info.rating != null) addScore(info.rating.toString(), 10)
-            if (actors.isNotEmpty()) addActors(actors)
-            if (!trailer.isNullOrBlank()) addTrailer(trailer)
+            if (info.rating != null) {
+                this.score = Score.from(info.rating.toString(), 10)
+            }
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
         }
     }
 
-    private fun loadEpisode(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
+    private suspend fun loadEpisode(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title      = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
         val seriesName = document.selectFirst("h2[itemprop=partOfSeries], div.infolimit h2")
             ?.text()?.trim()?.takeIf { it.isNotBlank() }
@@ -171,15 +177,21 @@ class OppaDramaProvider : MainAPI() {
         } else title
 
         return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
-            this.posterUrl      = poster
-            this.year           = info.year
-            this.plot           = info.plot
-            this.tags           = tags
-            this.duration       = info.duration
+            this.posterUrl       = poster
+            this.year            = info.year
+            this.plot            = info.plot
+            this.tags            = tags
+            this.duration        = info.duration
             this.recommendations = recommendations
-            if (info.rating != null) addScore(info.rating.toString(), 10)
-            if (actors.isNotEmpty()) addActors(actors)
-            if (!trailer.isNullOrBlank()) addTrailer(trailer)
+            if (info.rating != null) {
+                this.score = Score.from(info.rating.toString(), 10)
+            }
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
         }
     }
 
