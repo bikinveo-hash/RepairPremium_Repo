@@ -1,11 +1,9 @@
-// Bu plugin CloudStream OppaDrama — sumber https://oppa.biz
+// Bu plugin CloudStream OppaDrama — berdasarkan hasil uji riil Termux
 
 package com.OppaDrama
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.api.Log
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -318,21 +316,17 @@ class OppaDramaProvider : MainAPI() {
         return if (total > 0) total else null
     }
 
-    // FIX FINAL: Rekonstruksi URL untuk membuang proxy Jetpack CDN hancur dan diarahkan langsung ke domain utama via HTTPS
+    // BERDASARKAN HASIL TERMUX: Kita ambil URL Jetpack CDN asli secara utuh beserta parameternya, 
+    // namun kita paksa ganti menjadi jalur HTTPS agar lolos restriksi Cleartext internal Android OS.
     private fun Element.getImageAttr(): String? {
         val url = attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
         if (url.isBlank()) return null
         
-        val cleanUrl = if (url.contains("/wp-content/")) {
-            mainUrl.removeSuffix("/") + "/wp-content/" + url.substringAfter("/wp-content/")
+        return if (url.startsWith("http://")) {
+            "https://" + url.removePrefix("http://")
         } else {
             url
         }
-
-        return cleanUrl
-            .replace(Regex("[?&]resize=\\d+,\\d+"), "")
-            .replace(Regex("[?&]quality=\\d+"), "")
-            .replace("http://", "https://") 
     }
 
     private fun browserHeaders(): Map<String, String> = mapOf(
