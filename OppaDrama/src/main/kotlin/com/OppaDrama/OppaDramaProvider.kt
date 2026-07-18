@@ -70,7 +70,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
             this.posterUrl = poster
-            this.posterHeaders = imageHeaders() // FIX: Menggunakan header khusus asset gambar
+            this.posterHeaders = imageHeaders()
         }
     }
 
@@ -128,7 +128,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl       = poster
-            this.posterHeaders   = imageHeaders() // FIX: Menggunakan header khusus asset gambar
+            this.posterHeaders   = imageHeaders()
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -168,7 +168,7 @@ class OppaDramaProvider : MainAPI() {
 
         return newMovieLoadResponse(displayTitle, url, TvType.Movie, url) {
             this.posterUrl       = poster
-            this.posterHeaders   = imageHeaders() // FIX: Menggunakan header khusus asset gambar
+            this.posterHeaders   = imageHeaders()
             this.year            = info.year
             this.plot            = info.plot
             this.tags            = tags
@@ -201,7 +201,7 @@ class OppaDramaProvider : MainAPI() {
         } else title
         return newMovieSearchResponse(cleanTitle, href, type) {
             this.posterUrl = poster
-            this.posterHeaders = imageHeaders() // FIX: Menggunakan header khusus asset gambar
+            this.posterHeaders = imageHeaders()
         }
     }
 
@@ -318,12 +318,18 @@ class OppaDramaProvider : MainAPI() {
         return if (total > 0) total else null
     }
 
+    // FIX FINAL: Rekonstruksi URL untuk membuang proxy Jetpack CDN hancur dan diarahkan langsung ke domain utama via HTTPS
     private fun Element.getImageAttr(): String? {
         val url = attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
         if (url.isBlank()) return null
         
-        // Mempertahankan rute Jetpack CDN IP asli dari server Wordpress namun dipaksa masuk protokol HTTPS
-        return url
+        val cleanUrl = if (url.contains("/wp-content/")) {
+            mainUrl.removeSuffix("/") + "/wp-content/" + url.substringAfter("/wp-content/")
+        } else {
+            url
+        }
+
+        return cleanUrl
             .replace(Regex("[?&]resize=\\d+,\\d+"), "")
             .replace(Regex("[?&]quality=\\d+"), "")
             .replace("http://", "https://") 
@@ -341,7 +347,6 @@ class OppaDramaProvider : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
-    // FIX BARU: Header khusus untuk pengunggah asset media gambar (Bypass WAF Cloudflare Image Blocking)
     private fun imageHeaders(): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
