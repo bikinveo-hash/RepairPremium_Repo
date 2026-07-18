@@ -18,8 +18,6 @@ import android.util.Base64
 
 /**
  * 1. EarnVids / Smoothpre Extractor
- * Alias backend extractor: smoothpre.com menggunakan arsitektur yang sama dengan vidhidepro.com.
- * Mewarisi langsung dari VidHidePro untuk efisiensi performa tanpa boilerplate.
  */
 class Smoothpre : VidHidePro() {
     override var name = "EarnVids"
@@ -28,7 +26,6 @@ class Smoothpre : VidHidePro() {
 
 /**
  * 2. BuzzServer Extractor
- * Pengekstrak hoster direct-download buzzheavier.com menggunakan skema manual redirect capture.
  */
 class BuzzServer : ExtractorApi() {
     override val name = "BuzzServer"
@@ -76,7 +73,6 @@ class BuzzServer : ExtractorApi() {
 
 /**
  * 3. Emturbovid Extractor
- * Kebal dari Cross-Domain Header Strip via manual 301 redirection capture & DOM data-hash mapping.
  */
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
@@ -180,7 +176,6 @@ open class EmturbovidExtractor : ExtractorApi() {
 
 /**
  * 4. Abyss / Hydrax Extractor
- * Perbaikan Forensik Pemecah Proteksi Enkripsi Multi-Token & Perutean Cluster API Dinamis.
  */
 class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -211,7 +206,6 @@ class AbyssExtractor : ExtractorApi() {
             )
 
             val html = app.get(url, headers = headers).text
-            
             val datasRaw = Regex("""const\s+datas\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
             
             var slug = Regex("[?&]v=([^&#]+)").find(url)?.groupValues?.getOrNull(1)?.trim()
@@ -219,13 +213,14 @@ class AbyssExtractor : ExtractorApi() {
             var userId = ""
 
             if (!datasRaw.isNullOrBlank()) {
-                // Perbaikan Mutlak: Menggunakan dekoder biner bawaan Android SDK asli
                 val decodedDatas = String(Base64.decode(datasRaw, Base64.DEFAULT), Charsets.UTF_8)
+                
+                // PERBAIKAN: Menggunakan format String escaping standar agar polanya terbaca sempurna tanpa terganggu triple-quotes
                 if (slug.isNullOrBlank()) {
-                    slug = Regex("""\"slug\"\s*:\s*\"([^\"]+)\"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim()
+                    slug = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim()
                 }
-                md5Id = Regex("""\"md5_id\"\s*:\s*\"?(\d+)\"?"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
-                userId = Regex("""\"user_id\"\s*:\s*\"?(\d+)\"?"""").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
+                md5Id = Regex("\"md5_id\"\\s*:\\s*\"?(\\d+)\"?").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
+                userId = Regex("\"user_id\"\\s*:\\s*\"?(\\d+)\"?").find(decodedDatas)?.groupValues?.getOrNull(1)?.trim() ?: ""
             }
 
             if (slug.isNullOrBlank()) {
@@ -289,7 +284,6 @@ class AbyssExtractor : ExtractorApi() {
 
 /**
  * 5. Minochinos / VidHide Obfuscated Extractor
- * Bypass proteksi kompresi Dean Edwards Packer skrip penyamaran stream menggunakan unpacking engine internal core.
  */
 class MinochinosExtractor : ExtractorApi() {
     override var name = "Minochinos"
