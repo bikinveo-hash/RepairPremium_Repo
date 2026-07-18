@@ -2,6 +2,7 @@ package com.OppaDrama
 
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.VidHidePro
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -212,10 +213,5 @@ open class EmturbovidExtractor : ExtractorApi() {
 
     companion object {
         private const val TAG = "Emturbovid"
-        // Mirrors the constant from the upstream `USER_AGENT` import in
-        // MainAPI.kt. Defined locally to keep this file standalone.
-        private const val USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
     }
 }
