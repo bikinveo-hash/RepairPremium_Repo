@@ -1,5 +1,6 @@
 package com.OppaDrama
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -29,6 +30,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 /**
@@ -96,14 +98,10 @@ class OppaDramaProvider : MainAPI() {
     ): HomePageResponse {
         val url = "$mainUrl/${request.data}&page=$page"
 
-        val document = try {
-            app.get(url).document
-        } catch (e: Exception) {
-            // Some deployments emit a `?verify_human=1` shim. Re-trying with
-            // the marker forces the upstream app to drop the cookie set by
-            // the verification shim.
-            app.get("$url&verify_human=1").document
-        }
+        val document = fetchDocument(url) ?: return newHomePageResponse(
+            HomePageList(request.name, emptyList(), request.horizontalImages),
+            hasNext = false,
+        )
 
         val items = document.select("div.listupd article.bs")
             .mapNotNull { it.toSearchResult() }
@@ -125,11 +123,7 @@ class OppaDramaProvider : MainAPI() {
             "$mainUrl/page/$page/?s=$encoded"
         }
 
-        val document = try {
-            app.get(url).document
-        } catch (e: Exception) {
-            return null
-        }
+        val document = fetchDocument(url) ?: return null
 
         val results = document.select("div.listupd article.bs")
             .mapNotNull { it.toSearchResult() }
@@ -143,11 +137,7 @@ class OppaDramaProvider : MainAPI() {
     // Load
     // ------------------------------------------------------------
     override suspend fun load(url: String): LoadResponse? {
-        val document = try {
-            app.get(url).document
-        } catch (e: Exception) {
-            return null
-        }
+        val document = fetchDocument(url) ?: return null
 
         // Two page shapes live under this template:
         //   (A) Series index page – has `div.eplister ul > li > a`
@@ -168,11 +158,7 @@ class OppaDramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val document = try {
-            app.get(data).document
-        } catch (e: Exception) {
-            return false
-        }
+        val document = fetchDocument(data) ?: return false
 
         var dispatched = false
 
@@ -365,6 +351,52 @@ class OppaDramaProvider : MainAPI() {
     //  Parsing helpers
     // ============================================================
 
+    /**
+     * Wrapper around [app.get] that handles the site's
+     * `?verify_human=1` challenge.
+     *
+     * The challenge is a small JS shim that appends the marker to the
+     * URL. Sending the marker up-front (i.e. requesting
+     * `<url>&verify_human=1` directly) makes the server skip the shim
+     * and return the real HTML in a single round-trip. We also follow
+     * up with the plain URL in case the marker is no longer required,
+     * and fall back to a second pass if the first response still looks
+     * like a challenge page.
+     */
+    private suspend fun fetchDocument(url: String): Document? {
+        val sep = if (url.contains("?")) "&" else "?"
+
+        fun looksLikeChallenge(doc: Document?): Boolean {
+            if (doc == null) return false
+            // The shim is a single ~430-byte HTML page containing the
+            // literal "verify_human" in an inline script. Anything that
+            // small and lacking the real DOM markers is the challenge.
+            val html = doc.outerHtml()
+            if (html.contains("verify_human", ignoreCase = true)) return true
+            val body = doc.body()?.text().orEmpty()
+            return body.contains("Verifying your browser", ignoreCase = true)
+        }
+
+        return try {
+            val marked = app.get("$url${sep}verify_human=1").document
+            if (looksLikeChallenge(marked)) {
+                Log.w(TAG, "challenge still present, retrying once more")
+                app.get(url).document
+            } else {
+                marked
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchDocument failed for $url: ${e.message}, retrying")
+            try {
+                app.get(url).document
+            } catch (e2: Exception) {
+                Log.e(TAG, "fetchDocument retry also failed for $url: ${e2.message}")
+                null
+            }
+        }
+    }
+
+
     private data class SeriesInfo(
         val status: ShowStatus,
         val year: Int?,
@@ -496,8 +528,7 @@ class OppaDramaProvider : MainAPI() {
     // ------------------------------------------------------------
     // Image attribute picker
     // ------------------------------------------------------------
-    private fun Element.getImageAttr(): String? {
-        // The wpx-hosted images (i1.wp.com, i2.wp.com) ship an extra query
+    private fun Element.getImageAttr(): String? {        // The wpx-hosted images (i1.wp.com, i2.wp.com) ship an extra query
         // string we don't need; strip the resize suffix to get the original.
         fun cleanup(url: String?): String? {
             if (url.isNullOrBlank()) return null
@@ -513,5 +544,9 @@ class OppaDramaProvider : MainAPI() {
             hasAttr("src") -> cleanup(attr("abs:src"))
             else -> null
         }
+    }
+
+    companion object {
+        private const val TAG = "OppaDrama"
     }
 }
