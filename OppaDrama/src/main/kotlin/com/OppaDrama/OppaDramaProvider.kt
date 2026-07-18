@@ -387,73 +387,69 @@ class OppaDramaProvider : MainAPI() {
         val sep = if (url.contains("?")) "&" else "?"
         val markedUrl = "$url${sep}verify_human=1"
 
+        // Browser-like headers. The site is fronted by Cloudflare
+        // which gates suspicious clients behind a stricter challenge
+        // than the simple JS shim, so we send full Chrome headers and
+        // a realistic Accept / Accept-Language pair.
+        val browserHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding" to "gzip, deflate",
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "none",
+            "Sec-Fetch-User" to "?1",
+            "Upgrade-Insecure-Requests" to "1",
+        )
+
         fun looksLikeChallenge(doc: Document?): Boolean {
             if (doc == null) return false
-            if (doc.outerHtml().contains("verify_human", ignoreCase = true)) return true
+            val html = doc.outerHtml()
+            if (html.contains("verify_human", ignoreCase = true)) return true
+            if (html.contains("Verifying your browser", ignoreCase = true)) return true
+            // Cloudflare's "cf-mitigated" interstitials ship a
+            // challenge-form script. The original site does not.
+            if (html.contains("cf-mitigated", ignoreCase = true)) return true
+            if (html.contains("__cf_chl", ignoreCase = true)) return true
             val body = doc.body()?.text().orEmpty()
-            if (body.contains("Verifying your browser", ignoreCase = true)) return true
-            // The shim is small (~430 B) and contains no real DOM
-            // markers; the homepage always renders at least one
-            // article.bsx. Combine the two heuristics for robustness.
-            return doc.select("article.bs").isEmpty() &&
-                doc.select("div.bsx").isEmpty() &&
-                doc.select("div.listupd").isEmpty()
+            return body.contains("Checking your browser", ignoreCase = true) ||
+                body.contains("Just a moment", ignoreCase = true)
         }
 
-        // (a) marker URL up-front
+        // (a) marker URL with browser headers – bypasses the shim in
+        // one hop and avoids the stricter CF challenge.
         return try {
-            val first = app.get(markedUrl).document
+            val first = app.get(markedUrl, headers = browserHeaders).document
             if (!looksLikeChallenge(first)) {
                 first
             } else {
-                Log.w(TAG, "marker URL still returned challenge, retrying plain URL")
-                // (b) plain URL fallback
-                try {
-                    val second = app.get(url).document
-                    if (!looksLikeChallenge(second)) {
-                        second
-                    } else {
-                        Log.w(TAG, "plain URL also returned challenge, warming cookie via root")
-                        // (c) warm the cookie by hitting the site root,
-                        // then retry the original URL one more time.
-                        warmCookie()
-                        app.get(markedUrl).document
-                    }
+                Log.w(TAG, "marker URL returned challenge, retrying with cookies and referer")
+                val cookieHeaders = browserHeaders + mapOf(
+                    "Cookie" to "user_is_human=true",
+                    "Referer" to "$mainUrl/",
+                )
+                val second = try {
+                    app.get(url, headers = cookieHeaders).document
                 } catch (e: Exception) {
-                    Log.w(TAG, "plain URL failed: ${e.message}, warming cookie")
-                    warmCookie()
-                    try {
-                        app.get(markedUrl).document
-                    } catch (e2: Exception) {
-                        Log.e(TAG, "final retry also failed: ${e2.message}")
-                        null
-                    }
+                    Log.w(TAG, "second attempt failed: ${e.message}")
+                    return@try app.get(markedUrl, headers = cookieHeaders).document
+                }
+                if (!looksLikeChallenge(second)) {
+                    second
+                } else {
+                    Log.w(TAG, "second attempt also challenge, returning best-effort")
+                    second
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "fetchDocument failed for $url: ${e.message}")
-            // (d) top-level fallback
             try {
-                app.get(url).document
+                app.get(url, headers = browserHeaders).document
             } catch (e2: Exception) {
                 Log.e(TAG, "top-level fallback failed: ${e2.message}")
                 null
             }
-        }
-    }
-
-    /**
-     * Touch the site root with the verification marker so the upstream
-     * `NiceHttp` CookieJar stores the `user_is_human=true` cookie. Any
-     * subsequent request that goes through the same client will then
-     * skip the challenge shim automatically.
-     */
-    private suspend fun warmCookie() {
-        try {
-            app.get("$mainUrl/?verify_human=1")
-        } catch (_: Exception) {
-            // Best-effort – if the warmup fails we still try the
-            // original request.
         }
     }
 
