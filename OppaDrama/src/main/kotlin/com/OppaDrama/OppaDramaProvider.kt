@@ -10,10 +10,14 @@ class OppaDramaProvider : MainAPI() {
     override var mainUrl = "http://45.11.57.192"
     override var lang = "id"
     override val hasMainPage = true
-    override val hasQuickSearch = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
+    override val hasQuickSearch = false
 
-    // Mengamankan antrean request paralel agar terhindar dari pemblokiran rate-limit Nginx
+    override val supportedTypes = setOf(
+        TvType.AsianDrama,
+        TvType.TvSeries,
+        TvType.Movie
+    )
+
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 1500L
 
@@ -32,6 +36,19 @@ class OppaDramaProvider : MainAPI() {
         Pair("movies", "Film Pilihan"),
         Pair("ongoing", "Sedang Tayang (Ongoing)")
     )
+
+    private fun Element.extractPoster(): String? {
+        val img = this.select("img").first() ?: return null
+        val rawUrl = when {
+            img.hasAttr("data-src") -> img.attr("data-src")
+            img.hasAttr("data-lazy-src") -> img.attr("data-lazy-src")
+            img.hasAttr("srcset") -> img.attr("srcset").substringBefore(" ")
+            else -> img.attr("src")
+        }
+        if (rawUrl.isNullOrBlank()) return null
+        return rawUrl.replace(Regex("[?&]resize=\\d+,\\d+"), "")
+                     .replace(Regex("[?&]quality=\\d+"), "")
+    }
 
     override suspend fun getMainPage(
         page: Int,
@@ -54,7 +71,7 @@ class OppaDramaProvider : MainAPI() {
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                     val link = anchor?.attr("href")
-                    val poster = fixUrlNull(element.select("img").first()?.getImageAttr())
+                    val poster = element.extractPoster()
                     
                     if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
                         items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
@@ -68,7 +85,7 @@ class OppaDramaProvider : MainAPI() {
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                     val link = anchor?.attr("href")
-                    val poster = fixUrlNull(element.select("img").first()?.getImageAttr())
+                    val poster = element.extractPoster()
 
                     if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
                         items.add(newMovieSearchResponse(title, link, TvType.Movie) {
@@ -82,7 +99,7 @@ class OppaDramaProvider : MainAPI() {
                         val anchor = element.select("div.bsx a").first()
                         val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                         val link = anchor?.attr("href")
-                        val poster = fixUrlNull(element.select("img").first()?.getImageAttr())
+                        val poster = element.extractPoster()
 
                         if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
                             items.add(newMovieSearchResponse(title, link, TvType.Movie) {
@@ -110,7 +127,7 @@ class OppaDramaProvider : MainAPI() {
                         val anchor = element.select("div.bsx a").first()
                         val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
                         val link = anchor?.attr("href")
-                        val poster = fixUrlNull(element.select("img").first()?.getImageAttr())
+                        val poster = element.extractPoster()
 
                         if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
                             items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
@@ -135,7 +152,7 @@ class OppaDramaProvider : MainAPI() {
             val anchor = element.select("div.bsx a").first()
             val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
             val link = anchor?.attr("href")
-            val poster = fixUrlNull(element.select("img").first()?.getImageAttr())
+            val poster = element.extractPoster()
             val typeStr = element.select(".typez").first()?.text()
 
             if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
@@ -162,7 +179,6 @@ class OppaDramaProvider : MainAPI() {
         val html = app.get(url, headers = desktopBypassHeaders).text
         val document = Jsoup.parse(html)
 
-        // Deteksi halaman series melalui keberadaan kontainer eplister[span_2](start_span)[span_2](end_span)
         if (document.selectFirst("div.eplister ul > li > a") != null) {
             return loadSeries(url, document)
         }
@@ -171,7 +187,7 @@ class OppaDramaProvider : MainAPI() {
 
     private suspend fun loadSeries(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.getImageAttr())
+        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
 
         val info = parseInfo(document)
         val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
@@ -184,7 +200,7 @@ class OppaDramaProvider : MainAPI() {
             val href = anchor.attr("href")
             val epNumber = anchor.selectFirst("div.epl-num")?.text()?.trim()?.toIntOrNull() ?: (index + 1)
             val epTitle = anchor.selectFirst("div.epl-title")?.text()?.trim() ?: "Episode $epNumber"
-            val epPoster = fixUrlNull(anchor.selectFirst("img")?.getImageAttr())
+            val epPoster = fixUrlNull(anchor.selectFirst("img")?.extractPoster())
 
             newEpisode(href) {
                 this.name = epTitle
@@ -202,15 +218,21 @@ class OppaDramaProvider : MainAPI() {
             this.duration = info.duration
             this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
-            if (actors.isNotEmpty()) this.addActors(actors)
-            if (!trailer.isNullOrBlank()) this.addTrailer(trailer)
+            
+            // Perbaikan Solusi: Manipulasi langsung properti internal LoadResponse tanpa extension method[span_2](start_span)[span_2](end_span)
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
         }
     }
 
     private suspend fun loadEpisode(url: String, document: org.jsoup.nodes.Document): LoadResponse? {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
         val seriesName = document.selectFirst("h2[itemprop=partOfSeries], div.infolimit h2")?.text()?.trim()?.takeIf { it.isNotBlank() }
-        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.getImageAttr())
+        val poster = fixUrlNull(document.selectFirst("div.bigcontent img, div.thumb img")?.extractPoster())
 
         val info = parseInfo(document)
         val tags = document.select("div.genxed a").map { it.text().trim() }.filter { it.isNotBlank() }
@@ -230,8 +252,14 @@ class OppaDramaProvider : MainAPI() {
             this.duration = info.duration
             this.recommendations = recommendations
             info.rating?.let { this.score = Score.from(it, 10) }
-            if (actors.isNotEmpty()) this.addActors(actors)
-            if (!trailer.isNullOrBlank()) this.addTrailer(trailer)
+            
+            // Perbaikan Solusi: Manipulasi langsung properti internal LoadResponse tanpa extension method[span_3](start_span)[span_3](end_span)
+            if (actors.isNotEmpty()) {
+                this.actors = actors.map { ActorData(Actor(it)) }
+            }
+            if (!trailer.isNullOrBlank()) {
+                this.trailers.add(TrailerData(trailer, null, false))
+            }
         }
     }
 
@@ -239,7 +267,7 @@ class OppaDramaProvider : MainAPI() {
         val anchor = selectFirst("a") ?: return null
         val href = fixUrlNull(anchor.attr("href")) ?: return null
         val title = anchor.attr("title").ifBlank { this.selectFirst("div.tt")?.text()?.trim() }?.takeIf { it.isNotBlank() } ?: return null
-        val poster = fixUrlNull(this.selectFirst("img")?.getImageAttr())
+        val poster = fixUrlNull(this.selectFirst("img")?.extractPoster())
         val looksLikeEpisode = Regex("[-_]episode[-_]?\\d+", RegexOption.IGNORE_CASE).containsMatchIn(href)
         val type = if (looksLikeEpisode) TvType.TvSeries else TvType.Movie
         val cleanTitle = if (looksLikeEpisode) {
@@ -250,9 +278,6 @@ class OppaDramaProvider : MainAPI() {
         }
     }
 
-    // ------------------------------------------------------------
-    //  Link Extractor Dispatcher
-    // ------------------------------------------------------------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -263,7 +288,6 @@ class OppaDramaProvider : MainAPI() {
         val document = Jsoup.parse(html)
         var dispatched = false
 
-        // (1) Ambil URL dari elemen Iframe utama[span_3](start_span)[span_3](end_span)
         document.selectFirst("div.player-embed iframe")?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.isNotBlank() && loadExtractor(httpsify(src), data, subtitleCallback, callback)) {
@@ -271,7 +295,6 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
-        // (2) Ambil URL Server Cermin dari Dropdown Dropdown Terenkripsi Base64[span_4](start_span)[span_4](end_span)
         val mirrors = document.select("select.mirror option[value]:not([disabled])")
         for (option in mirrors) {
             val encoded = option.attr("value").trim()
@@ -287,7 +310,6 @@ class OppaDramaProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        // (3) Ambil URL dari Kotak Unduhan Langsung[span_5](start_span)[span_5](end_span)
         for (a in document.select("div.dlbox li span.e a[href]")) {
             val href = a.attr("href").trim()
             if (href.isNotBlank() && loadExtractor(httpsify(href), data, subtitleCallback, callback)) {
@@ -297,9 +319,6 @@ class OppaDramaProvider : MainAPI() {
         return dispatched
     }
 
-    // ============================================================
-    //  Metadata Scraper & Sanitization Helpers
-    // ============================================================
     private data class SeriesInfo(
         val status: ShowStatus,
         val year: Int?,
@@ -342,22 +361,5 @@ class OppaDramaProvider : MainAPI() {
         val minutes = Regex("(\\d+)\\s*min").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val total = hours * 60 + minutes
         return if (total > 0) total else null
-    }
-
-    // Mengoreksi Jsoup bug: Mengambil atribut string tanpa token "abs:" agar kompatibel tanpa parameter baseUri
-    private fun Element.getImageAttr(): String? {
-        fun cleanup(url: String?): String? {
-            if (url.isNullOrBlank()) return null
-            return url.replace(Regex("[?&]resize=\\d+,\\d+"), "")
-                      .replace(Regex("[?&]quality=\\d+"), "")
-        }
-        val rawUrl = when {
-            hasAttr("data-src") -> attr("data-src")
-            hasAttr("data-lazy-src") -> attr("data-lazy-src")
-            hasAttr("srcset") -> attr("srcset").substringBefore(" ")
-            hasAttr("src") -> attr("src")
-            else -> null
-        }
-        return cleanup(rawUrl)
     }
 }
