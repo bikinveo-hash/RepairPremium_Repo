@@ -63,7 +63,7 @@ class OppaDramaProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Penanganan paginasi struktur tautan dinamis arsip kategori WordPress
+        // Penanganan paginasi struktur tautan dinamis arsip kategori WordPress[span_2](start_span)[span_2](end_span)
         val targetUrl = if (page > 1) {
             request.data.replace("/series/?", "/series/page/$page/?")
         } else {
@@ -82,7 +82,7 @@ class OppaDramaProvider : MainAPI() {
             val typeStr = element.select(".typez").first()?.text()
 
             if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
-                // Pembersihan judul mutlak dari deretan nomor episode atau sub teks tambahan
+                // Pembersihan judul mutlak dari deretan nomor episode atau sub teks tambahan[span_3](start_span)[span_3](end_span)
                 val cleanTitle = title.replace(Regex("\\s*(?:Episode|Ep|Eps)\\s*\\d+.*$", RegexOption.IGNORE_CASE), "").trim()
 
                 val isMovie = request.data.contains("type=Movie") || typeStr?.contains("Movie", ignoreCase = true) == true || link.contains("/movie-")
@@ -144,6 +144,7 @@ class OppaDramaProvider : MainAPI() {
             }
         }
 
+        // Jika ini halaman episode tunggal, ambil tautan bapak serialnya lewat indeks Breadcrumb kedua[span_4](start_span)[span_4](end_span)
         val breadcrumbs = document.select(".ts-breadcrumb ol li a")
         if (breadcrumbs.size >= 3 && !isMovie) {
             val parentUrl = breadcrumbs[1].attr("href")
@@ -246,7 +247,17 @@ class OppaDramaProvider : MainAPI() {
     private suspend fun parseEmbeds(doc: org.jsoup.nodes.Document, dataUrl: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         doc.select("div.player-embed iframe").first()?.let { iframe ->
             val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
-            if (src.isNotBlank()) loadExtractor(httpsify(src), dataUrl, subtitleCallback, callback)
+            if (src.isNotBlank()) {
+                val httpsSrc = httpsify(src)
+                // Interseptor Manual untuk Custom Extractor Minochinos & Abyss jika tidak terdaftar di core[span_5](start_span)[span_5](end_span)[span_6](start_span)[span_6](end_span)
+                if (!loadExtractor(httpsSrc, dataUrl, subtitleCallback, callback)) {
+                    if (httpsSrc.contains("minochinos.com")) {
+                        MinochinosExtractor().getUrl(httpsSrc, dataUrl, subtitleCallback, callback)
+                    } else if (httpsSrc.contains("abyss.to") || httpsSrc.contains("abyssplayer.com")) {
+                        AbyssExtractor().getUrl(httpsSrc, dataUrl, subtitleCallback, callback)
+                    }
+                }
+            }
         }
 
         val mirrors = doc.select("select.mirror option[value]:not([disabled])")
@@ -259,14 +270,28 @@ class OppaDramaProvider : MainAPI() {
                     el.attr("src").ifBlank { el.attr("data-src") }
                 }
                 if (!mirrorSrc.isNullOrBlank()) {
-                    loadExtractor(httpsify(mirrorSrc), dataUrl, subtitleCallback, callback)
+                    val httpsMirror = httpsify(mirrorSrc)
+                    if (!loadExtractor(httpsMirror, dataUrl, subtitleCallback, callback)) {
+                        if (httpsMirror.contains("minochinos.com")) {
+                            MinochinosExtractor().getUrl(httpsMirror, dataUrl, subtitleCallback, callback)
+                        } else if (httpsMirror.contains("abyss.to") || httpsMirror.contains("abyssplayer.com")) {
+                            AbyssExtractor().getUrl(httpsMirror, dataUrl, subtitleCallback, callback)
+                        }
+                    }
                 }
             } catch (_: Exception) {}
         }
 
         for (a in doc.select("div.dlbox li span.e a[href]")) {
             val href = a.attr("href").trim()
-            if (href.isNotBlank()) loadExtractor(httpsify(href), dataUrl, subtitleCallback, callback)
+            if (href.isNotBlank()) {
+                val httpsDl = httpsify(href)
+                if (!loadExtractor(httpsDl, dataUrl, subtitleCallback, callback)) {
+                    if (httpsDl.contains("minochinos.com")) {
+                        MinochinosExtractor().getUrl(httpsDl, dataUrl, subtitleCallback, callback)
+                    }
+                }
+            }
         }
     }
 
