@@ -18,11 +18,10 @@ class OppaDramaProvider : MainAPI() {
         TvType.Movie
     )
 
-    // SOLUSI LAG: Memaksa Cloudstream memuat kategori secara berurutan, bukan bersamaan[span_2](start_span)[span_2](end_span)
-    override var sequentialMainPage = true[span_3](start_span)[span_3](end_span)
-    override var sequentialMainPageDelay = 1000L // Jeda 1 detik antar request untuk menghindari rate-limit[span_4](start_span)[span_4](end_span)
+    // Fitur kontrol sinkronisasi sekuensial bawaan Cloudstream3 API
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 1000L
 
-    // Menggunakan query identifier internal agar langsung membaca struktur dari halaman utama
     override val mainPage = mainPageOf(
         Pair("latest", "Update Episode Terbaru"),
         Pair("movies", "Film Pilihan"),
@@ -33,7 +32,6 @@ class OppaDramaProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        // Jika halaman > 1, arahkan ke penanganan arsip WordPress standar
         val targetUrl = if (page > 1) {
             when (request.data) {
                 "latest" -> "$mainUrl/series/page/$page/?status=&type=&order=update"
@@ -49,10 +47,8 @@ class OppaDramaProvider : MainAPI() {
         val document = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
 
-        // Pilah ekstraksi berdasarkan kategori beranda menggunakan data selector yang terverifikasi
         when (request.data) {
             "latest" -> {
-                // Berdasarkan struktur: .listupd.normal -> .excstf -> article.bs
                 document.select(".listupd.normal article.bs").forEach { element: Element ->
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
@@ -67,7 +63,6 @@ class OppaDramaProvider : MainAPI() {
                 }
             }
             "movies" -> {
-                // Berdasarkan struktur: .listupd.flex -> .excstf -> article.stylefor
                 document.select(".listupd.flex article.stylefor").forEach { element: Element ->
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
@@ -82,24 +77,19 @@ class OppaDramaProvider : MainAPI() {
                 }
             }
             "ongoing" -> {
-                // Berdasarkan struktur sidebar: .ongoingseries -> ul -> li
                 document.select(".ongoingseries li").forEach { element: Element ->
                     val anchor = element.select("a").first()
                     val link = anchor?.attr("href")
-                    // Mengambil nama drama bersih dari elemen span kelas kiri (.l)
                     val title = anchor?.select("span.l")?.first()?.text()?.trim() 
                     
                     if (!link.isNullOrEmpty() && !title.isNullOrEmpty()) {
                         items.add(newMovieSearchResponse(title, link, TvType.AsianDrama) {
-                            // Sidebar bawaan Dramastream tidak menyediakan gambar poster mikro, 
-                            // Kosongkan agar Cloudstream menggunakan mode card text default atau generator lokal
                             this.posterUrl = null
                         })
                     }
                 }
             }
             else -> {
-                // Fallback jika memuat halaman arsip (page > 1)
                 document.select("article.bs").forEach { element: Element ->
                     val anchor = element.select("div.bsx a").first()
                     val title = element.select("h2[itemprop=headline]").first()?.text() ?: anchor?.attr("title")
