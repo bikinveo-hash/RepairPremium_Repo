@@ -44,8 +44,11 @@ class BuzzServer : ExtractorApi() {
         try {
             // Bersihkan URL dari silsilah parameter /download ganda jika terlempar dari core
             val cleanUrl = if (url.endsWith("/download")) url.substringBeforeLast("/download") else url
-            
-            val page = app.get(cleanUrl)
+            val host = URI(cleanUrl).let { "${it.scheme}://${it.host}" }
+
+            val page = app.get(cleanUrl, referer = referer)
+            // NB: `documentLarge` dipertahankan sesuai kode asli. Tidak ditemukan bukti di
+            // ExtractorApi.kt/MainAPI.kt yang menunjukkan properti ini bermasalah, jadi tidak diubah.
             val qualityText = page.documentLarge.selectFirst("div.max-w-2xl > span")?.text()
             val quality = getQualityFromName(qualityText)
 
@@ -55,26 +58,42 @@ class BuzzServer : ExtractorApi() {
                 referer = cleanUrl,
                 allowRedirects = false,
             )
-            
-            // SOLUSI MULTI-HEADERS OVERRIDE: Tangkap seluruh kemungkinan variasi nama header dari htmx engine
+
+            // Header client HTTP umumnya sudah case-insensitive, tapi tetap dijaga untuk kompatibilitas
             val redirectUrl = response.headers["hx-redirect"]
-                ?: response.headers["HX-Redirect"]
                 ?: response.headers["location"]
-                ?: response.headers["Location"]
 
             if (!redirectUrl.isNullOrBlank()) {
+                // FIX UTAMA: buzzheavier.com kerap mengembalikan hx-redirect berupa PATH RELATIF
+                // (contoh: "/dl/abc123"), bukan URL absolut. Jika langsung dipakai sebagai `url`
+                // pada ExtractorLink, pemutar akan gagal karena bukan URL valid.
+                // Ini kemungkinan besar penyebab error "kadang jalan, kadang tidak" -
+                // tergantung apakah node/CDN yang merespons memberi path relatif atau absolut.
+                val finalUrl = if (redirectUrl.startsWith("http")) {
+                    redirectUrl
+                } else {
+                    host + (if (redirectUrl.startsWith("/")) redirectUrl else "/$redirectUrl")
+                }
+
                 callback.invoke(
                     newExtractorLink(
                         source = name,
                         name = "BuzzServer Direct",
-                        url = redirectUrl,
+                        url = finalUrl,
                     ) {
                         this.quality = quality
                         this.referer = "$mainUrl/"
                     }
                 )
             } else {
-                Log.w("BuzzServer", "Bypass Failed: No valid redirect token found in response headers.")
+                // Response code disertakan untuk membedakan: 403/503 (anti-bot/Cloudflare)
+                // vs 200 dengan body yang berubah struktur (situs update markup).
+                Log.w(
+                    "BuzzServer",
+                    "Bypass Failed: no redirect header found (code=${response.code}). " +
+                        "Kemungkinan proteksi anti-bot mengintersep sebelum token redirect diberikan, " +
+                        "atau host domain sudah berpindah dari $mainUrl."
+                )
             }
         } catch (e: Exception) {
             Log.e("BuzzServer", "Failed to resolve $url: ${e.message}")
@@ -84,110 +103,73 @@ class BuzzServer : ExtractorApi() {
 
 /**
  * 3. Emturbovid Extractor
+ *
+ * AKAR MASALAH (root cause) yang ditemukan:
+ * File ExtractorApi.kt inti Cloudstream versi terbaru TERNYATA sudah memiliki
+ * `com.lagradost.cloudstream3.extractors.EmturbovidExtractor` bawaan (built-in),
+ * yang otomatis terdaftar di `extractorApis` global saat aplikasi start.
+ *
+ * Plugin ini mendaftarkan LAGI kelas `EmturbovidExtractor` versi lokal (nama sama,
+ * package beda: com.OppaDrama) lewat `registerExtractorAPI(EmturbovidExtractor())`.
+ * Karena `loadExtractor()` mengiterasi daftar `extractorApis` secara REVERSE
+ * ("Iterate in reverse order so the new registered ExtractorApi takes priority"),
+ * versi lokal plugin ini SELALU dicoba lebih dulu dan menutupi (shadow) versi bawaan.
+ *
+ * Ini masalah klasik: begitu tim Cloudstream memperbaiki extractor bawaan mereka
+ * mengikuti perubahan situs emturbovid.com, perbaikan itu TIDAK PERNAH kepakai
+ * karena salinan lokal yang sudah usang selalu menang duluan. Ini sangat cocok
+ * dengan gejala "kadang error" - tergantung apakah situs sedang memakai struktur
+ * lama (masih cocok dengan regex lokal) atau struktur baru (sudah diperbaiki di
+ * core, tapi core tidak pernah kepanggil).
+ *
+ * FIX YANG DIREKOMENDASIKAN (dipakai di bawah): jangan reimplementasi ulang logic
+ * ekstraksi. Ikuti pola yang sudah benar dipakai `Smoothpre : VidHidePro()` -
+ * cukup delegasikan/subclass ke extractor inti yang sudah dirawat oleh maintainer
+ * Cloudstream, supaya otomatis ikut ter-update setiap kali core diperbarui.
+ *
+ * Alternatif paling aman: HAPUS SAJA class ini + baris
+ * `registerExtractorAPI(EmturbovidExtractor())` di Plugin.kt, karena versi bawaan
+ * sudah otomatis aktif tanpa perlu didaftarkan manual sama sekali.
  */
-open class EmturbovidExtractor : ExtractorApi() {
+class Emturbovid : com.lagradost.cloudstream3.extractors.EmturbovidExtractor() {
+    // Override hanya jika OppaDrama memang memakai domain mirror yang berbeda
+    // dari default core. Jika domainnya identik dengan core, class ini bahkan
+    // tidak perlu didaftarkan sama sekali (lihat catatan di Plugin.kt).
     override var name = "Emturbovid"
     override var mainUrl = "https://emturbovid.com"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-    ) {
-        try {
-            val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-                "Referer" to (referer ?: "$mainUrl/"),
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
-            )
-
-            val firstRequest = app.get(url, headers = headers, allowRedirects = false)
-            var finalUrl = url
-
-            if (firstRequest.code == 301 || firstRequest.code == 302) {
-                val location = firstRequest.headers["Location"] ?: firstRequest.headers["location"]
-                if (!location.isNullOrBlank()) {
-                    finalUrl = location
-                }
-            }
-
-            val html = app.get(finalUrl, headers = headers).text
-            val document = Jsoup.parse(html)
-
-            val masterUrl = document.select("div#video_player").attr("data-hash").trim().takeIf { it.isNotBlank() }
-                ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.getOrNull(1)?.trim()
-
-            if (masterUrl.isNullOrBlank()) return
-
-            val streamHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-                "Referer" to "$mainUrl/",
-                "Origin" to mainUrl
-            )
-
-            val masterText = app.get(masterUrl, headers = streamHeaders).text
-            val lines = masterText.lines()
-            var variantsFound = false
-
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
-
-                val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                    .find(line)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
-
-                val nextLine = lines.getOrNull(i + 1)?.trim().orEmpty()
-                if (nextLine.isBlank() || nextLine.startsWith("#")) continue
-
-                val variantUrl = when {
-                    nextLine.startsWith("//") -> "https:$nextLine"
-                    nextLine.startsWith("/") -> "https://" + URI(masterUrl).host + nextLine
-                    nextLine.startsWith("http") -> nextLine
-                    else -> masterUrl.substringBeforeLast("/") + "/" + nextLine
-                }
-
-                variantsFound = true
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name ${height ?: ""}p".trim(),
-                        url = variantUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.headers = streamHeaders
-                        this.quality = height ?: Qualities.Unknown.value
-                    }
-                )
-            }
-
-            if (!variantsFound) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = masterUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.headers = streamHeaders
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
-    }
 }
 
 /**
  * 4. Abyss / Hydrax Extractor
  * Mengurai kemurnian data Base64 "datas" dari player-v2 core bundle untuk mengambil otentikasi multi-token.
+ *
+ * AKAR MASALAH (root cause) yang ditemukan:
+ * Respons endpoint `/api/player/v2` milik Hydrax/Abyss SUDAH BERUBAH SKEMA.
+ * Berdasarkan sample respons terkini, setiap objek di `sources[]` TIDAK LAGI
+ * berisi field "file" (URL video langsung). Field yang ada sekarang hanya
+ * metadata kualitas: "label", "res_id", "size", "codec", "status", "type".
+ * Data class `AbyssSource` yang lama (hanya punya file/label/type) sehingga
+ * `source.file` SELALU null untuk skema baru -> tidak ada link yang pernah
+ * berhasil di-emit dari server yang sudah pakai skema baru.
+ *
+ * Respons juga kini menyertakan "sessionId" di level root, dan (menurut riset
+ * komunitas reverse-engineering publik) Hydrax sudah beralih ke pengiriman
+ * video dalam bentuk SEGMENT TERENKRIPSI (AES-CTR, path di-double-base64,
+ * kunci diturunkan dari kombinasi session/slug/md5_id/user_id) alih-alih URL
+ * file utuh - ini pada dasarnya lapisan proteksi anti-download/anti-piracy.
+ *
+ * Karena tidak semua node/CDN Hydrax migrasi bersamaan, sebagian sesi/host
+ * kadang masih membalas dengan "file" langsung (skema lama) dan kadang sudah
+ * memakai skema baru bertoken - inilah yang membuat gejalanya "kadang error,
+ * kadang jalan".
+ *
+ * PENTING: Saya TIDAK menambahkan implementasi untuk mendekripsi/menyusun
+ * segment token tersebut, karena itu berarti membangun mekanisme untuk
+ * menembus proteksi anti-piracy milik pihak ketiga - di luar apa yang bisa
+ * saya bantu. Perbaikan di bawah hanya menyamakan skema data terbaru supaya
+ * (a) source yang MASIH memberi "file" langsung tetap tertangkap dengan benar,
+ * dan (b) ketika server sudah full token-based, extractor gagal secara jelas
+ * dan ter-log (bukan diam-diam mengembalikan list kosong tanpa jejak).
  */
 class AbyssExtractor : ExtractorApi() {
     override val name = "Abyss"
@@ -197,11 +179,15 @@ class AbyssExtractor : ExtractorApi() {
     private data class AbyssSource(
         @JsonProperty("file") val file: String?,
         @JsonProperty("label") val label: String?,
-        @JsonProperty("type") val type: String?
+        @JsonProperty("type") val type: String?,
+        @JsonProperty("res_id") val resId: Int?,
+        @JsonProperty("status") val status: Boolean?
     )
 
     private data class AbyssResponse(
-        @JsonProperty("sources") val sources: List<AbyssSource>?
+        @JsonProperty("sources") val sources: List<AbyssSource>?,
+        @JsonProperty("domain") val domain: String?,
+        @JsonProperty("sessionId") val sessionId: String?
     )
 
     override suspend fun getUrl(
@@ -263,6 +249,18 @@ class AbyssExtractor : ExtractorApi() {
                 )
             ).parsedSafe<AbyssResponse>()
 
+            if (apiResponse?.sources.isNullOrEmpty()) {
+                Log.w("Abyss", "Tidak ada 'sources' pada respons player/v2 untuk $url")
+            } else if (apiResponse?.sources?.all { it.file.isNullOrBlank() } == true) {
+                Log.w(
+                    "Abyss",
+                    "Server ini sudah migrasi ke skema segment/token terenkripsi " +
+                        "(sessionId=${apiResponse.sessionId}, domain=${apiResponse.domain}); " +
+                        "field 'file' langsung sudah tidak tersedia sehingga tidak ada link yang " +
+                        "bisa diambil tanpa reverse-engineering lebih lanjut terhadap protokol baru."
+                )
+            }
+
             apiResponse?.sources?.forEach { source ->
                 val videoUrl = source.file
                 if (!videoUrl.isNullOrBlank()) {
@@ -296,6 +294,24 @@ class AbyssExtractor : ExtractorApi() {
 
 /**
  * 5. Minochinos / VidHide Obfuscated Extractor
+ *
+ * AKAR MASALAH (root cause) yang ditemukan:
+ * `getAndUnpack()` hanya bekerja jika HTML mengandung blok JS terobfuskasi format
+ * Dean Edwards packer (`eval(function(p,a,c,k,e,...))`). Jika regex packer TIDAK
+ * ketemu, `getAndUnpack()` diam-diam mengembalikan HTML ASLI tanpa error apa pun
+ * (lihat ExtractorApi.kt: `JsUnpacker(packedText).unpack() ?: string`). Karena
+ * minochinos.com kemungkinan tidak SELALU memakai packer ini untuk setiap video/
+ * server (bisa berbeda tergantung versi player yang dipakai saat itu), maka pada
+ * kasus tanpa packer, regex m3u8/mp4 di bawahnya mencari pola URL di HTML mentah
+ * yang sebenarnya menyimpan URL di dalam variabel JS biasa (mis. `sources: [{file: "..."}]`),
+ * sehingga regex gagal cocok dan `streamUrl` menjadi null. Karena seluruh proses
+ * dibungkus `catch (_: Exception) {}` tanpa logging, kegagalan ini senyap dan
+ * terlihat seperti "kadang error" tanpa jejak diagnostik.
+ *
+ * FIX: menambah pola pencarian fallback untuk format `sources`/`file:` JS biasa
+ * (dipakai luas oleh banyak varian player VidHide), dan mengganti silent-catch
+ * dengan logging supaya kegagalan bisa dilacak actual root cause-nya di masa depan
+ * jika situs berubah lagi.
  */
 class MinochinosExtractor : ExtractorApi() {
     override var name = "Minochinos"
@@ -316,10 +332,20 @@ class MinochinosExtractor : ExtractorApi() {
             )
 
             val html = app.get(url, headers = headers).text
+
+            // getAndUnpack() no-op jika tidak ada blok eval-packer; pakai html asli
+            // sebagai ruang pencarian tambahan supaya tidak kehilangan kecocokan.
             val unpackedHtml = getAndUnpack(html)
-            
-            val streamUrl = Regex("""https?://[^\s"'`<>]+?\.m3u8[^\s"'`<>]*""").find(unpackedHtml)?.value
-                ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""").find(unpackedHtml)?.groupValues?.getOrNull(1)
+            val searchSpaces = listOf(unpackedHtml, html).distinct()
+
+            var streamUrl: String? = null
+            for (space in searchSpaces) {
+                streamUrl = Regex("""https?://[^\s"'`<>]+?\.m3u8[^\s"'`<>]*""").find(space)?.value
+                    ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""").find(space)?.groupValues?.getOrNull(1)
+                    // Fallback: format umum player non-packed, mis. sources:[{file:"..."}]
+                    ?: Regex("""file\s*:\s*["'](https?://[^"']+)["']""").find(space)?.groupValues?.getOrNull(1)
+                if (!streamUrl.isNullOrBlank()) break
+            }
 
             if (!streamUrl.isNullOrBlank()) {
                 callback.invoke(
@@ -333,7 +359,11 @@ class MinochinosExtractor : ExtractorApi() {
                         this.quality = Qualities.Unknown.value
                     }
                 )
+            } else {
+                Log.w("Minochinos", "Stream URL tidak ditemukan untuk $url (packer tidak terdeteksi & pola fallback tidak cocok - kemungkinan struktur player berubah lagi).")
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e("Minochinos", "Gagal resolve $url: ${e.message}")
+        }
     }
 }
