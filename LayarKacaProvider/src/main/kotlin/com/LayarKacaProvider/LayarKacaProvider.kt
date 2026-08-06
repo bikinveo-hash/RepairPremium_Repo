@@ -60,8 +60,7 @@ class LayarKacaProvider : MainAPI() {
 
         val document = app.get(url, headers = headers).document
         val elements = document.select("div#post-container article, div.grid-archive article, div.widget article, article.item")
-        
-        // Mem-parsing secara instan (tanpa delay TMDB)
+
         val list = elements.mapNotNull { element ->
             toSearchResult(element)
         }
@@ -144,8 +143,7 @@ class LayarKacaProvider : MainAPI() {
         val rawPoster = imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
             ?: imgElement?.attr("src")
-        
-        // Kita gunakan poster HD dari LK21 saja agar beranda dimuat dalam 0 detik!
+
         val posterUrl = fixPosterUrl(rawPoster)
         val cleanTitle = getCleanTitle(rawTitle)
         val yearText = element.select("div.year, span.year").text()
@@ -174,8 +172,8 @@ class LayarKacaProvider : MainAPI() {
             "Referer"    to "$mainUrl/",
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
         )
-        
-        try {
+
+        return try {
             val response = app.get(searchUrl, headers = headers).parsedSafe<LkSearchResponse>() ?: return null
 
             val results = response.data?.mapNotNull { item ->
@@ -184,7 +182,7 @@ class LayarKacaProvider : MainAPI() {
 
                 val cleanTitle = getCleanTitle(rawTitle)
                 val href = fixUrl(slug)
-                
+
                 val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
                 val posterUrl = fixPosterUrl(rawPoster)
 
@@ -203,23 +201,25 @@ class LayarKacaProvider : MainAPI() {
             } ?: emptyList()
 
             val totalPages = response.totalPages ?: 1
-            return newSearchResponseList(results, page < totalPages)
+            newSearchResponseList(results, page < totalPages)
         } catch (e: Exception) {
-            return null
+            null
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
+    // FIX #1: return type harus nullable LoadResponse?
+    override suspend fun load(url: String): LoadResponse? {
         var cleanUrl = fixUrl(url)
         var response = app.get(cleanUrl)
         var document = response.document
 
         if (document.title().contains("Loading", ignoreCase = true) || document.select("#loading").isNotEmpty()) {
             val path = try { URI(cleanUrl).path } catch (e: Exception) { "" }
+            // FIX #8: fallback series tetap pakai mainUrl agar ikut override setting
             cleanUrl = if (path.contains("season") || path.contains("episode")) {
                 "https://series.lk21.de$path"
             } else {
-                "https://tv10.lk21official.cc$path"
+                "$mainUrl$path"
             }
             response = app.get(cleanUrl)
             document = response.document
@@ -262,10 +262,10 @@ class LayarKacaProvider : MainAPI() {
         val jsonScript = document.select("script#season-data").html()
 
         if (jsonScript.isNotBlank()) {
-            val slugs  = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val titles = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
-            val epNos  = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
-            val sNos   = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
+            val slugs   = Regex("\"slug\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val titles  = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
+            val epNos   = Regex("\"episode_no\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
+            val sNos    = Regex("\"s\"\\s*:\\s*(\\d+)").findAll(jsonScript).map { it.groupValues[1].toIntOrNull() }.toList()
             val posters = Regex("\"poster\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val plots   = Regex("\"description\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
             val dates   = Regex("\"release_date\"\\s*:\\s*\"([^\"]+)\"").findAll(jsonScript).map { it.groupValues[1] }.toList()
@@ -315,8 +315,8 @@ class LayarKacaProvider : MainAPI() {
         var trailerUrl = document.select("iframe[src*='youtube.com']").attr("src")
         if (trailerUrl.isNullOrEmpty()) trailerUrl = document.select("a.btn-trailer, a:contains(Trailer)").attr("href")
         if (trailerUrl.isNullOrEmpty()) trailerUrl = Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)").find(document.html())?.groupValues?.get(1) ?: ""
-        val ytIdRegex      = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
-        val ytId           = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
+        val ytIdRegex       = Regex("(?:youtube\\.com/(?:watch\\?v=|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+        val ytId            = ytIdRegex.find(trailerUrl)?.groupValues?.get(1) ?: trailerUrl.takeIf { it.length == 11 }
         val finalTrailerUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else null
 
         return if (episodes.isNotEmpty()) {
@@ -403,75 +403,90 @@ class LayarKacaProvider : MainAPI() {
         }
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
-        
+
+        // FIX #7: kalau tidak ada sumber yang berhasil di-decode, return false
+        if (allSources.isEmpty()) return false
+
+        // FIX #2: semua extractor sekarang konsisten pakai new-style callback
         allSources.forEach { url ->
-            if (url.contains("/iframe/turbovip/")) {
-                val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
-                Lk21TurboExtractor().getUrl("https://turbovidhls.com/t/$id", currentUrl)
-                    ?.forEach { callback.invoke(it) }
-            } 
-            else if (url.contains("/iframe/p2p/")) {
-                val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
-                HowNetworkExtractor().getUrl("https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl)
-                    ?.forEach { callback.invoke(it) }
-            } 
-            else if (url.contains("/iframe/cast/")) {
-                val id = url.substringAfter("/iframe/cast/").substringBefore("/")
-                val castUrl = "https://weneverbeenfree.com/e/$id"
-                try {
-                    CastExtractor().getUrl(castUrl, null)?.forEach { callback.invoke(it) }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+            when {
+                url.contains("/iframe/turbovip/") -> {
+                    val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
+                    try {
+                        Lk21TurboExtractor().getUrl(
+                            "https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, callback
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
-            }
-            else if (url.contains("/iframe/hydrax/")) {
-                val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
-                val hydraxUrl = "https://abyssplayer.com/?v=$id"
-                try {
-                    AbyssExtractor().getUrl(hydraxUrl, currentUrl, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                url.contains("/iframe/p2p/") -> {
+                    val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
+                    try {
+                        HowNetworkExtractor().getUrl(
+                            "https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl, subtitleCallback, callback
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                url.contains("/iframe/cast/") -> {
+                    val id = url.substringAfter("/iframe/cast/").substringBefore("/")
+                    try {
+                        CastExtractor().getUrl(
+                            "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, callback
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                url.contains("/iframe/hydrax/") -> {
+                    val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
+                    try {
+                        AbyssExtractor().getUrl(
+                            "https://abyssplayer.com/?v=$id", currentUrl, subtitleCallback, callback
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
         }
         return true
     }
 
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
+    // FIX #9: getVideoInterceptor return nullable Interceptor? (sesuai signature MainAPI)
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
         val mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
         return Interceptor { chain ->
             val originalRequest = chain.request()
             val url = originalRequest.url.toString()
-            
-            // Bypass Localhost
+
+            // Bypass Localhost — langsung lanjut tanpa modifikasi
             if (url.contains("127.0.0.1")) {
                 return@Interceptor chain.proceed(originalRequest)
             }
-            
+
             when {
                 url.contains("turbovidhls.com") || url.contains("etvp.cc") || url.contains("hownetwork.xyz") -> {
+                    val host = try { URI(url).host ?: "" } catch (e: Exception) { "" }
                     val newRequest = originalRequest.newBuilder()
                         .header("User-Agent", mobileUA)
-                        .header("Origin",  "https://${try { URI(url).host } catch (e: Exception) { "" }}")
-                        .header("Referer", "https://${try { URI(url).host } catch (e: Exception) { "" }}/")
+                        .header("Origin",  "https://$host")
+                        .header("Referer", "https://$host/")
                         .build()
                     chain.proceed(newRequest)
                 }
                 url.contains("googleusercontent.com") -> {
-                    var response  = chain.proceed(originalRequest)
-                    var retries   = 0
-                    val maxRetries = 4
-                    val baseDelay  = 600L
-
-                    while (response.code == 429 && retries < maxRetries) {
+                    val response = chain.proceed(originalRequest)
+                    if (response.code == 429) {
                         response.close()
-                        val delay = baseDelay * (retries + 1)
-                        Thread.sleep(delay)
-                        response = chain.proceed(originalRequest)
-                        retries++
+                        Thread.sleep(1000L)
+                        chain.proceed(originalRequest)
+                    } else {
+                        response
                     }
-                    response
                 }
                 else -> chain.proceed(originalRequest)
             }
