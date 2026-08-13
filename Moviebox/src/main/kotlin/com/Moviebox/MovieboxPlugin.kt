@@ -7,7 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class MovieboxPlugin : Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan provider Moviebox agar terbaca oleh Cloudstream
-        registerMainAPI(MovieboxProvider())
+        // Registrasi provider utama
+        registerMainAPI(MovieBoxProvider())
     }
 }
