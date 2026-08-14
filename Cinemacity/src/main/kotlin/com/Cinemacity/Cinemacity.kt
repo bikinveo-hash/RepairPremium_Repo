@@ -3,16 +3,13 @@ package com.Cinemacity
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.app
+// [REVISI]: Import eksplisit method LoadResponse.Companion untuk scope DSL
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.api.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 
-/**
- * Cinemacity Provider - Pipeline UI & Parser Perbaikan Final
- */
 class Cinemacity : MainAPI() {
 
     override var mainUrl = "https://cinemacity.cc"
@@ -22,14 +19,13 @@ class Cinemacity : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     companion object {
-        private const val loginCookie = "" // [REDACTED_SECRET] — isi kredensial manual jika diperlukan
+        private const val loginCookie = "" // [REDACTED_SECRET] — isi manual
 
         private val seasonRegex = Regex("""Season\s*(\d+)""", RegexOption.IGNORE_CASE)
         private val episodeRegex = Regex("""Episode\s*(\d+)""", RegexOption.IGNORE_CASE)
         private val imdbRegex = Regex("""tt\d+""")
         private val dleHashRegex = Regex("""dle_login_hash\s*=\s*'([^']+)'""")
         private val subtitleRegex = Regex("""\[(.+?)](https?://.+)""")
-        private val cssUrlRegex = Regex("""url\(['"]?(.*?)['"]?\)""")
 
         private val cfMarkers = listOf(
             "<title>just a moment",
@@ -40,10 +36,6 @@ class Cinemacity : MainAPI() {
 
         private const val TAG = "Phisher"
     }
-
-    // ---------------------------------------------------------------
-    // HTTP UTILS & CF
-    // ---------------------------------------------------------------
 
     private suspend fun appGet(url: String, headers: Map<String, String> = emptyMap()) =
         app.get(url, headers = headers, interceptor = CinemacityCFBypassInterceptor)
@@ -58,12 +50,9 @@ class Cinemacity : MainAPI() {
 
     private fun buildCookieValue(): String {
         val cf = CinemacityPlugin.cfCookies
+        // [REVISI]: Mengganti isEmpty() dengan isNullOrEmpty() karena cf bertipe String?
         return if (cf.isNullOrEmpty()) loginCookie else "$loginCookie; $cf"
     }
-
-    // ---------------------------------------------------------------
-    // MAIN PAGE & CATALOG
-    // ---------------------------------------------------------------
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home",
@@ -72,72 +61,48 @@ class Cinemacity : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val baseUrl = request.data.removeSuffix("/")
-        val url = if (page <= 1) "$baseUrl/" else "$baseUrl/page/$page/"
-        val res = appGet(url, siteCookieHeader())
+        val url = if (page <= 1) request.data else "${request.data}page/$page/"
+        val doc = appGet(url, siteCookieHeader()).document
 
-        if (isCloudflareBlocked(res.code, res.text)) {
-            throw ErrorLoadingException("CinemaCity: Cloudflare challenge detected.")
-        }
-
-        val doc = res.document
-
-        // Selector fleksibel mencakup semua variasi item DLE Cinemacity
-        val elements = doc.select("div.dar-short_item, div.dar-short_bg, div.shortstory, div[class*=short_item]")
-        val items = elements.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
-
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+        val items = doc.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(request.name, items)
     }
 
-    /**
-     * Parser Item Katalog & Poster
-     */
-    private fun Element.toSearchResult(): SearchResponse? {
-        // Link & URL
-        val linkElem = this.selectFirst("a[href*=/movies/], a[href*=/tv-series/], div.dar-short_bg a, a:not([data-highslide])")
-            ?: (if (this.tagName() == "a") this else null)
-        val rawHref = linkElem?.attr("href")?.takeIf { it.isNotBlank() } ?: return null
-        val fixedHref = fixUrl(rawHref)
+    private fun org.jsoup.nodes.Element.toSearchResult(): SearchResponse? {
+        val href = this.select("div.dar-short_bg a").firstOrNull()?.attr("href")
+            ?: this.select("a:not([data-highslide])").firstOrNull()?.attr("href")
+            ?: return null
+        val fixedHref = fixUrl(href)
 
-        // Title
-        val title = this.select("div.dar-short_bg.e-cover > div > span, div.dar-short_bg.e-cover > div span:nth-child(2) > a, h2, .short-title, a[title]")
+        val title = this.select("div.dar-short_bg.e-cover > div > span")
             .firstOrNull()?.text()?.trim()
-            ?: linkElem.attr("title").trim().takeIf { it.isNotBlank() }
-            ?: this.select("img[alt]").firstOrNull()?.attr("alt")?.trim()
+            ?: this.select("div.dar-short_bg.e-cover > div span:nth-child(2) > a")
+                .firstOrNull()?.text()?.trim()
             ?: return null
 
-        // Poster: Cari dari img -> data-src -> style background -> data-vbg
-        val imgElem = this.selectFirst("img")
-        val rawPoster = imgElem?.attr("data-src")?.takeIf { it.isNotBlank() }
-            ?: imgElem?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
-            ?: this.select("[data-vbg]").firstOrNull()?.attr("data-vbg")?.takeIf { it.isNotBlank() }
-            ?: this.select("[style*='background']").firstOrNull()?.attr("style")?.let { style ->
-                cssUrlRegex.find(style)?.groupValues?.getOrNull(1)
-            }
-
-        val fixedPoster = rawPoster?.let { fixUrl(it) }
+        val poster = this.select("[data-vbg]").firstOrNull()?.attr("data-vbg")
+            ?.takeIf { it.isNotBlank() }
+            ?: this.select("img").firstOrNull()?.attr("src")
 
         return if (fixedHref.contains("/tv-series/")) {
             newTvSeriesSearchResponse(title, fixedHref, TvType.TvSeries) {
-                this.posterUrl = fixedPoster
+                this.posterUrl = poster?.let { fixUrl(it) }
             }
         } else {
             newMovieSearchResponse(title, fixedHref, TvType.Movie) {
-                this.posterUrl = fixedPoster
+                this.posterUrl = poster?.let { fixUrl(it) }
             }
         }
     }
-
-    // ---------------------------------------------------------------
-    // SEARCH
-    // ---------------------------------------------------------------
 
     override suspend fun search(query: String): List<SearchResponse> {
         val seedUrl = "$mainUrl/?do=search&subaction=search&search_start=0&full_search=0&story="
         val seed = appGet(seedUrl, siteCookieHeader())
 
         if (isCloudflareBlocked(seed.code, seed.text)) {
-            throw ErrorLoadingException("CinemaCity: Cloudflare blocked. Go to Settings → Bypass Cloudflare.")
+            throw ErrorLoadingException(
+                "CinemaCity: Cloudflare blocked. Go to Settings → Bypass Cloudflare."
+            )
         }
 
         val doc = seed.document
@@ -162,36 +127,26 @@ class Cinemacity : MainAPI() {
             interceptor = CinemacityCFBypassInterceptor
         )
 
-        return res.document.select("div.dar-short_item, div.dar-short_bg, div.shortstory")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        return res.document.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
     }
-
-    // ---------------------------------------------------------------
-    // LOAD
-    // ---------------------------------------------------------------
 
     override suspend fun load(url: String): LoadResponse? {
         val res = appGet(url, siteCookieHeader())
         if (isCloudflareBlocked(res.code, res.text)) {
-            throw ErrorLoadingException("CinemaCity: Cloudflare blocked. Go to Settings → Bypass Cloudflare.")
+            throw ErrorLoadingException(
+                "CinemaCity: Cloudflare blocked. Go to Settings → Bypass Cloudflare."
+            )
         }
         val doc = res.document
 
-        // Metadata lokal
-        val title = doc.select("meta[property=og:title]").attr("content").ifBlank { doc.title() }
-
-        // Poster Detail: prioritaskan poster gambar spesifik, fallback ke meta og:image
-        val poster = doc.select(".ta-full_poster img, div.dar-full_poster img, #about img")
-            .firstOrNull()?.let { it.attr("data-src").ifBlank { it.attr("src") } }
-            ?.takeIf { it.isNotBlank() }
-            ?: doc.select("meta[property=og:image]").attr("content").takeIf { it.isNotBlank() }
-
+        val title = doc.select("meta[property=og:title]").attr("content")
+            .ifBlank { doc.title() }
+        val poster = doc.select("meta[property=og:image]").attr("content")
+            .takeIf { it.isNotBlank() }
         val background = doc.select("div.dar-full_bg a").attr("data-vbg")
             .ifBlank { doc.select("div.dar-full_bg.e-cover > div").attr("data-vbg") }
             .takeIf { it.isNotBlank() }
-
-        val plot = doc.select("#about div.ta-full_text1, .ta-full_text1, .full-story").text().trim()
+        val plot = doc.select("#about div.ta-full_text1").text().trim()
             .takeIf { it.isNotBlank() }
 
         val tvType = if (url.contains("/tv-series/")) TvType.TvSeries else TvType.Movie
@@ -200,7 +155,6 @@ class Cinemacity : MainAPI() {
             .firstOrNull()?.attr("onclick")
             ?.let { imdbRegex.find(it)?.value }
 
-        // PlayerJS Engine
         val script = doc.select("script:containsData(atob)").getOrNull(1)?.data()
             ?: throw ErrorLoadingException("PlayerJS not found; only torrent links available")
 
@@ -215,28 +169,25 @@ class Cinemacity : MainAPI() {
             ?: throw ErrorLoadingException("PlayerJS: missing file field")
 
         val fileArray = normalizeFile(fileValue)
+
         Log.d(TAG, fileArray.toString())
 
         val movieData = buildMovieData(playerRoot, fileArray)
 
         return if (tvType != TvType.TvSeries) {
             newMovieLoadResponse(title, url, TvType.Movie, movieData) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.backgroundPosterUrl = background?.let { fixUrl(it) }
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background
                 this.plot = plot
-                if (!imdbId.isNullOrBlank()) {
-                    addImdbId(imdbId)
-                }
+                addImdbId(imdbId)
             }
         } else {
             val episodes = buildEpisodes(fileArray)
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.backgroundPosterUrl = background?.let { fixUrl(it) }
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background
                 this.plot = plot
-                if (!imdbId.isNullOrBlank()) {
-                    addImdbId(imdbId)
-                }
+                addImdbId(imdbId)
             }
         }
     }
@@ -337,10 +288,6 @@ class Cinemacity : MainAPI() {
         }
         return out
     }
-
-    // ---------------------------------------------------------------
-    // LOADLINKS
-    // ---------------------------------------------------------------
 
     override suspend fun loadLinks(
         data: String,
