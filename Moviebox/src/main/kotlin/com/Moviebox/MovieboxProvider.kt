@@ -11,8 +11,10 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import android.content.Context
 import android.util.Base64
 import android.util.Log
+import java.util.UUID
 import java.net.URLEncoder
 import java.net.URLDecoder
 
@@ -22,23 +24,179 @@ class MovieBoxProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override var hasMainPage = true
 
-    override val mainPage = mainPageOf(
-        "872031290915189720" to "Trending",
-        "8821254238245470240" to "Film",
-        "6528093688173053896" to "Indo Film",
-        "4380734070238626200" to "K-Drama",
-        "5283462032510044280" to "Indo Drama",
-        "8617025562613270856" to "Anime",
-        "1469286917119311888" to "Hollywood",
-        "8624142774394406504" to "C-Drama",
-        "5848753831881965888" to "Horror",
-        "1164329479448281992" to "Thai-Drama"
-    )
+    // Disusun dari daftar kategori yang server kirim (lihat mainPageEntries).
+    override val mainPage = mainPageOf(*mainPageEntries())
 
     companion object {
         private const val TAG = "MovieBox"
         private const val CS_USER_AGENT = "com.community.oneroom/50020088 (Linux; U; Android 13; en_US; Samsung; Build/TQ3A.230901.001)"
-        private const val CLIENT_INFO = """{"package_name":"com.community.oneroom","version_name":"3.0.13.0325.03","version_code":50020088,"os":"android","os_version":"13","device_id":"71e0f7746936dc98","install_store":"ps","system_language":"en","net":"NETWORK_WIFI","region":"US","timezone":"Asia/Calcutta","sp_code":""}"""
+        /**
+         * x-client-info dirakit saat request, bukan konstanta, karena device_id
+         * berasal dari identity persisten per-instalasi.
+         *
+         * Isi field lain TIDAK berubah sedikit pun dari versi sebelumnya.
+         * x-client-info tidak ikut ditandatangani (buildCanonical hanya memakai
+         * method/accept/content-type/panjang body/ts/md5 body/path), jadi
+         * perubahan ini tidak dapat memengaruhi signature.
+         */
+        private fun clientInfo(): String =
+            "{\"package_name\":\"com.community.oneroom\",\"version_name\":\"3.0.13.0325.03\"," +
+            "\"version_code\":50020088,\"os\":\"android\",\"os_version\":\"13\"," +
+            "\"device_id\":\"${deviceId()}\",\"install_store\":\"ps\"," +
+            "\"system_language\":\"en\",\"net\":\"NETWORK_WIFI\",\"region\":\"US\"," +
+            "\"timezone\":\"Asia/Calcutta\",\"sp_code\":\"\"}"
+
+        // ---------------------------------------------------------------
+        // KATEGORI HOME  (self-healing)
+        //
+        // Setiap respons tab/ranking-list membawa data.categoryList lengkap
+        // (name + type). Daftar itu disimpan, lalu dipakai menyusun mainPage
+        // pada pemuatan berikutnya. Daftar di bawah hanya seed untuk
+        // instalasi baru.
+        //
+        // Server membalas categoryType yang tidak dikenal dengan feed default
+        // (HTTP 200, tanpa error), sehingga kategori basi tampil sebagai
+        // daftar film yang sama berulang-ulang. Itu yang diperbaiki di sini.
+        //
+        // Parameter request TIDAK diubah: tabId=0, perPage=10, tanpa
+        // rankingListId -- terbukti identik dengan default APK (Ltl/d$a;->a).
+        // ---------------------------------------------------------------
+        private const val CAT_KEY = "categorylist"
+
+        private val SEED_CATEGORIES = listOf(
+            "4809349160627587984" to "Semua",
+            "4380734070238626200" to "K-Drama",
+            "5283462032510044280" to "Indo Drama",
+            "8617025562613270856" to "Anime",
+            "5307082080063488480" to "Barat",
+            "8624142774394406504" to "C-Drama",
+            "1164329479448281992" to "Thai-Drama",
+            "5720220657917522824" to "Reality"
+        )
+
+        @Volatile private var categories: List<Pair<String, String>> = SEED_CATEGORIES
+
+        // ---------------------------------------------------------------
+        // BARIS FILTER  (subject-api/list, bukan tab/ranking-list)
+        //
+        // "Horror" sudah tidak ada di categoryList server, jadi tidak mungkin
+        // didapat lewat ranking-list. Layar Filter APK memakai endpoint lain:
+        //
+        //   GET  subject-api/filter-items  tl.c->b   (daftar opsi filter)
+        //   POST subject-api/list          tl.c->a   @Query(host) @Body()
+        //
+        // Nilai filter berupa string apa adanya dari filter-items
+        // ("Horror", "Indonesia"), bukan id.
+        // ---------------------------------------------------------------
+        private const val FILTER_PREFIX = "filter:"
+
+        private val EXTRA_ROWS = listOf(
+            FILTER_PREFIX + "subjectType=1&genre=Horror&country=Indonesia" to "Horror Indonesia"
+        )
+
+        private fun prefs() =
+            try { appContext?.getSharedPreferences(ID_PREFS, Context.MODE_PRIVATE) }
+            catch (e: Exception) { null }
+
+        /** Dipakai oleh mainPage. Sudah terisi karena attachContext() dipanggil duluan. */
+        private fun mainPageEntries(): Array<Pair<String, String>> =
+            (categories + EXTRA_ROWS).toTypedArray()
+
+        private fun loadCategories() {
+            val parsed = prefs()?.getString(CAT_KEY, null)
+                ?.split("\n")
+                ?.mapNotNull { line ->
+                    val p = line.split("\t")
+                    if (p.size == 2 && p[0].isNotBlank() && p[1].isNotBlank()) p[0] to p[1] else null
+                }
+                ?.takeIf { it.isNotEmpty() }
+            if (parsed != null) categories = parsed
+            Log.d(TAG, "[CATEGORY] dimuat ${categories.size} kategori " +
+                    "(${if (parsed != null) "tersimpan" else "seed"}): " +
+                    categories.joinToString(", ") { it.second })
+        }
+
+        /** Dipanggil dari getMainPage. Menyimpan hanya bila daftar server berubah. */
+        private fun rememberCategories(fresh: List<CategoryItem>) {
+            val list = fresh.mapNotNull { c ->
+                val t = c.type
+                val n = c.name
+                if (t.isNullOrBlank() || n.isNullOrBlank()) null else t to n
+            }
+            if (list.isEmpty() || list == categories) return
+            categories = list
+            try {
+                prefs()?.edit()?.putString(
+                    CAT_KEY, list.joinToString("\n") { "${it.first}\t${it.second}" }
+                )?.apply()
+                Log.d(TAG, "[CATEGORY] daftar server berubah -> disimpan ${list.size}: " +
+                        list.joinToString(", ") { it.second })
+            } catch (e: Exception) {
+                Log.e(TAG, "[CATEGORY] gagal menyimpan: ${e.message}")
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // IDENTITY  (meniru Lmh/b;->h pada APK: UUID -> MD5 -> persist)
+        //
+        //   APK : MMKV("vshow")["apkdeviceid"]      <- Lph/a$a;->d(UUID)
+        //   sini: SharedPreferences("moviebox_identity")["apkdeviceid"]
+        //
+        // md5() yang sudah ada di companion ini identik dengan Lph/a$a;->d:
+        // MD5 hex huruf kecil 32 karakter. Cabang Android-ID pada APK sengaja
+        // TIDAK ditiru; jalur UUID adalah cabang yang sama yang dipakai APK
+        // pada Android modern, dan tidak menyentuh identifier perangkat.
+        // ---------------------------------------------------------------
+        private const val ID_PREFS = "moviebox_identity"
+        private const val ID_KEY = "apkdeviceid"
+        private val ID_FORMAT = Regex("^[0-9a-f]{32}$")
+
+        @Volatile private var appContext: Context? = null
+        @Volatile private var cachedDeviceId: String? = null
+        @Volatile private var persisted = false
+
+        /** Dipanggil dari MovieboxPlugin.load() sebelum provider didaftarkan. */
+        fun attachContext(context: Context) {
+            appContext = context.applicationContext
+            loadCategories()
+            val id = deviceId()
+            // Logging sementara: verifikasi stabil setelah restart, lalu boleh dihapus.
+            Log.d(TAG, "[IDENTITY] device_id=$id len=${id.length} " +
+                    "valid=${ID_FORMAT.matches(id)} persisted=$persisted")
+        }
+
+        /**
+         * Storage adalah sumber kebenaran. Nilai hanya dibuat sekali, lalu
+         * dipakai selamanya. Nilai in-memory hanya dipakai bila storage sedang
+         * tidak tersedia, dan akan dipersist pada kesempatan pertama sehingga
+         * identity tidak berganti antar-restart.
+         */
+        private fun deviceId(): String {
+            val cached = cachedDeviceId
+            if (cached != null && persisted) return cached
+
+            val ctx = appContext
+            if (ctx != null) {
+                try {
+                    val sp = ctx.getSharedPreferences(ID_PREFS, Context.MODE_PRIVATE)
+                    val existing = sp.getString(ID_KEY, null)
+                    if (!existing.isNullOrBlank() && ID_FORMAT.matches(existing)) {
+                        cachedDeviceId = existing
+                        persisted = true
+                        return existing
+                    }
+                    val fresh = cached ?: md5(UUID.randomUUID().toString())
+                    sp.edit().putString(ID_KEY, fresh).apply()
+                    cachedDeviceId = fresh
+                    persisted = true
+                    return fresh
+                } catch (e: Exception) {
+                    Log.e(TAG, "[IDENTITY] storage tidak tersedia: ${e.message}")
+                }
+            }
+
+            return cached ?: md5(UUID.randomUUID().toString()).also { cachedDeviceId = it }
+        }
 
         private val SECRET_BYTES: ByteArray by lazy {
             val step1 = String(Base64.decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==", Base64.DEFAULT), Charsets.UTF_8)
@@ -106,7 +264,7 @@ class MovieBoxProvider : MainAPI() {
             "content-type" to "application/json",
             "x-client-token" to generateGuestToken(ts),
             "x-tr-signature" to signature,
-            "x-client-info" to CLIENT_INFO,
+            "x-client-info" to clientInfo(),
             "x-client-status" to "0"
         )
         if (!bearer.isNullOrBlank()) h["authorization"] = "Bearer $bearer"
@@ -252,6 +410,9 @@ class MovieBoxProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
+        if (request.data.startsWith(FILTER_PREFIX)) return filterPage(page, request)
+
+        Log.d(TAG, "[CATEGORY] name=${request.name} categoryType=${request.data} page=$page")
         val bearerToken = getBearerToken() ?: return null
         val ts = System.currentTimeMillis().toString()
         val path = "/wefeed-mobile-bff/tab/ranking-list"
@@ -264,6 +425,9 @@ class MovieBoxProvider : MainAPI() {
 
         val jsonRes = response.parsedSafe<RankingResponse>() ?: return null
         val dataObj = jsonRes.data ?: return null
+
+        // Daftar kategori terbaru ikut menumpang di setiap respons. Nol request tambahan.
+        dataObj.categoryList?.let { rememberCategories(it) }
 
         val homeItems = dataObj.subjects?.mapNotNull { item ->
             val subjectId = item.subjectId ?: return@mapNotNull null
@@ -282,7 +446,58 @@ class MovieBoxProvider : MainAPI() {
             }
         } ?: emptyList()
 
+        val first = dataObj.subjects?.firstOrNull()
+        Log.d(TAG, "[CATEGORY] name=${request.name} HTTP=${response.code} " +
+                "subjects=${homeItems.size} firstSubjectId=${first?.subjectId} " +
+                "firstTitle=${first?.title}")
+
         return newHomePageResponse(request.name, homeItems)
+    }
+
+    /**
+     * Baris home yang bersumber dari layar Filter APK, bukan dari kategori.
+     *
+     * request.data berformat "filter:k=v&k=v"; pasangan tersebut dikirim apa
+     * adanya sebagai field body POST subject-api/list, ditambah page/perPage.
+     * Nama field dan nilainya terbukti dari runtime: body datar menghasilkan
+     * 10/10 item bergenre Horror dan bernegara Indonesia, sedangkan body tanpa
+     * filter mengembalikan katalog campur termasuk subjectType 6.
+     */
+    private suspend fun filterPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val spec = request.data.removePrefix(FILTER_PREFIX)
+        Log.d(TAG, "[CATEGORY] name=${request.name} filter=$spec page=$page")
+
+        val bearerToken = getBearerToken() ?: return null
+
+        val body = JSONObject().put("page", page).put("perPage", 10)
+        spec.split("&").forEach { pair ->
+            val kv = pair.split("=", limit = 2)
+            if (kv.size == 2 && kv[0].isNotBlank()) {
+                val v = kv[1]
+                if (v.toIntOrNull() != null) body.put(kv[0], v.toInt()) else body.put(kv[0], v)
+            }
+        }
+
+        val raw = postSigned("/wefeed-mobile-bff/subject-api/list", body.toString(), bearerToken)
+            ?: return null
+
+        val items = try {
+            JSONObject(raw).optJSONObject("data")?.optJSONArray("items")
+        } catch (e: Exception) {
+            Log.e(TAG, "[CATEGORY] parse filter gagal: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
+
+        val out = mutableListOf<SearchResponse>()
+        for (i in 0 until (items?.length() ?: 0)) {
+            val obj = items!!.optJSONObject(i) ?: continue
+            subjectToSearchResponse(obj)?.let { out.add(it) }
+        }
+
+        Log.d(TAG, "[CATEGORY] name=${request.name} items=${items?.length() ?: 0} mapped=${out.size} " +
+                "firstTitle=${items?.optJSONObject(0)?.optString("title")}")
+
+        return newHomePageResponse(request.name, out)
     }
 
     // 2. SEARCH
