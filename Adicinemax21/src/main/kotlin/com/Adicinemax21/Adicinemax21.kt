@@ -2,10 +2,8 @@ package com.Adicinemax21
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.Adicinemax21.Adicinemax21Extractor.invokeKisskh 
-import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox
-import com.Adicinemax21.Adicinemax21Extractor.invokeAdimoviebox2 
-import com.Adicinemax21.Adicinemax21Extractor.invokeVidlink
-import com.Adicinemax21.Adicinemax21Extractor.invokeIdlix
+import com.Adicinemax21.Adicinemax21Extractor.invokeMoviebox
+import com.Adicinemax21.Adicinemax21Idlix.invokeIdlix
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -15,17 +13,29 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import okhttp3.Interceptor
 
 open class Adicinemax21 : TmdbProvider() {
     override var name = "Adicinemax21"
     override val hasMainPage = true
     override var lang = "en"
-    override val instantLinkLoading = true
     override val useMetaLoadResponse = true
     override val hasQuickSearch = true
+
+    // [AUDIT-A1] MainAPI: "Set false if links require referer or for some reason cant be
+    // played on a chromecast". Link MovieBox wajib membawa header Cookie hasil signCookie
+    // lewat getVideoInterceptor(), dan Kisskh wajib membawa Referer. Chromecast tidak
+    // memakai interceptor provider sehingga CDN membalas 403. Kembalikan ke true hanya
+    // bila nanti ada sumber yang benar-benar bisa di-cast.
+    override val hasChromecastSupport = false
+
+    // [AUDIT-A3] load() dapat mengembalikan TvType.Anime (isAnime), sedangkan supportedTypes
+    // sebelumnya hanya Movie + TvSeries. LoadResponse yang tipenya di luar supportedTypes
+    // membuat provider tersaring dari filter tipe di UI.
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
+        TvType.Anime,
     )
 
     val wpRedisInterceptor by lazy { CloudflareKiller() }
@@ -38,9 +48,6 @@ open class Adicinemax21 : TmdbProvider() {
         const val jikanAPI = "https://api.jikan.moe/v4"
 
         private const val apiKey = "b030404650f279792a8d3287232358e3"
-
-        /** HANYA SUMBER YANG AKTIF */
-        const val vidlinkAPI = "https://vidlink.pro"
 
         fun getType(t: String?): TvType = when (t) {
             "movie" -> TvType.Movie
@@ -102,14 +109,25 @@ open class Adicinemax21 : TmdbProvider() {
         return newHomePageResponse(request.name, home)
     }
 
+    // [AUDIT-A4] Sebelumnya SEMUA hasil dibungkus newMovieSearchResponse + TvType.Movie,
+    // termasuk serial. MainAPI memakai tipe ini untuk ikon, filter tipe, dan sinkronisasi
+    // watch-list, jadi serial ikut terdaftar sebagai film. Payload "Data" tidak diubah,
+    // sehingga load() tetap menerima data yang sama persis.
     private fun Media.toSearchResponse(type: String? = null): SearchResponse? {
-        return newMovieSearchResponse(
-            title ?: name ?: originalTitle ?: return null,
-            Data(id = id, type = mediaType ?: type).toJson(),
-            TvType.Movie,
-        ) {
-            this.posterUrl = getImageUrl(posterPath)
-            this.score = Score.from10(voteAverage)
+        val label = title ?: name ?: originalTitle ?: return null
+        val mediaKind = mediaType ?: type
+        val payload = Data(id = id, type = mediaKind).toJson()
+
+        return if (mediaKind == "tv") {
+            newTvSeriesSearchResponse(label, payload, TvType.TvSeries) {
+                this.posterUrl = getImageUrl(posterPath)
+                this.score = Score.from10(voteAverage)
+            }
+        } else {
+            newMovieSearchResponse(label, payload, TvType.Movie) {
+                this.posterUrl = getImageUrl(posterPath)
+                this.score = Score.from10(voteAverage)
+            }
         }
     }
 
@@ -299,13 +317,33 @@ open class Adicinemax21 : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
-            { invokeIdlix(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox2(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
+            { invokeMoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.airedYear, res.season, res.episode, subtitleCallback, callback) },
             { invokeKisskh(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeAdimoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeVidlink(res.id, res.season, res.episode, callback) }
+            { invokeIdlix(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) }
         )
         return true
+    }
+
+    /**
+     * Dipindahkan dari MovieBoxProvider.
+     *
+     * Stream MovieBox memakai signed cookie; tanpa interceptor ini ExoPlayer
+     * tidak mengirim header Cookie ke CDN dan semua request balas 403.
+     *
+     * Return null bila link tidak punya header Cookie, sehingga Kisskh sama
+     * sekali tidak terpengaruh.
+     */
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        val cookie = extractorLink.headers["Cookie"]
+        if (cookie.isNullOrBlank()) return null
+        val userAgent = extractorLink.headers["User-Agent"]
+
+        return Interceptor { chain ->
+            val request = chain.request()
+            val builder = request.newBuilder().header("Cookie", cookie)
+            if (!userAgent.isNullOrBlank()) builder.header("User-Agent", userAgent)
+            chain.proceed(builder.build())
+        }
     }
 
     data class LinkData(
@@ -333,6 +371,7 @@ open class Adicinemax21 : TmdbProvider() {
         val isCartoon: Boolean = false,
     )
 
+    // Data class lainnya tetap dengan penambahan @param:
     data class Data(
         val id: Int? = null,
         val type: String? = null,

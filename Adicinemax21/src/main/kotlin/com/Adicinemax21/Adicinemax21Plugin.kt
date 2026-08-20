@@ -7,6 +7,9 @@ import android.content.Context
 @CloudstreamPlugin
 class Adicinemax21Plugin : Plugin() {
     override fun load(context: Context) {
+        // Identity persisten MovieBox disiapkan sebelum request pertama.
+        Adicinemax21Extractor.attachContext(context)
+
         // Hanya mendaftarkan provider utama
         registerMainAPI(Adicinemax21())
     }

@@ -1,17 +1,24 @@
 package com.Adicinemax21
 
-import android.util.Base64
-import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.APIHolder.unixTimeMS
 import com.lagradost.cloudstream3.mvvm.logError
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.Qualities
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Locale
 
 // ================== HANYA FUNGSI YANG MASIH DIPAKAI ==================
+//
+// DIHAPUS pada migrasi Adimoviebox/Adimoviebox2 -> MovieboxProvider:
+//   - fixUrl()            : 0 pemanggil (dead code sejak awal)
+//   - base64Decode()      : hanya dipakai Adimoviebox2Helper
+//   - base64Encode()      : hanya dipakai Adimoviebox2Helper (Base64.DEFAULT, bikin newline)
+//   - base64DecodeArray() : sudah ter-shadow versi privat di Adimoviebox2Helper
+//
+// Engine Moviebox yang baru memakai android.util.Base64 secara langsung
+// dengan flag NO_WRAP, jadi tidak butuh wrapper di sini.
 
 /**
- * Tetap dipertahankan karena dipakai di Adicinemax21.load()
+ * Dipakai di Adicinemax21.load() untuk menandai episode/film yang belum rilis.
  */
 fun isUpcoming(dateString: String?): Boolean {
     return try {
@@ -25,29 +32,7 @@ fun isUpcoming(dateString: String?): Boolean {
 }
 
 /**
- * Dipakai untuk menggabungkan path relatif di sumber (Adimoviebox, dll)
- */
-fun fixUrl(url: String, domain: String): String {
-    if (url.startsWith("http")) {
-        return url
-    }
-    if (url.isEmpty()) {
-        return ""
-    }
-
-    val startsWithNoHttp = url.startsWith("//")
-    if (startsWithNoHttp) {
-        return "https:$url"
-    } else {
-        if (url.startsWith('/')) {
-            return domain + url
-        }
-        return "$domain/$url"
-    }
-}
-
-/**
- * Dipakai untuk mendapatkan kualitas dari string (Adimoviebox, Adimoviebox2)
+ * Dipakai oleh source Moviebox untuk memetakan field "resolutions" ke Qualities.
  */
 fun getQualityFromName(qualityName: String?): Int {
     if (qualityName == null)
@@ -58,18 +43,4 @@ fun getQualityFromName(qualityName: String?): Int {
         "4k" -> Qualities.P2160
         else -> null
     }?.value ?: match.toIntOrNull() ?: Qualities.Unknown.value
-}
-
-// Fungsi Base64 untuk Adimoviebox2Helper (ada di Extractor)
-fun base64Decode(string: String): String {
-    val bytes = Base64.decode(string, Base64.DEFAULT)
-    return bytes.toString(Charsets.ISO_8859_1)  // Sesuai implementasi asli
-}
-
-fun base64Encode(array: ByteArray): String {
-    return Base64.encodeToString(array, Base64.DEFAULT)
-}
-
-fun base64DecodeArray(string: String): ByteArray {
-    return Base64.decode(string, Base64.DEFAULT)
 }
