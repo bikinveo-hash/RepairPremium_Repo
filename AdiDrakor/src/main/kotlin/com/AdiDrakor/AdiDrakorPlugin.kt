@@ -7,7 +7,10 @@ import android.content.Context
 @CloudstreamPlugin
 class AdiDrakorPlugin : Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan provider AdiDrakor agar dikenali oleh Cloudstream
+        // Identity persisten MovieBox disiapkan sebelum request pertama.
+        AdiDrakorExtractor.attachContext(context)
+
+        // Hanya mendaftarkan provider utama
         registerMainAPI(AdiDrakor())
     }
 }
