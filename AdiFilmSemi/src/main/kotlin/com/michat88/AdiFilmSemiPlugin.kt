@@ -7,7 +7,10 @@ import android.content.Context
 @CloudstreamPlugin
 class AdiFilmSemiPlugin : Plugin() {
     override fun load(context: Context) {
-        // Register Main Provider saja, tanpa extractor Jeniusplay.
+        // Identity persisten MovieBox disiapkan sebelum request pertama.
+        AdiFilmSemiExtractor.attachContext(context)
+
+        // Hanya mendaftarkan provider utama
         registerMainAPI(AdiFilmSemi())
     }
 }
