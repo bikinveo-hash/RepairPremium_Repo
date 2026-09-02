@@ -12,6 +12,7 @@ class LayarKacaPlugin : Plugin() {
 
         // Mendaftarkan semua Extractor tambahan agar terbaca oleh sistem CloudStream
         registerExtractorAPI(Lk21TurboExtractor())
+        registerExtractorAPI(PlayCdnP2PExtractor())
         registerExtractorAPI(HowNetworkExtractor())
         registerExtractorAPI(CastExtractor())
         
