@@ -13,18 +13,25 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.annotation.JsonProperty
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.net.URI
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.security.interfaces.ECPublicKey
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
@@ -57,7 +64,8 @@ data class HydraxSource(
     @JsonProperty("label") val label: String? = null,
     @JsonProperty("codec") val codec: String? = null,
     @JsonProperty("path") val path: String? = null,
-    @JsonProperty("url") val url: String? = null
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("size") val size: Long? = null
 )
 
 data class HowNetworkResponse(
@@ -65,6 +73,22 @@ data class HowNetworkResponse(
     @JsonProperty("file") val file: String?,
     @JsonProperty("type") val type: String?,
     @JsonProperty("title") val title: String?
+)
+
+data class PlayCdnPlayerData(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("token") val token: String? = null
+)
+
+data class PlayCdnVerifyResponse(
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("fileUrl") val fileUrl: String? = null,
+    @JsonProperty("message") val message: String? = null
+)
+
+data class PlayCdnVerifyPayload(
+    @JsonProperty("token") val token: String,
+    @JsonProperty("is_ios") val isIos: Boolean
 )
 
 data class CastChalResp(
@@ -110,6 +134,15 @@ object HydraxProxy {
     @Volatile private var isRunning = false
     private var serverSocket: ServerSocket? = null
 
+    private data class PartMap(
+        val partSizes: List<Long>,
+        val cumulativeStarts: List<Long>,
+        val virtualTotalSize: Long
+    )
+
+    private val partMapCache = ConcurrentHashMap<String, PartMap>()
+    private const val MAX_DISCOVERY_PARTS = 32
+
     private val proxyClient by lazy {
         app.baseClient.newBuilder()
             .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -121,7 +154,150 @@ object HydraxProxy {
             .build()
     }
 
+    fun sourceId(realUrl: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(realUrl.toByteArray(Charsets.UTF_8))
+            .take(6)
+            .joinToString("") { "%02x".format(it) }
+
+    private fun physicalPartUrl(realUrl: String, partIndex: Int): String =
+        if (partIndex == 0) realUrl else "$realUrl$partIndex"
+
+    private fun discoverPartMap(
+        realUrl: String,
+        expectedVirtualSize: Long?,
+        sourceId: String
+    ): PartMap? {
+        val sizes = mutableListOf<Long>()
+        var total = 0L
+
+        for (partIndex in 0 until MAX_DISCOVERY_PARTS) {
+            val probe = Request.Builder()
+                .url(physicalPartUrl(realUrl, partIndex))
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://abyssplayer.com/")
+                .header("Origin", "https://abyssplayer.com")
+                .header("Accept-Encoding", "identity")
+                .header("Range", "bytes=0-0")
+                .build()
+
+            val partSize = try {
+                proxyClient.newCall(probe).execute().use { probeResponse ->
+                    if (probeResponse.code !in 200..299) {
+                        if (expectedVirtualSize == null && sizes.isNotEmpty() &&
+                            probeResponse.code in setOf(404, 416)
+                        ) {
+                            null
+                        } else {
+                            Log.e(
+                                "HydraxProxy",
+                                "sourceMapFailed sourceId=$sourceId part=$partIndex " +
+                                    "status=${probeResponse.code}"
+                            )
+                            return null
+                        }
+                    } else {
+                        val physicalRange = probeResponse.header("Content-Range").orEmpty()
+                        Regex("(?i)^bytes\\s+\\d+-\\d+/(\\d+)$")
+                            .find(physicalRange)?.groupValues?.getOrNull(1)?.toLongOrNull()
+                            ?: if (probeResponse.code == 200) {
+                                probeResponse.header("Content-Length")?.toLongOrNull()
+                            } else {
+                                null
+                            }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(
+                    "HydraxProxy",
+                    "sourceMapFailed sourceId=$sourceId part=$partIndex " +
+                        "error=${e.javaClass.simpleName}"
+                )
+                return null
+            }
+
+            if (partSize == null) {
+                if (expectedVirtualSize == null && sizes.isNotEmpty()) break
+                Log.e("HydraxProxy", "sourceMapFailed sourceId=$sourceId reason=part_size_missing")
+                return null
+            }
+            if (partSize <= 0L) {
+                Log.e("HydraxProxy", "sourceMapFailed sourceId=$sourceId reason=invalid_part_size")
+                return null
+            }
+
+            sizes.add(partSize)
+            total += partSize
+
+            if (expectedVirtualSize != null) {
+                when {
+                    total == expectedVirtualSize -> break
+                    total > expectedVirtualSize -> {
+                        Log.e(
+                            "HydraxProxy",
+                            "sourceMapFailed sourceId=$sourceId reason=parts_exceed_metadata " +
+                                "sum=$total expected=$expectedVirtualSize"
+                        )
+                        return null
+                    }
+                }
+            }
+        }
+
+        if (sizes.isEmpty()) return null
+        if (expectedVirtualSize != null && total != expectedVirtualSize) {
+            Log.e(
+                "HydraxProxy",
+                "sourceMapFailed sourceId=$sourceId reason=metadata_not_reached " +
+                    "sum=$total expected=$expectedVirtualSize"
+            )
+            return null
+        }
+
+        val virtualTotal = expectedVirtualSize ?: total
+        val starts = ArrayList<Long>(sizes.size)
+        var cumulative = 0L
+        sizes.forEach { size ->
+            starts.add(cumulative)
+            cumulative += size
+        }
+        val map = PartMap(sizes.toList(), starts, virtualTotal)
+        Log.i(
+            "HydraxProxy",
+            "sourceMap sourceId=$sourceId virtualTotal=${map.virtualTotalSize} " +
+                "partCount=${map.partSizes.size} partSizes=${map.partSizes}"
+        )
+        return map
+    }
+
+    private fun getPartMap(
+        realUrl: String,
+        expectedVirtualSize: Long?,
+        sourceId: String
+    ): PartMap? {
+        partMapCache[realUrl]?.let { return it }
+        return synchronized(partMapCache) {
+            partMapCache[realUrl] ?: discoverPartMap(
+                realUrl,
+                expectedVirtualSize,
+                sourceId
+            )?.also { partMapCache[realUrl] = it }
+        }
+    }
+
+    private fun writeRangeNotSatisfiable(
+        output: java.io.OutputStream,
+        virtualTotalSize: Long
+    ) {
+        output.write("HTTP/1.1 416 Range Not Satisfiable\r\n".toByteArray())
+        output.write("Content-Range: bytes */$virtualTotalSize\r\n".toByteArray())
+        output.write("Content-Length: 0\r\n".toByteArray())
+        output.write("Connection: close\r\n\r\n".toByteArray())
+        output.flush()
+    }
+
     fun start() {
+        Log.i("HydraxProxy", "H3_DYNAMIC_MULTIPART_BUILD=20260901_H3_V1")
         if (isRunning) return
         try {
             serverSocket = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
@@ -176,6 +352,9 @@ object HydraxProxy {
             val encodedUrl = params["url"] ?: return
             val keyHex = params["key"] ?: return
             val realUrl = String(Base64.decode(encodedUrl, Base64.URL_SAFE))
+            val expectedVirtualSize = params["size"]?.toLongOrNull()?.takeIf { it > 0L }
+            val sourceId = params["sid"]?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) }
+                ?: HydraxProxy.sourceId(realUrl)
 
             var rangeHeader: String? = null
             while (true) {
@@ -186,15 +365,58 @@ object HydraxProxy {
                 }
             }
 
-            val reqStart = rangeHeader?.replace("bytes=", "")?.split("-")?.get(0)?.toLongOrNull() ?: 0L
+            val requestedRange = rangeHeader
+                ?.removePrefix("bytes=")
+                ?.substringBefore(",")
+                ?.split("-", limit = 2)
+            val reqStart = requestedRange?.getOrNull(0)?.toLongOrNull() ?: 0L
+            val reqEnd = requestedRange?.getOrNull(1)?.toLongOrNull()
             Log.i("HydraxProxy", "[$clientId] [->] EXO MINTA RANGE : ${rangeHeader ?: "FULL (bytes=0-)"}")
 
-            val LIMIT_512MB = 536870912L
-            val partIndex = reqStart / LIMIT_512MB
-            val localOffset = reqStart % LIMIT_512MB
+            val partMap = getPartMap(realUrl, expectedVirtualSize, sourceId)
+            if (partMap == null) {
+                Log.e("HydraxProxy", "[$clientId] sourceMapUnavailable sourceId=$sourceId")
+                output.write("HTTP/1.1 503 Service Unavailable\r\n".toByteArray())
+                output.write("Content-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                output.flush()
+                return
+            }
+            if (reqStart < 0L || reqStart >= partMap.virtualTotalSize ||
+                (reqEnd != null && reqEnd < reqStart)
+            ) {
+                Log.w(
+                    "HydraxProxy",
+                    "[$clientId] invalidGlobalRange sourceId=$sourceId globalStart=$reqStart " +
+                        "virtualTotal=${partMap.virtualTotalSize}"
+                )
+                writeRangeNotSatisfiable(output, partMap.virtualTotalSize)
+                return
+            }
 
-            val targetUrl = if (partIndex > 0) "$realUrl$partIndex" else realUrl
-            val serverRangeHeader = "bytes=$localOffset-"
+            val partIndex = partMap.cumulativeStarts.indices.firstOrNull { index ->
+                val start = partMap.cumulativeStarts[index]
+                reqStart >= start && reqStart < start + partMap.partSizes[index]
+            }
+            if (partIndex == null) {
+                Log.e("HydraxProxy", "[$clientId] sourceMapGap sourceId=$sourceId globalStart=$reqStart")
+                writeRangeNotSatisfiable(output, partMap.virtualTotalSize)
+                return
+            }
+
+            val partStart = partMap.cumulativeStarts[partIndex]
+            val partSize = partMap.partSizes[partIndex]
+            val localOffset = reqStart - partStart
+            val requestedLocalEnd = reqEnd?.minus(partStart)
+            val localEnd = minOf(partSize - 1L, requestedLocalEnd ?: (partSize - 1L))
+
+            val targetUrl = physicalPartUrl(realUrl, partIndex)
+            val serverRangeHeader = "bytes=$localOffset-$localEnd"
+            Log.i(
+                "HydraxProxy",
+                "[$clientId] H3_MAP globalStart=$reqStart sourceId=$sourceId " +
+                    "mappedPart=$partIndex partStart=$partStart localOffset=$localOffset " +
+                    "virtualTotal=${partMap.virtualTotalSize}"
+            )
 
             val request = Request.Builder()
                 .url(targetUrl)
@@ -206,35 +428,41 @@ object HydraxProxy {
                 .build()
 
             val startTime = System.currentTimeMillis()
-            Log.d("HydraxProxy", "[$clientId] [*] Meneruskan request ke Hydrax Part $partIndex...")
+            Log.d(
+                "HydraxProxy",
+                "[$clientId] upstreamRequest sourceId=$sourceId physicalRange=$serverRangeHeader"
+            )
 
             response = proxyClient.newCall(request).execute()
             val timeTaken = System.currentTimeMillis() - startTime
 
             val code = response.code
-            var contentRange = response.header("Content-Range") ?: "Kosong"
-            var contentLength = response.header("Content-Length") ?: "Kosong"
-            var spoofedContentRange = contentRange
+            val contentRange = response.header("Content-Range") ?: "Kosong"
+            val contentLength = response.header("Content-Length") ?: "Kosong"
+            var translatedContentRange: String? = null
 
             if (code == 206 && contentRange != "Kosong") {
                 try {
-                    val rangeData = contentRange.replace("bytes ", "", ignoreCase = true).split("/")
-                    if (rangeData.size == 2) {
-                        val rangePositions = rangeData[0].split("-")
-                        if (rangePositions.size == 2) {
-                            val serverStart = rangePositions[0].toLong()
-                            val serverEnd = rangePositions[1].toLong()
-                            val spoofedStart = serverStart + (partIndex * LIMIT_512MB)
-                            val spoofedEnd = serverEnd + (partIndex * LIMIT_512MB)
-                            spoofedContentRange = "bytes $spoofedStart-$spoofedEnd/*"
-                        }
+                    val match = Regex("(?i)^bytes\\s+(\\d+)-(\\d+)/(\\d+)$").find(contentRange)
+                    val physicalStart = match?.groupValues?.getOrNull(1)?.toLongOrNull()
+                    val physicalEnd = match?.groupValues?.getOrNull(2)?.toLongOrNull()
+                    if (physicalStart != null && physicalEnd != null) {
+                        val globalStart = partStart + physicalStart
+                        val globalEnd = partStart + physicalEnd
+                        translatedContentRange =
+                            "bytes $globalStart-$globalEnd/${partMap.virtualTotalSize}"
                     }
                 } catch (e: Exception) {
-                    Log.w("HydraxProxy", "[$clientId] Gagal memanipulasi Content-Range: ${e.message}")
+                    Log.w("HydraxProxy", "[$clientId] contentRangeTranslateFailed: ${e.message}")
                 }
             }
 
-            Log.i("HydraxProxy", "[$clientId] [<-] RESPON HYDRAX : HTTP $code | Waktu: ${timeTaken}ms | C-Range: $spoofedContentRange | C-Length: $contentLength")
+            Log.i(
+                "HydraxProxy",
+                "[$clientId] upstreamStatus=$code sourceId=$sourceId " +
+                    "physicalRange=$contentRange virtualRange=${translatedContentRange ?: "NONE"} " +
+                    "virtualTotal=${partMap.virtualTotalSize} timeMs=$timeTaken contentLength=$contentLength"
+            )
 
             output.write("HTTP/1.1 $code ${response.message}\r\n".toByteArray())
             for ((key, value) in response.headers) {
@@ -245,8 +473,8 @@ object HydraxProxy {
                 output.write("$key: $value\r\n".toByteArray())
             }
 
-            if (code == 206 && spoofedContentRange != "Kosong") {
-                output.write("Content-Range: $spoofedContentRange\r\n".toByteArray())
+            if (code == 206 && translatedContentRange != null) {
+                output.write("Content-Range: $translatedContentRange\r\n".toByteArray())
             }
 
             output.write("Connection: close\r\n\r\n".toByteArray())
@@ -378,11 +606,20 @@ open class AbyssExtractor : ExtractorApi() {
                     val filename = path.substringAfterLast("/")
                     val fnHash = MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8))
                     val fnKeyHex = fnHash.joinToString("") { "%02x".format(it) }
+                    val sourceId = HydraxProxy.sourceId(srcUrl)
 
                     HydraxProxy.start()
 
                     val encodedUrl = Base64.encodeToString(srcUrl.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
-                    val localProxyUrl = "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl&key=$fnKeyHex"
+                    val sizeParam = src.size?.takeIf { it > 0L }?.toString().orEmpty()
+                    val localProxyUrl =
+                        "http://127.0.0.1:${HydraxProxy.port}/?url=$encodedUrl" +
+                            "&key=$fnKeyHex&size=$sizeParam&sid=$sourceId"
+                    Log.i(
+                        "HydraxProxy",
+                        "H3_SOURCE_REGISTER label=$label codec=${src.codec.orEmpty()} " +
+                            "virtualTotal=${src.size ?: "UNKNOWN"} sourceId=$sourceId"
+                    )
 
                     callback(
                         newExtractorLink(
@@ -427,6 +664,19 @@ open class Lk21TurboExtractor : ExtractorApi() {
     override var mainUrl = "https://turbovidhls.com"
     override val requiresReferer = false
 
+    companion object {
+        private const val DEBUG_TAG = "LAYARKACA_DEBUG"
+        private const val TURBO_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+    }
+
+    private fun originOf(value: String): String? = try {
+        val uri = URI(value)
+        if (uri.scheme.isNullOrBlank() || uri.host.isNullOrBlank()) null
+        else "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}"
+    } catch (_: Exception) {
+        null
+    }
+
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -435,22 +685,53 @@ open class Lk21TurboExtractor : ExtractorApi() {
     ) {
         try {
             val id = url.substringAfter("/t/").substringBefore("?")
-            if (id.isEmpty()) return
+            if (id.isEmpty() || !url.contains("/t/")) {
+                Log.w(DEBUG_TAG, "extractor=TurboVIP stop=invalid_player_url url=$url")
+                return
+            }
 
-            val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-                "Referer"    to "https://playeriframe.sbs/"
+            // Untuk jalur videonode, `url` adalah iframe aktual dari wrapper
+            // (emturbovid atau turbovidhls), bukan ID opaque pada data-url.
+            val playerUrl = if (url.startsWith("http://") || url.startsWith("https://")) {
+                url
+            } else {
+                "$mainUrl/t/$id"
+            }
+            val wrapperReferer = referer ?: "https://playeriframe.sbs/"
+
+            val pageHeaders = mutableMapOf(
+                "User-Agent" to TURBO_UA,
+                "Accept" to "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Referer" to wrapperReferer
+            ).apply {
+                originOf(wrapperReferer)?.let { put("Origin", it) }
+            }
+
+            Log.d(DEBUG_TAG, "extractor=TurboVIP request player=$playerUrl referer=$wrapperReferer")
+            val playerResponse = app.get(playerUrl, headers = pageHeaders)
+            val finalPlayerUrl = playerResponse.url
+            val html = playerResponse.text
+            Log.d(
+                DEBUG_TAG,
+                "extractor=TurboVIP status=${playerResponse.code} requested=$playerUrl final=$finalPlayerUrl"
             )
-
-            val html = app.get("$mainUrl/t/$id", headers = headers).text
 
             var m3u8Url = Regex("""data-hash="([^"]+)"""").find(html)?.groupValues?.get(1)
             if (m3u8Url.isNullOrBlank()) {
                 m3u8Url = Regex("""urlPlay\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
             }
-            if (m3u8Url.isNullOrBlank()) return
+            if (m3u8Url.isNullOrBlank()) {
+                Log.w(DEBUG_TAG, "extractor=TurboVIP stop=media_not_found final=$finalPlayerUrl")
+                return
+            }
 
-            val type = if (m3u8Url.endsWith(".mp4", ignoreCase = true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+            Log.d(DEBUG_TAG, "extractor=TurboVIP media=$m3u8Url player=$finalPlayerUrl")
+
+            val type = if (m3u8Url.substringBefore("?").endsWith(".mp4", ignoreCase = true)) {
+                ExtractorLinkType.VIDEO
+            } else {
+                ExtractorLinkType.M3U8
+            }
 
             callback(
                 newExtractorLink(
@@ -459,22 +740,173 @@ open class Lk21TurboExtractor : ExtractorApi() {
                     url    = m3u8Url,
                     type   = type
                 ) {
-                    this.referer = "$mainUrl/"
                     this.quality = Qualities.Unknown.value
-                    this.headers = mapOf(
-                        "Origin"  to mainUrl,
-                        "Referer" to "$mainUrl/"
-                    )
                 }
             )
+            Log.d(
+                DEBUG_TAG,
+                "extractor=TurboVIP callback media=$m3u8Url type=$type mediaHeaders=none"
+            )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(DEBUG_TAG, "extractor=TurboVIP exception url=$url", e)
         }
     }
 }
 
 // =========================================================================
-// EXTRACTOR 3: HOW NETWORK -> 100% UTUH
+// EXTRACTOR 3: PLAYCDN P2P
+// =========================================================================
+open class PlayCdnP2PExtractor : ExtractorApi() {
+    override var name = "LK21 PlayCDN P2P"
+    override var mainUrl = "https://playcdn.de"
+    override val requiresReferer = false
+
+    companion object {
+        private const val DEBUG_TAG = "LAYARKACA_DEBUG"
+        private const val PLAYCDN_ORIGIN = "https://playcdn.de"
+        private const val PLAYCDN_UA =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
+    }
+
+    private class SessionCookieJar : CookieJar {
+        private val cookies = mutableListOf<Cookie>()
+
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+            synchronized(this.cookies) {
+                cookies.forEach { incoming ->
+                    this.cookies.removeAll {
+                        it.name == incoming.name &&
+                            it.domain == incoming.domain &&
+                            it.path == incoming.path
+                    }
+                    if (incoming.expiresAt > System.currentTimeMillis()) {
+                        this.cookies.add(incoming)
+                    }
+                }
+            }
+        }
+
+        override fun loadForRequest(url: HttpUrl): List<Cookie> {
+            val now = System.currentTimeMillis()
+            return synchronized(cookies) {
+                cookies.removeAll { it.expiresAt <= now }
+                cookies.filter { it.matches(url) }
+            }
+        }
+    }
+
+    private fun requestBuilder(url: String, referer: String): Request.Builder = Request.Builder()
+        .url(url)
+        .header("User-Agent", PLAYCDN_UA)
+        .header("Accept", "*/*")
+        .header("Origin", PLAYCDN_ORIGIN)
+        .header("Referer", referer)
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val cookieJar = SessionCookieJar()
+            val client = app.baseClient.newBuilder()
+                .cookieJar(cookieJar)
+                .followRedirects(true)
+                .build()
+
+            val pageRequest = Request.Builder()
+                .url(url)
+                .header("User-Agent", PLAYCDN_UA)
+                .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+                .apply { referer?.takeIf { it.isNotBlank() }?.let { header("Referer", it) } }
+                .build()
+
+            val (playerUrl, playerHtml) = client.newCall(pageRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("player HTTP ${response.code}")
+                }
+                response.request.url.toString() to response.body?.string().orEmpty()
+            }
+
+            val dataJson = Regex(
+                """\bvar\s+data\s*=\s*(\{.*?\})\s*;""",
+                RegexOption.DOT_MATCHES_ALL
+            )
+                .find(playerHtml)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: throw IllegalStateException("player data object tidak ditemukan")
+            val playerData = jsonMapper.readValue(dataJson, PlayCdnPlayerData::class.java)
+            val id = playerData.id?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("data.id kosong")
+            val token = playerData.token?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("data.token kosong")
+            Log.d(
+                DEBUG_TAG,
+                "extractor=PlayCDN player id=$id playerHost=" +
+                    runCatching { URI(playerUrl).host }.getOrNull() +
+                    " tokenLength=${token.length}"
+            )
+
+            val payload = PlayCdnVerifyPayload(
+                token = token,
+                isIos = false
+            )
+
+            val verifyBody = jsonMapper.writeValueAsString(payload)
+                .toRequestBody("application/json".toMediaType())
+            val verifyRequest = requestBuilder("$mainUrl/verify.php", playerUrl)
+                .post(verifyBody)
+                .build()
+            val (verifyHttpStatus, verify) = client.newCall(verifyRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("verify HTTP ${response.code}")
+                }
+                response.code to jsonMapper.readValue(
+                    response.body?.string().orEmpty(), PlayCdnVerifyResponse::class.java
+                )
+            }
+            if (!verify.status.equals("success", ignoreCase = true)) {
+                throw IllegalStateException(
+                    "verify status=${verify.status} message=${verify.message.orEmpty()}"
+                )
+            }
+            val mediaUrl = verify.fileUrl?.takeIf {
+                it.startsWith("https://") || it.startsWith("http://")
+            } ?: throw IllegalStateException("fileUrl absolut tidak ditemukan")
+            val mediaType = if (
+                mediaUrl.substringBefore("?").endsWith(".mp4", ignoreCase = true)
+            ) {
+                ExtractorLinkType.VIDEO
+            } else {
+                ExtractorLinkType.M3U8
+            }
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "PlayCDN P2P",
+                    url = mediaUrl,
+                    type = mediaType
+                ) {
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            Log.d(
+                DEBUG_TAG,
+                "extractor=PlayCDN verify status=${verify.status} http=$verifyHttpStatus " +
+                    "id=$id type=$mediaType mediaHost=" +
+                    runCatching { URI(mediaUrl).host }.getOrNull()
+            )
+        } catch (e: Exception) {
+            Log.e(DEBUG_TAG, "extractor=PlayCDN failed player=$url", e)
+        }
+    }
+}
+
+// =========================================================================
+// EXTRACTOR 4: HOW NETWORK -> 100% UTUH
 // =========================================================================
 open class HowNetworkExtractor : ExtractorApi() {
     override var name    = "LK21 HowNetwork"
@@ -538,6 +970,14 @@ open class CastExtractor : ExtractorApi() {
     override var name    = "CAST HD"
     override var mainUrl = "https://weneverbeenfree.com"
     override val requiresReferer = false
+
+    companion object {
+        private const val DEBUG_TAG = "LAYARKACA_DEBUG"
+        private const val CAST_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+        private const val CAST_MEDIA_UA =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
+    }
 
     private fun re(t: Long, e: Int): Long = ((t shl e) or (t ushr (32 - e))) and 0xFFFFFFFFL
     private fun ht(t: Long, e: Long): Long = (t * e) and 0xFFFFFFFFL
@@ -655,22 +1095,43 @@ open class CastExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val videoId = url.substringAfterLast("/").substringBefore("?")
+        val playerUri = try {
+            URI(url)
+        } catch (e: Exception) {
+            Log.e(DEBUG_TAG, "extractor=Cast invalidPlayerUrl url=$url", e)
+            return
+        }
+        val playerOrigin = if (
+            !playerUri.scheme.isNullOrBlank() && !playerUri.host.isNullOrBlank()
+        ) {
+            "${playerUri.scheme}://${playerUri.host}" +
+                if (playerUri.port > 0) ":${playerUri.port}" else ""
+        } else {
+            Log.e(DEBUG_TAG, "extractor=Cast missingPlayerOrigin url=$url")
+            return
+        }
+        val videoId = playerUri.path?.trimEnd('/')?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() } ?: return
+        val isCurrentGn1r5n = playerUri.host.equals("gn1r5n.org", ignoreCase = true) ||
+            playerUri.host?.endsWith(".gn1r5n.org", ignoreCase = true) == true
 
         val commonHeaders = mapOf(
-            "User-Agent"       to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-            "Origin"           to mainUrl,
+            "User-Agent"       to CAST_UA,
+            "Origin"           to playerOrigin,
             "Referer"          to url,
-            "X-Embed-Origin"   to "playeriframe.sbs",
+            "X-Embed-Origin"   to if (isCurrentGn1r5n) "videonode.de" else "playeriframe.sbs",
             "X-Embed-Parent"   to url,
-            "X-Embed-Referer"  to "https://playeriframe.sbs/"
+            "X-Embed-Referer"  to if (isCurrentGn1r5n) "https://videonode.de/" else "https://playeriframe.sbs/"
         )
 
         try {
-            app.get("$mainUrl/api/videos/$videoId/embed/details", headers = commonHeaders)
-            app.get("$mainUrl/api/videos/$videoId/embed/settings", headers = commonHeaders)
+            Log.d(DEBUG_TAG, "extractor=Cast called player=$url origin=$playerOrigin videoId=$videoId")
+            val detailsRes = app.get("$playerOrigin/api/videos/$videoId/embed/details", headers = commonHeaders)
+            val settingsRes = app.get("$playerOrigin/api/videos/$videoId/embed/settings", headers = commonHeaders)
+            Log.d(DEBUG_TAG, "extractor=Cast detailsStatus=${detailsRes.code} settingsStatus=${settingsRes.code}")
 
-            val chalRes  = app.post("$mainUrl/api/videos/access/challenge", headers = commonHeaders)
+            val chalRes  = app.post("$playerOrigin/api/videos/access/challenge", headers = commonHeaders)
+            Log.d(DEBUG_TAG, "extractor=Cast challengeStatus=${chalRes.code}")
             val chalJson = jsonMapper.readValue(chalRes.text, CastChalResp::class.java)
 
             val nonce = chalJson.nonce ?: return
@@ -708,7 +1169,8 @@ open class CastExtractor : ExtractorApi() {
                 "attributes" to mapOf("entropy" to "high")
             )
 
-            val attestRes  = app.post("$mainUrl/api/videos/access/attest", headers = commonHeaders, json = attestPayload)
+            val attestRes  = app.post("$playerOrigin/api/videos/access/attest", headers = commonHeaders, json = attestPayload)
+            Log.d(DEBUG_TAG, "extractor=Cast attestStatus=${attestRes.code}")
             val attestJson = jsonMapper.readValue(attestRes.text, CastAttestResp::class.java)
             val sViewerId  = attestJson.viewer_id ?: return
             val sDeviceId  = attestJson.device_id ?: return
@@ -722,7 +1184,8 @@ open class CastExtractor : ExtractorApi() {
             )
 
             val captchaPayload = mapOf("fingerprint" to fingerprintObj)
-            val captchaRes     = app.post("$mainUrl/api/videos/$videoId/embed/captcha", headers = commonHeaders, json = captchaPayload)
+            val captchaRes     = app.post("$playerOrigin/api/videos/$videoId/embed/captcha", headers = commonHeaders, json = captchaPayload)
+            Log.d(DEBUG_TAG, "extractor=Cast captchaStatus=${captchaRes.code}")
             val captchaJson    = jsonMapper.readValue(captchaRes.text, CastCaptchaResp::class.java)
 
             val powToken   = captchaJson.pow_token ?: return
@@ -730,13 +1193,15 @@ open class CastExtractor : ExtractorApi() {
             val difficulty = captchaJson.pow_difficulty ?: 8
 
             val solution = solvePow(powToken, powNonce, difficulty) ?: return
+            Log.d(DEBUG_TAG, "extractor=Cast powSolved=true difficulty=$difficulty")
 
             val verifyPayload = mapOf(
                 "pow_token"   to powToken,
                 "solution"    to solution,
                 "fingerprint" to fingerprintObj
             )
-            val verifyRes = app.post("$mainUrl/api/videos/$videoId/embed/captcha/verify", headers = commonHeaders, json = verifyPayload)
+            val verifyRes = app.post("$playerOrigin/api/videos/$videoId/embed/captcha/verify", headers = commonHeaders, json = verifyPayload)
+            Log.d(DEBUG_TAG, "extractor=Cast captchaVerifyStatus=${verifyRes.code}")
             val verifyJson = jsonMapper.readValue(verifyRes.text, CastVerifyResp::class.java)
             val finalCaptchaToken = verifyJson.captcha_token ?: verifyJson.token ?: return
 
@@ -746,7 +1211,8 @@ open class CastExtractor : ExtractorApi() {
                 put("Cookie", "byse_viewer_id=$sViewerId; byse_device_id=$sDeviceId")
             }
 
-            val pbRes     = app.post("$mainUrl/api/videos/$videoId/embed/playback", headers = playbackHeaders, json = pbPayload)
+            val pbRes     = app.post("$playerOrigin/api/videos/$videoId/embed/playback", headers = playbackHeaders, json = pbPayload)
+            Log.d(DEBUG_TAG, "extractor=Cast playbackStatus=${pbRes.code}")
             val pbResp   = jsonMapper.readValue(pbRes.text, CastPbResp::class.java)?.playback ?: return
             val iv       = b64urlDecode(pbResp.iv ?: return)
             val payload  = b64urlDecode(pbResp.payload ?: return)
@@ -790,30 +1256,89 @@ open class CastExtractor : ExtractorApi() {
                 } catch (e: Exception) {}
             }
 
-            try {
-                app.post("$mainUrl/api/videos/$videoId/embed/view", headers = playbackHeaders, json = pbPayload)
-            } catch (e: Exception) {}
-
-            if (realUrl != null) {
-                callback(
-                    newExtractorLink(
-                        source = "CAST HD",
-                        name   = "CAST $qualityLabel",
-                        url    = realUrl,
-                        type   = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf(
-                            "Origin"     to mainUrl,
-                            "Referer"    to "$mainUrl/",
-                            "User-Agent" to commonHeaders["User-Agent"]!!
-                        )
-                    }
+            val finalMediaUrl = realUrl
+            if (finalMediaUrl != null) {
+                Log.d(
+                    DEBUG_TAG,
+                    "extractor=Cast aesDecryptSuccess=true mediaHost=" +
+                        runCatching { URI(finalMediaUrl).host }.getOrNull()
                 )
+
+                val mediaHeaders = mapOf(
+                    "Referer" to "$playerOrigin/",
+                    "User-Agent" to CAST_MEDIA_UA
+                )
+                val normalVariants = mutableListOf<Pair<String, String>>()
+                var hlsMasterStatus = "FETCH_FAILED"
+                var iframeVariantCount = 0
+
+                try {
+                    val masterRes = app.get(finalMediaUrl, headers = mediaHeaders)
+                    hlsMasterStatus = masterRes.code.toString()
+                    val masterText = masterRes.text
+                    val lines = masterText.lines().map { it.trim() }
+                    val validMaster = masterRes.code in 200..299 &&
+                        masterText.trimStart().startsWith("#EXTM3U")
+
+                    iframeVariantCount = lines.count {
+                        it.startsWith("#EXT-X-I-FRAME-STREAM-INF:")
+                    }
+
+                    if (validMaster) {
+                        lines.forEachIndexed { index, line ->
+                            if (!line.startsWith("#EXT-X-STREAM-INF:")) return@forEachIndexed
+
+                            val childUri = lines.drop(index + 1).firstOrNull {
+                                it.isNotBlank() && !it.startsWith("#")
+                            } ?: return@forEachIndexed
+                            val absoluteChild = runCatching {
+                                URI(finalMediaUrl).resolve(childUri).toString()
+                            }.getOrNull() ?: return@forEachIndexed
+                            val height = Regex("RESOLUTION=\\d+x(\\d+)")
+                                .find(line)?.groupValues?.getOrNull(1)
+                            val variantLabel = height?.let { "${it}p" } ?: qualityLabel
+                            normalVariants.add(absoluteChild to variantLabel)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(DEBUG_TAG, "extractor=Cast hlsMasterParseFallback reason=${e.javaClass.simpleName}")
+                }
+
+                Log.d(DEBUG_TAG, "extractor=Cast hlsMasterStatus=$hlsMasterStatus")
+                Log.d(DEBUG_TAG, "extractor=Cast normalVariantCount=${normalVariants.size}")
+                Log.d(DEBUG_TAG, "extractor=Cast iframeVariantCount=$iframeVariantCount")
+                Log.d(DEBUG_TAG, "extractor=Cast iframeVariantIgnored=${iframeVariantCount > 0}")
+
+                val playableVariants = normalVariants.ifEmpty {
+                    mutableListOf(finalMediaUrl to qualityLabel)
+                }
+
+                playableVariants.forEach { (mediaUrl, variantLabel) ->
+                    val selectedPath = runCatching {
+                        URI(mediaUrl).let { "${it.host}${it.path}" }
+                    }.getOrDefault("invalid")
+                    Log.d(DEBUG_TAG, "extractor=Cast selectedNormalVariant=$selectedPath")
+                    callback(
+                        newExtractorLink(
+                            source = "CAST HD",
+                            name   = "CAST $variantLabel",
+                            url    = mediaUrl,
+                            type   = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = "$playerOrigin/"
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mediaHeaders
+                        }
+                    )
+                    Log.d(
+                        DEBUG_TAG,
+                        "extractor=Cast callbackMedia=true referer=$playerOrigin/ " +
+                            "fallback=${normalVariants.isEmpty()}"
+                    )
+                }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(DEBUG_TAG, "extractor=Cast failed player=$url", e)
         }
     }
 }
