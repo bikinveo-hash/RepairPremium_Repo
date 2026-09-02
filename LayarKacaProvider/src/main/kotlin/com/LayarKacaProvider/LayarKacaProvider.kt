@@ -1,5 +1,6 @@
 package com.LayarKacaProvider
 
+import android.util.Log
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -13,6 +14,11 @@ import java.net.URI
 import java.net.URLEncoder
 
 class LayarKacaProvider : MainAPI() {
+    companion object {
+        private const val DEBUG_TAG = "LAYARKACA_DEBUG"
+        private const val PLAYBACK_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+    }
+
     override var mainUrl = "https://tv10.lk21official.cc"
     override var name = "LayarKaca21"
     override val hasMainPage = true
@@ -91,6 +97,58 @@ class LayarKacaProvider : MainAPI() {
             }
             String(result, Charsets.UTF_8)
         } catch (e: Exception) { "" }
+    }
+
+    private fun originOf(url: String): String? = try {
+        val uri = URI(url)
+        if (uri.scheme.isNullOrBlank() || uri.host.isNullOrBlank()) null
+        else "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}"
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun resolveAgainst(baseUrl: String, value: String): String? = try {
+        value.takeIf { it.isNotBlank() }?.let { URI(baseUrl).resolve(it).toString() }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun hostMatches(url: String, domain: String): Boolean = try {
+        val host = URI(url).host?.lowercase() ?: return false
+        host == domain || host.endsWith(".$domain")
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * videonode.de/iframe3/... adalah wrapper. ID pada URL wrapper tidak boleh
+     * dipakai sebagai ID extractor; iframe aktual di dalam wrapper adalah
+     * sumber kebenaran.
+     */
+    private suspend fun resolveVideonode(url: String, pageReferer: String): String? {
+        if (!hostMatches(url, "videonode.de")) return url
+
+        return try {
+            Log.d(DEBUG_TAG, "resolver request wrapper=$url referer=$pageReferer")
+            val response = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to PLAYBACK_UA,
+                    "Accept" to "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Referer" to pageReferer
+                ) + originOf(pageReferer)?.let { mapOf("Origin" to it) }.orEmpty()
+            )
+            val rawIframe = response.document.selectFirst("iframe[src]")?.attr("src")
+            val resolved = rawIframe?.let { resolveAgainst(url, it) }
+            Log.d(
+                DEBUG_TAG,
+                "resolver status=${response.code} wrapper=$url rawIframe=${rawIframe.orEmpty()} resolvedIframe=${resolved.orEmpty()}"
+            )
+            resolved
+        } catch (e: Exception) {
+            Log.e(DEBUG_TAG, "resolver failed wrapper=$url stage=videonode", e)
+            null
+        }
     }
 
     private fun getCleanTitle(title: String): String {
@@ -183,7 +241,7 @@ class LayarKacaProvider : MainAPI() {
                 val cleanTitle = getCleanTitle(rawTitle)
                 val href = fixUrl(slug)
 
-                val rawPoster = item.poster?.let { "https://poster.showcdnx.com/wp-content/uploads/$it" }
+                val rawPoster = item.poster?.let { "https://poster.assetsy.de/wp-content/uploads/$it" }
                 val posterUrl = fixPosterUrl(rawPoster)
 
                 val quality = getQualityFromString(item.quality)
@@ -372,6 +430,11 @@ class LayarKacaProvider : MainAPI() {
         val playerLinks = document.select("ul#player-list li a")
             .mapNotNull { it.attr("data-url").takeIf { u -> u.isNotBlank() } }
 
+        Log.d(DEBUG_TAG, "loadLinks page=$currentUrl players=${playerLinks.size}")
+        playerLinks.forEachIndexed { index, raw ->
+            Log.d(DEBUG_TAG, "rawPlayer[$index]=$raw")
+        }
+
         val host       = try { URI(currentUrl).host } catch (e: Exception) { "tv4.nontondrama.my" }
         val baseDomain = host?.split(".")?.takeLast(2)?.joinToString(".")
 
@@ -404,55 +467,173 @@ class LayarKacaProvider : MainAPI() {
 
         val allSources = rawSources.distinct().map { fixUrl(it) }
 
-        // FIX #7: kalau tidak ada sumber yang berhasil di-decode, return false
-        if (allSources.isEmpty()) return false
+        if (allSources.isEmpty()) {
+            Log.w(DEBUG_TAG, "loadLinks stop=no_decoded_sources page=$currentUrl")
+            return false
+        }
 
-        // FIX #2: semua extractor sekarang konsisten pakai new-style callback
-        allSources.forEach { url ->
+        var emittedMedia = false
+        var routedPlayers = 0
+        val tracedCallback: (ExtractorLink) -> Unit = { link ->
+            emittedMedia = true
+            Log.d(
+                DEBUG_TAG,
+                "callback media source=${link.source} name=${link.name} type=${link.type} " +
+                    "url=${link.url} referer=${link.referer} headers=${link.headers.keys}"
+            )
+            callback(link)
+        }
+
+        allSources.forEach { rawPlayer ->
+            val resolvedUrl = resolveVideonode(rawPlayer, currentUrl)
+            if (resolvedUrl.isNullOrBlank()) {
+                Log.w(DEBUG_TAG, "routing failed rawPlayer=$rawPlayer reason=resolver_empty")
+                return@forEach
+            }
+
+            val extractorReferer = if (hostMatches(rawPlayer, "videonode.de")) rawPlayer else currentUrl
+            Log.d(DEBUG_TAG, "resolvedIframe=$resolvedUrl rawPlayer=$rawPlayer")
+
             when {
-                url.contains("/iframe/turbovip/") -> {
-                    val id = url.substringAfter("/iframe/turbovip/").substringBefore("/")
+                // Stage 1 CONFIRMED: videonode Turbo resolve ke emturbovid/turbovidhls.
+                hostMatches(resolvedUrl, "emturbovid.com") ||
+                    hostMatches(resolvedUrl, "turbovidhls.com") -> {
+                    routedPlayers++
+                    Log.d(DEBUG_TAG, "extractor=TurboVIP resolvedIframe=$resolvedUrl referer=$extractorReferer")
                     try {
                         Lk21TurboExtractor().getUrl(
-                            "https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, callback
+                            resolvedUrl, extractorReferer, subtitleCallback, tracedCallback
                         )
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        Log.e(DEBUG_TAG, "extractor=TurboVIP failed resolvedIframe=$resolvedUrl", e)
                     }
                 }
-                url.contains("/iframe/p2p/") -> {
-                    val id = url.substringAfter("/iframe/p2p/").substringBefore("/")
+
+                // Pertahankan jalur legacy untuk halaman lama yang belum memakai videonode.
+                resolvedUrl.contains("/iframe/turbovip/") -> {
+                    routedPlayers++
+                    val id = resolvedUrl.substringAfter("/iframe/turbovip/").substringBefore("/")
+                    Log.d(DEBUG_TAG, "extractor=TurboVIP legacyId=$id")
+                    try {
+                        Lk21TurboExtractor().getUrl(
+                            "https://turbovidhls.com/t/$id", currentUrl, subtitleCallback, tracedCallback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(DEBUG_TAG, "extractor=TurboVIP legacy failed id=$id", e)
+                    }
+                }
+
+                // Stage 6 CONFIRMED: videonode P2P resolve ke player PlayCDN,
+                // lalu challenge + verify menghasilkan fileUrl HLS absolut.
+                hostMatches(resolvedUrl, "playcdn.de") &&
+                    runCatching { URI(resolvedUrl).path == "/video.php" }.getOrDefault(false) -> {
+                    routedPlayers++
+                    Log.d(
+                        DEBUG_TAG,
+                        "extractor=PlayCDN resolvedIframe=$resolvedUrl referer=$extractorReferer"
+                    )
+                    try {
+                        PlayCdnP2PExtractor().getUrl(
+                            resolvedUrl, extractorReferer, subtitleCallback, tracedCallback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(DEBUG_TAG, "extractor=PlayCDN failed resolvedIframe=$resolvedUrl", e)
+                    }
+                }
+
+                // Pertahankan HowNetwork hanya untuk format P2P lama.
+                resolvedUrl.contains("/iframe/p2p/") -> {
+                    routedPlayers++
+                    val id = resolvedUrl.substringAfter("/iframe/p2p/").substringBefore("/")
                     try {
                         HowNetworkExtractor().getUrl(
-                            "https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl, subtitleCallback, callback
+                            "https://cloud.hownetwork.xyz/video.php?id=$id", currentUrl, subtitleCallback, tracedCallback
                         )
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        Log.e(DEBUG_TAG, "extractor=HowNetwork legacy failed id=$id", e)
                     }
                 }
-                url.contains("/iframe/cast/") -> {
-                    val id = url.substringAfter("/iframe/cast/").substringBefore("/")
+                // Current CAST: actual iframe URL is the source of truth. The
+                // videonode wrapper ID is not the CAST player ID.
+                hostMatches(resolvedUrl, "gn1r5n.org") &&
+                    runCatching {
+                        Regex("^/e/[A-Za-z0-9_-]+/?$").matches(URI(resolvedUrl).path)
+                    }.getOrDefault(false) -> {
+                    routedPlayers++
+                    Log.d(
+                        DEBUG_TAG,
+                        "extractor=Cast resolvedIframe=$resolvedUrl referer=$extractorReferer"
+                    )
                     try {
                         CastExtractor().getUrl(
-                            "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, callback
+                            resolvedUrl, extractorReferer, subtitleCallback, tracedCallback
                         )
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        Log.e(DEBUG_TAG, "extractor=Cast failed resolvedIframe=$resolvedUrl", e)
                     }
                 }
-                url.contains("/iframe/hydrax/") -> {
-                    val id = url.substringAfter("/iframe/hydrax/").substringBefore("/")
+
+                // Pertahankan jalur CAST lama untuk wrapper non-videonode lama.
+                resolvedUrl.contains("/iframe/cast/") -> {
+                    routedPlayers++
+                    val id = resolvedUrl.substringAfter("/iframe/cast/").substringBefore("/")
+                    try {
+                        CastExtractor().getUrl(
+                            "https://weneverbeenfree.com/e/$id", currentUrl, subtitleCallback, tracedCallback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(DEBUG_TAG, "extractor=Cast legacy failed id=$id", e)
+                    }
+                }
+
+                // Current Hydrax: gunakan actual nested iframe dari videonode.
+                // Wrapper ID bukan slug Abyss dan tidak boleh dipakai extractor.
+                hostMatches(resolvedUrl, "abyssplayer.com") &&
+                    runCatching {
+                        Regex("^/[A-Za-z0-9_-]{6,20}/?$").matches(URI(resolvedUrl).path)
+                    }.getOrDefault(false) -> {
+                    routedPlayers++
+                    val resolvedHost = runCatching { URI(resolvedUrl).host }.getOrNull().orEmpty()
+                    Log.d(
+                        DEBUG_TAG,
+                        "routing=HydraxModern hydraxResolvedUrl=$resolvedUrl " +
+                            "hydraxResolvedHost=$resolvedHost"
+                    )
                     try {
                         AbyssExtractor().getUrl(
-                            "https://abyssplayer.com/?v=$id", currentUrl, subtitleCallback, callback
+                            resolvedUrl, currentUrl, subtitleCallback, tracedCallback
                         )
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        Log.e(DEBUG_TAG, "extractor=Abyss modern failed resolvedIframe=$resolvedUrl", e)
                     }
                 }
+
+                // Pertahankan jalur Hydrax lama untuk wrapper non-videonode lama.
+                resolvedUrl.contains("/iframe/hydrax/") -> {
+                    routedPlayers++
+                    val id = resolvedUrl.substringAfter("/iframe/hydrax/").substringBefore("/")
+                    try {
+                        AbyssExtractor().getUrl(
+                            "https://abyssplayer.com/?v=$id", currentUrl, subtitleCallback, tracedCallback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(DEBUG_TAG, "extractor=Abyss legacy failed id=$id", e)
+                    }
+                }
+
+                // Stage 2 belum selesai: jangan arahkan host baru ke extractor lama.
+                else -> Log.w(
+                    DEBUG_TAG,
+                    "routing unmatched rawPlayer=$rawPlayer resolvedIframe=$resolvedUrl"
+                )
             }
         }
-        return true
+
+        Log.d(
+            DEBUG_TAG,
+            "loadLinks done page=$currentUrl routed=$routedPlayers emittedMedia=$emittedMedia"
+        )
+        return emittedMedia
     }
 
     // FIX #9: getVideoInterceptor return nullable Interceptor? (sesuai signature MainAPI)
@@ -479,11 +660,24 @@ class LayarKacaProvider : MainAPI() {
                     chain.proceed(newRequest)
                 }
                 url.contains("googleusercontent.com") -> {
-                    val response = chain.proceed(originalRequest)
+                    // Header matrix Stage 2: fixed Turbo Referer/Origin membuat
+                    // segmen Google 429, sedangkan request tanpa keduanya 206.
+                    val cleanRequest = originalRequest.newBuilder()
+                        .removeHeader("Referer")
+                        .removeHeader("Origin")
+                        .build()
+                    Log.d(
+                        DEBUG_TAG,
+                        "segment request host=googleusercontent refererOrigin=stripped url=$url"
+                    )
+                    val response = chain.proceed(cleanRequest)
+                    Log.d(DEBUG_TAG, "segment response host=googleusercontent status=${response.code} url=$url")
                     if (response.code == 429) {
                         response.close()
                         Thread.sleep(1000L)
-                        chain.proceed(originalRequest)
+                        val retry = chain.proceed(cleanRequest)
+                        Log.w(DEBUG_TAG, "segment retry host=googleusercontent status=${retry.code} url=$url")
+                        retry
                     } else {
                         response
                     }
