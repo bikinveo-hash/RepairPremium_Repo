@@ -41,17 +41,27 @@ class PodjavProvider : MainAPI() {
         if (url.isBlank() || !url.startsWith("http")) return null
 
         // Ambil judul dari class card-title atau data-title
-        val titleText = this.selectFirst(".card-title")?.text() 
-            ?: this.attr("data-title") 
-            ?: return null
+        // data-title dipakai kalau .card-title kosong. attr() mengembalikan ""
+        // (bukan null) saat atribut tidak ada, jadi kekosongan diperiksa lewat
+        // isNotBlank() setelah dibersihkan, bukan lewat rantai ?: saja.
+        val titleText = cleanTitle(
+            this.selectFirst(".card-title")?.text() ?: this.attr("data-title")
+        ).takeIf { it.isNotBlank() } ?: return null
         
         // Ambil gambar sampul/poster
         val posterUrl = this.selectFirst("img.thumb")?.attr("src")
 
-        // Mendeteksi label Uncensored dari class badge atau data genre
-        val isUncensored = this.selectFirst(".badge-uncen") != null ||
-            this.attr("data-genre").contains("uncensored", ignoreCase = true)
-        val finalTitle = if (isUncensored) "🔥 [UNCENSORED] $titleText" else titleText
+        // Mendeteksi label Uncensored.
+        // Dipastikan langsung dari sumber HTML situs; dua penanda ini selalu ada:
+        //   <span class="badge-uncen">UNCEN</span>
+        //   data-genre="... uncensored"
+        // data-genre dipecah per token supaya cocok persis, bukan sekadar contains.
+        val isUncensored = this.selectFirst("span.badge-uncen") != null ||
+            this.attr("data-genre").split(" ").any { it.equals("uncensored", ignoreCase = true) }
+
+        // Hanya yang uncensored diberi penanda; yang disensor dibiarkan polos.
+        // Satu ikon di depan judul, tidak memakan ruang judul seperti teks panjang.
+        val finalTitle = if (isUncensored) "👑 $titleText" else titleText
 
         return newMovieSearchResponse(finalTitle, url, TvType.NSFW) {
             this.posterUrl = posterUrl
@@ -85,7 +95,10 @@ class PodjavProvider : MainAPI() {
                 
                 val list = section.select("a.video-card").mapNotNull { it.toSearchResult() }
                 if (list.isNotEmpty()) {
-                    items.add(HomePageList(sectionTitle, list))
+                    // isHorizontalImages = true -> kartu jadi landscape.
+                    // Sampul podjav memang berformat lebar (~2:1), selama ini
+                    // dipotong paksa ke potret sehingga cuma terlihat sepotong.
+                    items.add(HomePageList(sectionTitle, list, isHorizontalImages = true))
                 }
             }
         } else {
@@ -93,7 +106,7 @@ class PodjavProvider : MainAPI() {
             val elements = document.select("a.video-card")
             val list = elements.mapNotNull { it.toSearchResult() }
             if (list.isNotEmpty()) {
-                items.add(HomePageList(request.name, list))
+                items.add(HomePageList(request.name, list, isHorizontalImages = true))
             }
         }
 
@@ -111,12 +124,71 @@ class PodjavProvider : MainAPI() {
         return document.select("a.video-card").mapNotNull { it.toSearchResult() }
     }
 
+    /**
+     * Membersihkan judul dari situs.
+     *
+     * Semua judul podjav berpola "KODE Sub Indo : deskripsi". Potongan
+     * "Sub Indo :" muncul di SETIAP judul sehingga tidak menambah informasi
+     * apa pun, tapi memakan ~10 karakter dari jatah 2 baris judul CloudStream.
+     * Dibuang supaya deskripsinya kebagian ruang lebih banyak.
+     *
+     * Pola \s*Sub\s+[A-Za-z]+\s*:\s* juga menangkap "Sub Dutch", "Sub English",
+     * dan varian bahasa lain yang dipakai situs. Judul tanpa pola itu
+     * dibiarkan apa adanya.
+     */
+    private fun cleanTitle(raw: String): String = raw
+        .replace(Regex("""\s*Sub\s+[A-Za-z]+\s*:\s*""", RegexOption.IGNORE_CASE), ": ")
+        .replace(Regex("""\s{2,}"""), " ")
+        .trim()
+
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val titleText = document.selectFirst("h1.video-info-title")?.text() ?: return null
-        val posterUrl = document.selectFirst(".video-info-top img")?.attr("src")
+        val titleText = cleanTitle(document.selectFirst("h1.video-info-title")?.text() ?: "")
+            .takeIf { it.isNotBlank() } ?: return null
+        // POSTER HALAMAN DETAIL
+        // Halaman detail memuat DUA gambar untuk film yang sama:
+        //   video[data-poster]  -> JUL-657-cover.jpg   sampul penuh, lebar ~2:1
+        //   .video-info-top img -> JAV-JUL-657-1.jpg   200x283, tegak
+        // Header detail CloudStream berbentuk lebar dan memakai centerCrop, jadi
+        // gambar tegak pasti terpotong atas-bawah. Sampul lebar hampir pas mengisi
+        // wadah itu, sehingga tampil paling utuh.
+        //
+        // JANGAN pakai "img[src*='-poster']": karusel "Rekomendasi JAV" di bagian
+        // bawah halaman berisi gambar -poster.jpg MILIK FILM LAIN, dan poster film
+        // ini sendiri tidak mengandung kata "poster" pada namanya. selectFirst akan
+        // mengambil poster film lain.
+        //
+        // og:image juga tidak dipakai: isinya sama dengan versi tegak 379x538.
+        val posterUrl = document.selectFirst("video[data-poster]")
+            ?.attr("data-poster")?.trim()?.takeIf { it.isNotBlank() }
+            ?: document.selectFirst(".video-info-top img")?.attr("src")
+
+        // SINOPSIS
+        // Selector lama "#tab-synopsis .text-sm p" sudah tidak cocok dengan tata
+        // letak situs sekarang -> muncul "Plot Tidak Ditemukan".
+        // Dicoba berjenjang, dari yang paling spesifik ke yang paling tahan banting.
+        // Cara terakhir tidak bergantung nama class sama sekali: cari heading yang
+        // teksnya "SYNOPSIS", lalu ambil elemen berisi teks panjang sesudahnya.
         val plot = document.selectFirst("#tab-synopsis .text-sm p")?.text()
+            ?: document.selectFirst("#tab-synopsis p")?.text()
+            ?: document.selectFirst("[class*=synopsis] p")?.text()
+            ?: document.selectFirst("[id*=synopsis] p")?.text()
+            ?: document.select("h1,h2,h3,h4,h5,h6,div,span,strong")
+                .firstOrNull { it.ownText().trim().equals("SYNOPSIS", ignoreCase = true) }
+                ?.let { heading ->
+                    generateSequence(heading.nextElementSibling()) { it.nextElementSibling() }
+                        .take(6)
+                        .map { it.text().trim() }
+                        .firstOrNull { it.length > 40 }
+                        ?: heading.parent()?.select("p")
+                            ?.map { it.text().trim() }
+                            ?.firstOrNull { it.length > 40 }
+                }
+            // meta[name=description] SENGAJA tidak dipakai sebagai cadangan:
+            // isinya cuma "Nonton JAV <judul>", yaitu judul yang diulang.
+            // Lebih jujur menyatakan sinopsisnya memang belum ada.
+            ?: "Sinopsis belum tersedia."
         
         val tags = mutableListOf<String>()
         var year: Int? = null
@@ -187,7 +259,12 @@ class PodjavProvider : MainAPI() {
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
-                                    name = source.label ?: "Server Bawaan (Podjav)",
+                                    // source.label sering berisi string KOSONG,
+                                    // bukan null, sehingga "?:" tidak pernah aktif
+                                    // dan nama server tampil blank di daftar pemutar.
+                                    // isNotBlank() menangani keduanya sekaligus.
+                                    name = source.label?.takeIf { it.isNotBlank() }
+                                        ?: if (isDirectMp4) "Podjav (MP4)" else "Podjav (M3U8)",
                                     url = url,
                                     type = if (isDirectMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
                                 ) {
@@ -208,13 +285,78 @@ class PodjavProvider : MainAPI() {
             val dataSubtitlesRaw = videoElement.attr("data-subtitles")
             if (dataSubtitlesRaw.isNotBlank() && dataSubtitlesRaw != "[]") {
                 val subtitles = AppUtils.parseJson<List<SubtitleSource>>(dataSubtitlesRaw)
+
                 subtitles.forEach { sub ->
-                    if (sub.src.isNotBlank()) {
-                         subtitleCallback.invoke(SubtitleFile(lang = sub.label ?: "Indonesia", url = sub.src))
+                    val rawSrc = sub.src.trim()
+                    if (rawSrc.isNotBlank()) {
+
+                        // BUG 1 - TOKEN DI HTML SUDAH BASI
+                        // Halaman film dilayani dari cache (LiteSpeed / x-subtitle-cache: HIT),
+                        // jadi token di dalam data-subtitles ikut basi -> subtitle.php
+                        // menjawab "Access denied.".
+                        // Player asli tidak pernah memakai token itu: dia POST dulu ke
+                        // admin-ajax.php action=podjav_fresh_subtitle_url untuk minta
+                        // token baru, baru mengunduh subtitlenya.
+                        val pid = Regex("""pid=(\d+)""").find(rawSrc)?.groupValues?.getOrNull(1)
+                        val bid = Regex("""bid=(\d+)""").find(rawSrc)?.groupValues?.getOrNull(1) ?: "1"
+
+                        var chosenSrc = rawSrc
+                        if (pid != null) {
+                            try {
+                                val freshRes = app.post(
+                                    "$mainUrl/wp-admin/admin-ajax.php",
+                                    data = mapOf(
+                                        "action" to "podjav_fresh_subtitle_url",
+                                        "pid" to pid,
+                                        "bid" to bid
+                                    ),
+                                    referer = data,
+                                    headers = mapOf("Origin" to mainUrl)
+                                )
+                                val fresh = AppUtils.tryParseJson<FreshSubtitleResponse>(freshRes.text)
+                                val freshUrl = fresh?.data?.url?.trim()
+                                if (fresh?.success == true && !freshUrl.isNullOrBlank()) {
+                                    chosenSrc = freshUrl
+                                }
+                            } catch (e: Exception) {
+                                // Kalau AJAX gagal, pakai token dari HTML sebagai cadangan
+                            }
+                        }
+
+                        // BUG 2 - URL RELATIF
+                        // Server mengirim "/subtitle.php?..." tanpa domain. ExoPlayer butuh
+                        // URL absolut; kalau relatif dia lempar "Malformed URL" dan track
+                        // subtitle muncul di menu tapi isinya kosong.
+                        var subUrl = fixUrl(chosenSrc)
+
+                        // BUG 3 - SALAH TEBAK FORMAT
+                        // data-subtitles menulis "format":"srt", TAPI respons asli server
+                        // adalah content-type: text/vtt, body diawali "WEBVTT", dan seluruh
+                        // timestampnya bertitik (00:00:42.000) bukan berkoma.
+                        // CloudStream menebak mime dari akhiran URL; "/subtitle.php?..."
+                        // tidak berakhiran apa pun -> default application/x-subrip ->
+                        // parser SRT dipakai untuk isi VTT -> nol cue, tanpa error.
+                        // Fragment "#.vtt" membuat tebakan jadi text/vtt, dan sesuai spec
+                        // HTTP fragment TIDAK pernah dikirim ke server, jadi token utuh.
+                        if (!subUrl.endsWith("vtt", ignoreCase = true)) subUrl += "#.vtt"
+
+                        // CATATAN HEADER
+                        // Konstruktor SubtitleFile(lang, url, headers) bersifat PRIVATE.
+                        // Jalur resminya adalah builder newSubtitleFile (lihat issue #1809 /
+                        // PR #1810 di repo cloudstream). Untuk sekarang dipakai konstruktor
+                        // 2-argumen yang publik, karena setelah token diperbarui lewat AJAX
+                        // header kemungkinan besar tidak lagi dibutuhkan.
+                        subtitleCallback.invoke(
+                            SubtitleFile(
+                                lang = sub.label ?: "Indonesia",
+                                url = subUrl
+                            )
+                        )
                     }
                 }
             }
         }
+
 
         // Jika kita sudah menemukan direct link (seperti MP4), HENTIKAN proses.
         // Kita tidak perlu susah-susah mencari dan membongkar iframe lagi.
@@ -297,4 +439,17 @@ data class SubtitleSource(
     @JsonProperty("src") val src: String,
     @JsonProperty("srclang") val srclang: String?,
     @JsonProperty("label") val label: String?
+)
+
+/**
+ * Balasan admin-ajax.php action=podjav_fresh_subtitle_url
+ * Contoh: {"success":true,"data":{"url":"\/subtitle.php?pid=13587&bid=1&token=4840..."}}
+ */
+data class FreshSubtitleResponse(
+    @JsonProperty("success") val success: Boolean?,
+    @JsonProperty("data") val data: FreshSubtitleData?
+)
+
+data class FreshSubtitleData(
+    @JsonProperty("url") val url: String?
 )
