@@ -1,16 +1,17 @@
 package com.michat88
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
 class AdiFilmSemiPlugin : Plugin() {
     override fun load(context: Context) {
-        // Identity persisten MovieBox disiapkan sebelum request pertama.
+        // Exact MovieBox runtime profile harus siap sebelum request playback pertama.
         AdiFilmSemiExtractor.attachContext(context)
 
-        // Hanya mendaftarkan provider utama
+        // Provider utama. Idlix memanggil Majorplay secara langsung dari
+        // AdiFilmSemiIdlix.kt sehingga tidak membutuhkan registerExtractorAPI.
         registerMainAPI(AdiFilmSemi())
     }
 }

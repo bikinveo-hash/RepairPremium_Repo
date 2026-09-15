@@ -3,14 +3,13 @@ package com.michat88
 import android.content.Context
 import android.util.Base64
 import android.util.Log
-import com.fasterxml.jackson.annotation.JsonProperty
+import android.os.Build
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.UUID
 import javax.crypto.Mac
@@ -18,198 +17,6 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 
 object AdiFilmSemiExtractor : AdiFilmSemi() {
-
-    // ================== KISSKH SOURCE ==================
-    // Logika pemilihan drama di bawah ini sudah diuji terpisah (35 kasus, termasuk
-    // kasus nyata dari logcat 2026-08-13 11:07 di mana permintaan S1E1 malah
-    // mendapat "The White Lotus - Season 3").
-    private const val KK_TAG = "AdiFilmSemiKK"
-
-    // Pola penanda season pada judul Kisskh. Sengaja ketat supaya judul seperti
-    // "Seasons of Blossom", "S.W.A.T.", "MASH 4077", "The Boys 2" dan
-    // "Greenland 2: Migration" TIDAK salah dianggap punya nomor season.
-    private val KK_SEASON_PATTERNS = listOf(
-        Regex("""season\s*0*(\d{1,2})""", RegexOption.IGNORE_CASE),
-        Regex("""(?:^|[^a-z0-9])s\s*0*(\d{1,2})(?![a-z0-9])""", RegexOption.IGNORE_CASE),
-        Regex("""(\d{1,2})(?:st|nd|rd|th)\s*season""", RegexOption.IGNORE_CASE)
-    )
-
-    private fun kkClean(s: String?): String =
-        s?.replace(Regex("[^A-Za-z0-9]"), "")?.lowercase().orEmpty()
-
-    /** Nomor season yang tertulis di judul Kisskh, null bila tidak ada. */
-    private fun kkSeasonInTitle(title: String?): Int? {
-        if (title == null) return null
-        for (re in KK_SEASON_PATTERNS) {
-            val v = re.find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            if (v != null && v in 0..50) return v
-        }
-        return null
-    }
-
-    /** Judul tanpa embel-embel season, untuk dibandingkan dengan judul TMDB. */
-    private fun kkStripSeason(title: String): String =
-        KK_SEASON_PATTERNS.fold(title) { acc, re -> re.replace(acc, " ") }
-
-    /**
-     * Containment arah balik (judul Kisskh lebih pendek dari judul TMDB) hanya boleh
-     * untuk judul yang cukup panjang dan proporsional, supaya "The" tidak cocok
-     * dengan "The Odyssey".
-     */
-    private fun kkRevOk(cleanTitle: String, cleanQuery: String): Boolean {
-        if (cleanTitle.length < 6) return false
-        if (!cleanQuery.contains(cleanTitle)) return false
-        return cleanTitle.length * 10 >= cleanQuery.length * 6
-    }
-
-    /** rank kecil = lebih cocok; -1 = tolak. season null berarti film. */
-    private fun kkRank(title: String?, cleanQuery: String, season: Int?): Int {
-        val ct = kkClean(title)
-        if (ct.isEmpty()) return -1
-        val stripped = kkStripSeason(title ?: "")
-        val cs = kkClean(stripped)
-
-        val forward = ct.contains(cleanQuery) || cs.contains(cleanQuery)
-        val backward = kkRevOk(ct, cleanQuery) || kkRevOk(cs, cleanQuery)
-        if (!forward && !backward) return -1
-
-        val exact = ct == cleanQuery || cs == cleanQuery
-        if (season == null) return if (exact) 0 else 1
-
-        val ts = kkSeasonInTitle(title)
-        if (ts != null) {
-            // Judul menyebut season lain -> TOLAK. Inilah perbaikan utamanya:
-            // sebelumnya S1E1 bisa mendapat drama "... - Season 3".
-            if (ts != season) return -1
-            return if (exact) 0 else 1
-        }
-        // Judul tanpa penanda season = season 1 menurut konvensi Kisskh.
-        if (season == 1) return if (exact) 2 else 3
-        // S2 ke atas tanpa penanda: lebih baik tidak ada link daripada salah season.
-        return -1
-    }
-
-    suspend fun invokeKisskh(
-        title: String,
-        orgTitle: String? = null,
-        altTitle: String? = null,
-        year: Int?, season: Int?, episode: Int?,
-        subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
-    ) {
-        val mainUrl = "https://kisskh.ovh"
-        val KISSKH_API = "https://script.google.com/macros/s/AKfycbzn8B31PuDxzaMa9_CQ0VGEDasFqfzI5bXvjaIZH4DM8DNq9q6xj1ALvZNz_JT3jF0suA/exec?id="
-        val KISSKH_SUB_API = "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
-
-        Log.d(KK_TAG, "[00-INPUT] title='$title' orgTitle='$orgTitle' altTitle='$altTitle' season=$season episode=$episode")
-
-        suspend fun searchAndMatch(query: String): KisskhMedia? {
-            return try {
-                // [FIX-7] Query WAJIB di-encode. "Minions & Monsters" tanpa encode membuat
-                // "&" dibaca sebagai pemisah parameter sehingga q terpotong jadi "Minions ".
-                val encoded = URLEncoder.encode(query, "UTF-8").replace("+", "%20")
-                val searchRes = app.get("$mainUrl/api/DramaList/Search?q=$encoded&type=0").text
-                val searchList = tryParseJson<ArrayList<KisskhMedia>>(searchRes)
-                if (searchList == null) {
-                    Log.e(KK_TAG, "[01-SEARCH] parse gagal untuk '$query'. head=${searchRes.take(200)}")
-                    return null
-                }
-
-                val cleanQuery = kkClean(query)
-                if (cleanQuery.isEmpty()) return null
-
-                Log.d(KK_TAG, "[01-SEARCH] query='$query' hasil=${searchList.size}")
-
-                // [FIX-8] Sebelumnya: find { contains } ?: firstOrNull { contains } -- dua
-                // cabang yang IDENTIK (find memang firstOrNull berpredikat), jadi fallback-nya
-                // dead code. Dan season sama sekali tidak dipakai untuk memilih drama.
-                var best: KisskhMedia? = null
-                var bestRank = Int.MAX_VALUE
-                searchList.forEach { item ->
-                    val r = kkRank(item.title, cleanQuery, season)
-                    Log.d(KK_TAG, "[02-CAND] id=${item.id} rank=$r seasonDiJudul=${kkSeasonInTitle(item.title)} title='${item.title}'")
-                    if (r in 0 until bestRank) {
-                        bestRank = r
-                        best = item
-                    }
-                }
-
-                if (best == null) {
-                    Log.w(KK_TAG, "[03-MATCH] tidak ada drama cocok untuk '$query' (season=$season)")
-                } else {
-                    Log.d(KK_TAG, "[03-MATCH] terpilih id=${best?.id} rank=$bestRank title='${best?.title}'")
-                }
-                best
-            } catch (e: Exception) {
-                Log.e(KK_TAG, "[01-SEARCH] gagal untuk '$query': ${e.javaClass.simpleName}: ${e.message}")
-                null
-            }
-        }
-
-        var matched = searchAndMatch(title)
-        if (matched == null && orgTitle != null) matched = searchAndMatch(orgTitle)
-        if (matched == null && altTitle != null) matched = searchAndMatch(altTitle)
-        if (matched == null) {
-            Log.e(KK_TAG, "[03-MATCH] STOP: tidak ada drama untuk judul mana pun")
-            return
-        }
-
-        val dramaId = matched.id ?: return
-        val detailRes = app.get("$mainUrl/api/DramaList/Drama/$dramaId?isq=false").parsedSafe<KisskhDetail>()
-        if (detailRes == null) {
-            Log.e(KK_TAG, "[04-DETAIL] STOP: detail drama $dramaId gagal di-parse")
-            return
-        }
-        val episodes = detailRes.episodes
-        if (episodes.isNullOrEmpty()) {
-            Log.e(KK_TAG, "[04-DETAIL] STOP: drama $dramaId tidak punya episode")
-            return
-        }
-
-        val targetEp = if (season == null) episodes.lastOrNull() else episodes.find { it.number?.toInt() == episode }
-        if (targetEp == null) {
-            val tersedia = episodes.mapNotNull { it.number?.toInt() }.sorted()
-            Log.e(KK_TAG, "[05-EP] STOP: episode $episode tidak ada di drama '${matched.title}'. Tersedia=$tersedia")
-            return
-        }
-        val epsId = targetEp.id ?: return
-        Log.d(KK_TAG, "[05-EP] drama='${matched.title}' epNumber=${targetEp.number} epsId=$epsId")
-
-        val kkeyVideo = app.get("$KISSKH_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
-        val videoUrl = "$mainUrl/api/DramaList/Episode/$epsId.png?err=false&ts=null&time=null&kkey=$kkeyVideo"
-        val sources = app.get(videoUrl).parsedSafe<KisskhSources>()
-
-        var emitted = 0
-        listOfNotNull(sources?.video, sources?.thirdParty).forEach { rawLink ->
-            // [FIX-6] BUG LAMA: Kisskh kadang mengembalikan URL protocol-relative "//hls1...".
-            // M3u8Helper melempar IllegalArgumentException "Expected URL scheme 'http' or
-            // 'https'" untuk URL tanpa scheme, dan exception itu membatalkan seluruh
-            // invokeKisskh sehingga subtitle pun tidak sempat dikirim.
-            val link = if (rawLink.startsWith("//")) "https:$rawLink" else rawLink
-            if (link.contains(".m3u8")) {
-                M3u8Helper.generateM3u8("Kisskh", link, referer = "$mainUrl/", headers = mapOf("Origin" to mainUrl))
-                    .forEach { callback.invoke(it); emitted++ }
-            } else if (link.contains(".mp4")) {
-                callback.invoke(newExtractorLink("Kisskh", "Kisskh", link, INFER_TYPE) { this.referer = mainUrl })
-                emitted++
-            }
-        }
-        Log.d(KK_TAG, "[06-LINK] total ExtractorLink=$emitted")
-
-        val kkeySub = app.get("$KISSKH_SUB_API$epsId&version=2.8.10").parsedSafe<KisskhKey>()?.key ?: ""
-        val subJson = app.get("$mainUrl/api/Sub/$epsId?kkey=$kkeySub").text
-        val subs = tryParseJson<List<KisskhSubtitle>>(subJson)
-        subs?.forEach { sub ->
-            subtitleCallback.invoke(newSubtitleFile(sub.label ?: "Unknown", sub.src ?: return@forEach))
-        }
-        Log.d(KK_TAG, "[07-SUB] subtitle=${subs?.size ?: 0}")
-    }
-
-    private data class KisskhMedia(@JsonProperty("id") val id: Int?, @JsonProperty("title") val title: String?)
-    private data class KisskhDetail(@JsonProperty("episodes") val episodes: ArrayList<KisskhEpisode>?)
-    private data class KisskhEpisode(@JsonProperty("id") val id: Int?, @JsonProperty("number") val number: Double?)
-    private data class KisskhKey(@JsonProperty("key") val key: String?)
-    private data class KisskhSources(@JsonProperty("Video") val video: String?, @JsonProperty("ThirdParty") val thirdParty: String?)
-    private data class KisskhSubtitle(@JsonProperty("src") val src: String?, @JsonProperty("label") val label: String?)
 
     // ================== MOVIEBOX SOURCE ==================
     // Engine diambil dari MovieBoxProvider, TANPA membawa mainPage/search/
@@ -225,7 +32,7 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
     /**
      * Dipanggil dari AdiFilmSemiPlugin.load(). Menyiapkan identity persisten
      * MovieBox sebelum request pertama. Hanya meneruskan Context; tidak
-     * mengubah apa pun pada Kisskh maupun jalur TMDB.
+     * mengubah jalur TMDB maupun sumber Idlix.
      */
     fun attachContext(context: Context) = MovieboxHelper.attachContext(context)
 
@@ -408,6 +215,17 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
             return
         }
 
+        // Playback menggunakan exact official runtime identity/session profile
+        // yang sudah terbukti menghasilkan FULL_CONTENT pada MovieBox standalone.
+        // Search + season-info tetap memakai jalur katalog lama karena keduanya
+        // hanya dipakai untuk memetakan judul TMDB -> subjectId MovieBox.
+        val playbackSession = MovieboxHelper.getPlaybackSession()
+        if (playbackSession == null) {
+            Log.e(MB_TAG, "[05-PLAYBACK-SESSION] STOP: exact runtime session gagal")
+            return
+        }
+        Log.d(MB_TAG, "[05-PLAYBACK-SESSION] exact runtime session siap")
+
         /** Daftar season milik satu subject menurut server (kosong = tidak diketahui). */
         suspend fun fetchSeasons(sid: String): List<Int> {
             val raw = MovieboxHelper.getSigned(
@@ -423,35 +241,40 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
             return list.mapNotNull { it.se }.sorted()
         }
 
-        /** play-info untuk satu subject; null bila tidak ada stream yang layak. */
+        /** play-info exact-current untuk satu subject; null bila tidak ada stream layak. */
         suspend fun tryPlay(sid: String, pairs: List<Pair<Int, Int>>): List<MovieboxStreamItem>? {
             for ((se, epNum) in pairs) {
-                // URUTAN QUERY WAJIB ALFABETIS (ep, se, subjectId) - ikut ditandatangani.
-                val raw = MovieboxHelper.getSigned(
-                    "/wefeed-mobile-bff/subject-api/play-info",
-                    "ep=$epNum&se=$se&subjectId=$sid",
-                    bearer
+                val raw = MovieboxHelper.getPlaybackPlayInfo(
+                    subjectId = sid,
+                    se = se,
+                    ep = epNum,
+                    session = playbackSession
                 )
                 if (raw == null) {
-                    Log.e(MB_TAG, "[08-PLAY] id=$sid se=$se ep=$epNum HTTP gagal / exception")
+                    Log.e(MB_TAG, "[08-PLAY] id=$sid se=$se ep=$epNum exact play-info gagal")
                     continue
                 }
+
                 val play = tryParseJson<MovieboxPlayInfoResponse>(raw)
                 if (play == null) {
                     Log.e(MB_TAG, "[08-PLAY] id=$sid se=$se ep=$epNum JSON gagal. head=${raw.take(200)}")
                     continue
                 }
+
                 val all = play.data?.streams.orEmpty()
                 val usable = all
                     .filter { !it.url.isNullOrBlank() && !it.signCookie.isNullOrBlank() }
                     .distinctBy { it.url }
+
                 val noUrl = all.count { it.url.isNullOrBlank() }
                 val noCookie = all.count { it.signCookie.isNullOrBlank() }
+
                 Log.d(
                     MB_TAG,
                     "[08-PLAY] id=$sid se=$se ep=$epNum code=${play.code} msg=${play.message} " +
                         "streams=${all.size} usable=${usable.size} tanpaUrl=$noUrl tanpaSignCookie=$noCookie"
                 )
+
                 if (usable.isNotEmpty()) return usable
             }
             return null
@@ -550,7 +373,7 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
             val rawSub = MovieboxHelper.getSigned(
                 "/wefeed-mobile-bff/subject-api/get-stream-captions",
                 "streamId=$streamId&subjectId=$subjectId",
-                bearer
+                playbackSession.bearer
             )
             if (rawSub == null) {
                 Log.w(MB_TAG, "[09-SUB] get-stream-captions gagal (stream tetap dilanjutkan)")
@@ -622,13 +445,14 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
     }
 
     // ================== MOVIEBOX ENGINE (AUTH + SIGNED REQUEST) ==================
-    // Dipindahkan apa adanya dari MovieBoxProvider. JANGAN mengubah apa pun di
-    // dalam buildCanonical/generateSignature/headersFor: server memvalidasi
-    // signature byte per byte.
+    // Jalur katalog/search tetap memakai profil lama yang sudah bekerja untuk
+    // pemetaan subject. Jalur PLAYBACK memakai exact runtime identity current APK
+    // 4.0.02.0831.03 / 999999999 yang sudah diverifikasi FULL_CONTENT.
     private object MovieboxHelper {
 
         const val API_URL = "https://api3.aoneroom.com"
         const val USER_AGENT = "com.community.oneroom/50020088 (Linux; U; Android 13; en_US; Samsung; Build/TQ3A.230901.001)"
+        private const val PLAYBACK_API_BASE = "https://api6.aoneroom.com"
 
         /**
          * x-client-info dirakit saat request, bukan konstanta, karena device_id
@@ -758,6 +582,238 @@ object AdiFilmSemiExtractor : AdiFilmSemi() {
         }
 
         private fun generateGuestToken(ts: String): String = "$ts,${md5(ts.reversed())}"
+
+        // ---------------------------------------------------------------
+        // EXACT CURRENT PLAYBACK PROFILE
+        // ---------------------------------------------------------------
+        // Private/local only. Blob ini device-bound via Build.FINGERPRINT dan
+        // berasal dari runtime identity MovieBox resmi yang sudah diverifikasi.
+        private const val ORACLE_BLOB_B64 = "DTIykuYnWieJjJgXTGK+QzvFGBfR7pw7CKX532Rg/rxEImeG4XFYNNeXjUMSJKoba4VVBda+0mtT8JXQYST0rlQ8cofmIFoniYzSREIn+R861RlRje/Zf1/zntQte/ymRD0x0LN7CGfWn9lFR3LpAX6OWkbB6oY+NKPOlDpgtO1UPHKJ6TpKZN/CtAVVfrlIft0WRcapxnAGr8LTbGD+vCVdfbO+eAZHkYLJGERl6Rd+qXFh4sS4GTSX7/BJYOi8GWMPluI7TWzcwMlMAyD9D3DFRlDS4oU8SfqE/0Rg6LwFYA+D6C1bJ4mM3kcRIPsPcMVHTMb/jz80rMfYZzel+RMyasLuJxwpkdqCG0RrpEM5xQ4X9PiDM0SKx89hMrHsFzJ8wvI6W3fsx49UGzP9H2XSAg2Gut5gXPiVgjh386tEMnzC8SxMdtrBhSlCfq9Ift0WDIyy02tS+Z+PIm7m6BNiI4noJ2Fr0sOOVBsz/wNsyQQHm7vSYVruloUiPw=="
+        private const val ORACLE_KEY_DOMAIN = "MovieBoxOracleV1|"
+
+        data class ExactPlaybackSession(
+            val bearer: String,
+            val clientInfo: String
+        )
+
+        private data class OracleIdentity(
+            val userId: String,
+            val deviceId: String,
+            val versionName: String,
+            val versionCode: Long,
+            val osVersion: String,
+            val model: String,
+            val installCh: String,
+            val gaid: String,
+            val net: String,
+            val region: String,
+            val timezone: String,
+            val spCode: String,
+            val installStore: String,
+            val systemLanguage: String
+        )
+
+        private data class PlaybackSessionProfile(
+            val identity: OracleIdentity,
+            val clientInfo: String
+        )
+
+        private fun oracleDecryptJson(): JSONObject? {
+            return try {
+                val encrypted = Base64.decode(ORACLE_BLOB_B64, Base64.DEFAULT)
+                val key = MessageDigest.getInstance("SHA-256")
+                    .digest((ORACLE_KEY_DOMAIN + Build.FINGERPRINT).toByteArray(Charsets.UTF_8))
+                val plain = ByteArray(encrypted.size)
+                for (i in encrypted.indices) {
+                    plain[i] = (encrypted[i].toInt() xor key[i % key.size].toInt()).toByte()
+                }
+                JSONObject(String(plain, Charsets.UTF_8))
+            } catch (e: Exception) {
+                Log.e(MB_TAG, "[PLAYBACK] runtime identity decrypt gagal: ${e.javaClass.simpleName}")
+                null
+            }
+        }
+
+        private fun oracleString(o: JSONObject, key: String): String {
+            val value = o.opt(key)
+            return if (value == null || value == JSONObject.NULL) "" else value.toString()
+        }
+
+        private fun oracleIdentity(): OracleIdentity? {
+            val o = oracleDecryptJson() ?: return null
+            val versionCode = oracleString(o, "version_code").toLongOrNull() ?: return null
+
+            val identity = OracleIdentity(
+                userId = oracleString(o, "user_id"),
+                deviceId = oracleString(o, "device_id"),
+                versionName = oracleString(o, "version_name"),
+                versionCode = versionCode,
+                osVersion = oracleString(o, "os_version"),
+                model = oracleString(o, "model"),
+                installCh = oracleString(o, "install_ch"),
+                gaid = oracleString(o, "gaid"),
+                net = oracleString(o, "net"),
+                region = oracleString(o, "region"),
+                timezone = oracleString(o, "timezone"),
+                spCode = oracleString(o, "sp_code"),
+                installStore = oracleString(o, "install_store"),
+                systemLanguage = oracleString(o, "system_language")
+            )
+
+            if (
+                identity.deviceId.isBlank() ||
+                identity.versionName != "4.0.02.0831.03" ||
+                identity.versionCode != 999999999L
+            ) {
+                Log.e(MB_TAG, "[PLAYBACK] runtime identity tidak cocok dengan build target")
+                return null
+            }
+
+            return identity
+        }
+
+        private fun realUserIdIsGuest(value: String): Boolean =
+            value.isBlank() ||
+                value.equals("null", ignoreCase = true) ||
+                value.equals("none", ignoreCase = true) ||
+                value.equals("guest", ignoreCase = true)
+
+        private fun buildPlaybackSessionProfile(): PlaybackSessionProfile? {
+            val id = oracleIdentity() ?: return null
+
+            val info = JSONObject()
+                .put("package_name", "com.community.oneroom")
+                .put("version_name", id.versionName)
+                .put("version_code", id.versionCode)
+                .put("os", "android")
+                .put("os_version", id.osVersion)
+
+            if (id.installCh.isNotBlank()) info.put("install_ch", id.installCh)
+
+            info.put("device_id", id.deviceId)
+                .put("install_store", id.installStore)
+
+            if (id.gaid.isNotBlank()) info.put("gaid", id.gaid)
+
+            info.put("brand", Build.BRAND ?: "")
+                .put("model", id.model)
+                .put("system_language", id.systemLanguage)
+                .put("net", id.net)
+                .put("region", id.region)
+                .put("timezone", id.timezone)
+                .put("sp_code", id.spCode)
+
+            return PlaybackSessionProfile(
+                identity = id,
+                clientInfo = info.toString()
+            )
+        }
+
+        private fun playbackGetCanonical(pathWithCanonicalQuery: String, ts: String): String =
+            listOf("GET", "", "", "", ts, "", pathWithCanonicalQuery).joinToString("\n")
+
+        private fun playbackGetSignature(pathWithCanonicalQuery: String, ts: String): String {
+            val mac = Mac.getInstance("HmacMD5")
+            mac.init(SecretKeySpec(SECRET_BYTES, "HmacMD5"))
+            val bytes = mac.doFinal(
+                playbackGetCanonical(pathWithCanonicalQuery, ts).toByteArray(Charsets.UTF_8)
+            )
+            return "$ts|2|${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+        }
+
+        private fun playbackGuestHeaders(
+            ts: String,
+            signature: String,
+            profile: PlaybackSessionProfile
+        ): Map<String, String> = mapOf(
+            "x-client-token" to generateGuestToken(ts),
+            "x-tr-signature" to signature,
+            "x-client-info" to profile.clientInfo,
+            "x-client-status" to "1"
+        )
+
+        private fun playbackPlayInfoHeaders(
+            signature: String,
+            session: ExactPlaybackSession
+        ): Map<String, String> = mapOf(
+            "authorization" to "Bearer ${session.bearer}",
+            "x-tr-signature" to signature,
+            "x-client-info" to session.clientInfo,
+            "x-client-status" to "1"
+        )
+
+        suspend fun getPlaybackSession(): ExactPlaybackSession? {
+            val profile = buildPlaybackSessionProfile() ?: return null
+            val ts = System.currentTimeMillis().toString()
+            val path = "/wefeed-mobile-bff/tab/ranking-list"
+            val query = "page=1&perPage=1&tabId=0"
+            val signature = playbackGetSignature("$path?$query", ts)
+
+            return try {
+                val response = app.get(
+                    "$PLAYBACK_API_BASE$path?$query",
+                    headers = playbackGuestHeaders(ts, signature, profile)
+                )
+
+                val xUserHeader = response.headers["x-user"] ?: return null
+                val xUser = JSONObject(xUserHeader)
+                val bearer = xUser.optString("token", "").ifBlank { return null }
+
+                val sessionUserId = when {
+                    xUser.has("userId") && xUser.opt("userId") != JSONObject.NULL ->
+                        xUser.opt("userId")?.toString().orEmpty()
+                    xUser.has("user_id") && xUser.opt("user_id") != JSONObject.NULL ->
+                        xUser.opt("user_id")?.toString().orEmpty()
+                    else -> ""
+                }
+
+                val realUserId = profile.identity.userId
+                val identityMatches =
+                    realUserIdIsGuest(realUserId) ||
+                        (sessionUserId.isNotBlank() && sessionUserId == realUserId)
+
+                if (!identityMatches) {
+                    Log.e(MB_TAG, "[PLAYBACK] session user tidak cocok dengan runtime identity")
+                    null
+                } else {
+                    ExactPlaybackSession(
+                        bearer = bearer,
+                        clientInfo = profile.clientInfo
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(MB_TAG, "[PLAYBACK] gagal memperoleh bearer: ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+        }
+
+        suspend fun getPlaybackPlayInfo(
+            subjectId: String,
+            se: Int,
+            ep: Int,
+            session: ExactPlaybackSession
+        ): String? {
+            val ts = System.currentTimeMillis().toString()
+            val path = "/wefeed-mobile-bff/subject-api/play-info"
+
+            // Current official APK outgoing order.
+            val finalUrlQuery = "subjectId=$subjectId&se=$se&ep=$ep"
+
+            // Gateway signing sorts keys lexically.
+            val canonicalQuery = "ep=$ep&se=$se&subjectId=$subjectId"
+            val signature = playbackGetSignature("$path?$canonicalQuery", ts)
+
+            return try {
+                val response = app.get(
+                    "$PLAYBACK_API_BASE$path?$finalUrlQuery",
+                    headers = playbackPlayInfoHeaders(signature, session)
+                )
+                if (response.code == 200) response.text else null
+            } catch (e: Exception) {
+                Log.e(MB_TAG, "[PLAYBACK] play-info gagal: ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+        }
 
         private fun headersFor(ts: String, signature: String, bearer: String?): Map<String, String> {
             val h = mutableMapOf(

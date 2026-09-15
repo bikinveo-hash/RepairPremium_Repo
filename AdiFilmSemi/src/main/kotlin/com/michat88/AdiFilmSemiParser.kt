@@ -3,7 +3,7 @@ package com.michat88
 import com.fasterxml.jackson.annotation.JsonProperty
 
 // ================== MOVIEBOX DATA CLASSES ==================
-// Menggantikan seluruh data class Adimoviebox (V1) dan Adimoviebox2 (V2).
+// DTO di bawah hanya untuk source MovieBox current.
 // Semua di-prefix "Moviebox" supaya tidak bentrok dengan nama generik
 // (StreamItem / PlayData / CoverItem) milik MovieBoxProvider asli.
 //
@@ -83,36 +83,4 @@ data class MovieboxCaption(
     @param:JsonProperty("lan") val lan: String? = null,
     @param:JsonProperty("lanName") val lanName: String? = null,
     @param:JsonProperty("language") val language: String? = null,
-)
-
-// ================== KISSKH DATA CLASSES ==================
-// Catatan: AdiFilmSemiExtractor punya versi privat (nested) dari class ini,
-// jadi yang di bawah ini secara efektif tidak terpakai. Sengaja TIDAK dihapus
-// karena berada di luar scope migrasi Adimoviebox.
-data class KisskhMedia(
-    @param:JsonProperty("id") val id: Int?,
-    @param:JsonProperty("title") val title: String?
-)
-
-data class KisskhDetail(
-    @param:JsonProperty("episodes") val episodes: List<KisskhEpisode>?
-)
-
-data class KisskhEpisode(
-    @param:JsonProperty("id") val id: Int?,
-    @param:JsonProperty("number") val number: Double?
-)
-
-data class KisskhKey(
-    @param:JsonProperty("key") val key: String?
-)
-
-data class KisskhSources(
-    @param:JsonProperty("Video") val video: String?,
-    @param:JsonProperty("ThirdParty") val thirdParty: String?
-)
-
-data class KisskhSubtitle(
-    @param:JsonProperty("src") val src: String?,
-    @param:JsonProperty("label") val label: String?
 )

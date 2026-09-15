@@ -17,7 +17,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  *
  * Sumber tambahan untuk AdiFilmSemi. Katalog, detail, pencarian, dan metadata
  * tetap sepenuhnya dari TMDB; berkas ini HANYA menghasilkan ExtractorLink dan
- * SubtitleFile, sama seperti peran MovieBox dan Kisskh.
+ * SubtitleFile; source playback aktif lainnya hanya MovieBox.
  *
  * Diambil dari IdlixProvider + Majorplay tanpa membawa mainPage/getMainPage/
  * search()/load() miliknya, karena semua itu sudah ditangani TMDB.
