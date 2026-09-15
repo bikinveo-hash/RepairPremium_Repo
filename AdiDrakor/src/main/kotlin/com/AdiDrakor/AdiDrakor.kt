@@ -1,7 +1,6 @@
 package com.AdiDrakor
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.AdiDrakor.AdiDrakorExtractor.invokeKisskh 
 import com.AdiDrakor.AdiDrakorExtractor.invokeMoviebox
 import com.AdiDrakor.AdiDrakorIdlix.invokeIdlix
 import com.lagradost.cloudstream3.*
@@ -27,9 +26,8 @@ open class AdiDrakor : TmdbProvider() {
 
     // [AUDIT-A1] MainAPI: "Set false if links require referer or for some reason cant be
     // played on a chromecast". Link MovieBox wajib membawa header Cookie hasil signCookie
-    // lewat getVideoInterceptor(), dan Kisskh wajib membawa Referer. Chromecast tidak
-    // memakai interceptor provider sehingga CDN membalas 403. Kembalikan ke true hanya
-    // bila nanti ada sumber yang benar-benar bisa di-cast.
+    // lewat getVideoInterceptor(). Pertahankan false selama sumber aktif masih bergantung
+    // pada header/interceptor provider.
     override val hasChromecastSupport = false
 
     // [AUDIT-A3] load() dapat mengembalikan TvType.Anime (isAnime), sedangkan supportedTypes
@@ -42,6 +40,7 @@ open class AdiDrakor : TmdbProvider() {
     )
 
     val wpRedisInterceptor by lazy { CloudflareKiller() }
+
 
     companion object {
         private const val tmdbAPI = "https://api.themoviedb.org/3"
@@ -309,9 +308,31 @@ open class AdiDrakor : TmdbProvider() {
     ): Boolean {
         val res = parseJson<LinkData>(data)
         runAllAsync(
-            { invokeMoviebox(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.airedYear, res.season, res.episode, subtitleCallback, callback) },
-            { invokeKisskh(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) },
-            { invokeIdlix(res.title ?: return@runAllAsync, res.orgTitle, res.altTitle, res.year, res.season, res.episode, subtitleCallback, callback) }
+            {
+                invokeMoviebox(
+                    res.title ?: return@runAllAsync,
+                    res.orgTitle,
+                    res.altTitle,
+                    res.year,
+                    res.airedYear,
+                    res.season,
+                    res.episode,
+                    subtitleCallback,
+                    callback
+                )
+            },
+            {
+                invokeIdlix(
+                    res.title ?: return@runAllAsync,
+                    res.orgTitle,
+                    res.altTitle,
+                    res.year,
+                    res.season,
+                    res.episode,
+                    subtitleCallback,
+                    callback
+                )
+            }
         )
         return true
     }
@@ -322,8 +343,8 @@ open class AdiDrakor : TmdbProvider() {
      * Stream MovieBox memakai signed cookie; tanpa interceptor ini ExoPlayer
      * tidak mengirim header Cookie ke CDN dan semua request balas 403.
      *
-     * Return null bila link tidak punya header Cookie, sehingga Kisskh sama
-     * sekali tidak terpengaruh.
+     * Return null bila link tidak punya header Cookie, sehingga sumber lain
+     * yang tidak memakai Cookie MovieBox tidak terpengaruh.
      */
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
         val cookie = extractorLink.headers["Cookie"]

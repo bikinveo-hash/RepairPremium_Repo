@@ -84,35 +84,3 @@ data class MovieboxCaption(
     @param:JsonProperty("lanName") val lanName: String? = null,
     @param:JsonProperty("language") val language: String? = null,
 )
-
-// ================== KISSKH DATA CLASSES ==================
-// Catatan: AdiDrakorExtractor punya versi privat (nested) dari class ini,
-// jadi yang di bawah ini secara efektif tidak terpakai. Sengaja TIDAK dihapus
-// karena berada di luar scope migrasi Adimoviebox.
-data class KisskhMedia(
-    @param:JsonProperty("id") val id: Int?,
-    @param:JsonProperty("title") val title: String?
-)
-
-data class KisskhDetail(
-    @param:JsonProperty("episodes") val episodes: List<KisskhEpisode>?
-)
-
-data class KisskhEpisode(
-    @param:JsonProperty("id") val id: Int?,
-    @param:JsonProperty("number") val number: Double?
-)
-
-data class KisskhKey(
-    @param:JsonProperty("key") val key: String?
-)
-
-data class KisskhSources(
-    @param:JsonProperty("Video") val video: String?,
-    @param:JsonProperty("ThirdParty") val thirdParty: String?
-)
-
-data class KisskhSubtitle(
-    @param:JsonProperty("src") val src: String?,
-    @param:JsonProperty("label") val label: String?
-)
