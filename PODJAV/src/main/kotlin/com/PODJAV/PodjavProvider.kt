@@ -208,7 +208,8 @@ class PodjavProvider : MainAPI() {
 
         // Mengambil daftar video rekomendasi
         val recommendations = document.select(".carousel-track a.reko-card").mapNotNull {
-            val recUrl = it.attr("href") ?: return@mapNotNull null
+            val recUrl = it.attr("href").trim().takeIf { href -> href.isNotBlank() }
+                ?: return@mapNotNull null
             val imgElem = it.selectFirst("img") ?: return@mapNotNull null
             val recPoster = imgElem.attr("src")
             val recTitle = it.selectFirst(".reko-card-title")?.text() ?: return@mapNotNull null
@@ -340,16 +341,12 @@ class PodjavProvider : MainAPI() {
                         // HTTP fragment TIDAK pernah dikirim ke server, jadi token utuh.
                         if (!subUrl.endsWith("vtt", ignoreCase = true)) subUrl += "#.vtt"
 
-                        // CATATAN HEADER
-                        // Konstruktor SubtitleFile(lang, url, headers) bersifat PRIVATE.
-                        // Jalur resminya adalah builder newSubtitleFile (lihat issue #1809 /
-                        // PR #1810 di repo cloudstream). Untuk sekarang dipakai konstruktor
-                        // 2-argumen yang publik, karena setelah token diperbarui lewat AJAX
-                        // header kemungkinan besar tidak lagi dibutuhkan.
+                        // Gunakan builder resmi CloudStream agar tidak memakai
+                        // constructor SubtitleFile(lang, url) yang sudah deprecated.
                         subtitleCallback.invoke(
-                            SubtitleFile(
-                                lang = sub.label ?: "Indonesia",
-                                url = subUrl
+                            newSubtitleFile(
+                                sub.label ?: "Indonesia",
+                                subUrl
                             )
                         )
                     }
