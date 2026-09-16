@@ -16,9 +16,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -75,20 +73,10 @@ data class HowNetworkResponse(
     @JsonProperty("title") val title: String?
 )
 
-data class PlayCdnPlayerData(
-    @JsonProperty("id") val id: String? = null,
-    @JsonProperty("token") val token: String? = null
-)
-
 data class PlayCdnVerifyResponse(
     @JsonProperty("status") val status: String? = null,
     @JsonProperty("fileUrl") val fileUrl: String? = null,
     @JsonProperty("message") val message: String? = null
-)
-
-data class PlayCdnVerifyPayload(
-    @JsonProperty("token") val token: String,
-    @JsonProperty("is_ios") val isIos: Boolean
 )
 
 data class CastChalResp(
@@ -485,12 +473,7 @@ object HydraxProxy {
                 return
             }
 
-            val body = response.body
-            if (body == null) {
-                Log.w("HydraxProxy", "[$clientId] [!] Body response dari Hydrax null!")
-                return
-            }
-            val inputStream = body.byteStream()
+            val inputStream = response.body.byteStream()
 
             val keyBytes = keyHex.toByteArray(Charsets.UTF_8)
             val secretKey = SecretKeySpec(keyBytes, "AES")
@@ -816,6 +799,8 @@ open class PlayCdnP2PExtractor : ExtractorApi() {
                 .followRedirects(true)
                 .build()
 
+            // P1E confirmed current contract:
+            // GET opaque PlayCDN page first, then derive slug from final pathname.
             val pageRequest = Request.Builder()
                 .url(url)
                 .header("User-Agent", PLAYCDN_UA)
@@ -823,59 +808,61 @@ open class PlayCdnP2PExtractor : ExtractorApi() {
                 .apply { referer?.takeIf { it.isNotBlank() }?.let { header("Referer", it) } }
                 .build()
 
-            val (playerUrl, playerHtml) = client.newCall(pageRequest).execute().use { response ->
+            val playerUrl = client.newCall(pageRequest).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw IllegalStateException("player HTTP ${response.code}")
                 }
-                response.request.url.toString() to response.body?.string().orEmpty()
+                // Consume body so cookies/session behavior matches a normal page load.
+                response.body.string()
+                response.request.url.toString()
             }
 
-            val dataJson = Regex(
-                """\bvar\s+data\s*=\s*(\{.*?\})\s*;""",
-                RegexOption.DOT_MATCHES_ALL
-            )
-                .find(playerHtml)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: throw IllegalStateException("player data object tidak ditemukan")
-            val playerData = jsonMapper.readValue(dataJson, PlayCdnPlayerData::class.java)
-            val id = playerData.id?.takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("data.id kosong")
-            val token = playerData.token?.takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("data.token kosong")
-            Log.d(
-                DEBUG_TAG,
-                "extractor=PlayCDN player id=$id playerHost=" +
-                    runCatching { URI(playerUrl).host }.getOrNull() +
-                    " tokenLength=${token.length}"
-            )
+            val playerUri = URI(playerUrl)
+            val playerOrigin = if (
+                !playerUri.scheme.isNullOrBlank() && !playerUri.host.isNullOrBlank()
+            ) {
+                "${playerUri.scheme}://${playerUri.host}" +
+                    if (playerUri.port > 0) ":${playerUri.port}" else ""
+            } else {
+                throw IllegalStateException("player origin tidak valid")
+            }
 
-            val payload = PlayCdnVerifyPayload(
-                token = token,
-                isIos = false
-            )
+            val slug = playerUri.path
+                ?.trimEnd('/')
+                ?.substringAfterLast('/')
+                ?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("player slug kosong")
 
-            val verifyBody = jsonMapper.writeValueAsString(payload)
-                .toRequestBody("application/json".toMediaType())
-            val verifyRequest = requestBuilder("$mainUrl/verify.php", playerUrl)
-                .post(verifyBody)
+            // Current PlayCDN no longer exposes var data{id,token} and no longer
+            // POSTs /verify.php. init_player.js performs:
+            // GET /verify/{slug}
+            val verifyRequest = requestBuilder(
+                "$playerOrigin/verify/$slug",
+                playerUrl
+            )
+                .get()
                 .build()
+
             val (verifyHttpStatus, verify) = client.newCall(verifyRequest).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw IllegalStateException("verify HTTP ${response.code}")
                 }
                 response.code to jsonMapper.readValue(
-                    response.body?.string().orEmpty(), PlayCdnVerifyResponse::class.java
+                    response.body.string(),
+                    PlayCdnVerifyResponse::class.java
                 )
             }
+
             if (!verify.status.equals("success", ignoreCase = true)) {
                 throw IllegalStateException(
                     "verify status=${verify.status} message=${verify.message.orEmpty()}"
                 )
             }
+
             val mediaUrl = verify.fileUrl?.takeIf {
                 it.startsWith("https://") || it.startsWith("http://")
             } ?: throw IllegalStateException("fileUrl absolut tidak ditemukan")
+
             val mediaType = if (
                 mediaUrl.substringBefore("?").endsWith(".mp4", ignoreCase = true)
             ) {
@@ -883,6 +870,7 @@ open class PlayCdnP2PExtractor : ExtractorApi() {
             } else {
                 ExtractorLinkType.M3U8
             }
+
             callback(
                 newExtractorLink(
                     source = name,
@@ -890,13 +878,15 @@ open class PlayCdnP2PExtractor : ExtractorApi() {
                     url = mediaUrl,
                     type = mediaType
                 ) {
+                    // P1E proved stream.playcdn.de works without Referer/Origin.
                     this.quality = Qualities.Unknown.value
                 }
             )
+
             Log.d(
                 DEBUG_TAG,
-                "extractor=PlayCDN verify status=${verify.status} http=$verifyHttpStatus " +
-                    "id=$id type=$mediaType mediaHost=" +
+                "extractor=PlayCDN current verify status=${verify.status} " +
+                    "http=$verifyHttpStatus slugLength=${slug.length} type=$mediaType mediaHost=" +
                     runCatching { URI(mediaUrl).host }.getOrNull()
             )
         } catch (e: Exception) {
