@@ -10,7 +10,8 @@ class MovieboxPlugin : Plugin() {
         // Identity persisten per-instalasi disiapkan sebelum provider dipakai.
         MovieBoxProvider.attachContext(context)
 
-        // Registrasi provider utama
-        registerMainAPI(MovieBoxProvider())
+        // Registrasi provider utama melalui playback-only compatibility layer.
+        // Seluruh fitur non-playback tetap didelegasikan ke MovieBoxProvider asli.
+        registerMainAPI(MovieBoxPlaybackFixedProvider())
     }
 }

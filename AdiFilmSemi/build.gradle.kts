@@ -1,6 +1,21 @@
 // use an integer for version numbers
-version = 8
+version = 14
 
+
+// Reuse ONLY the shared playback engine source files from Adicinemax21.
+// Do not depend on the whole Adicinemax21 project because that also packages
+// Adicinemax21Plugin (@CloudstreamPlugin) and can hijack plugin discovery.
+android {
+    sourceSets.getByName("main").java.apply {
+        srcDir(rootProject.file("Adicinemax21/src/main/kotlin"))
+        filter.include(
+            "com/Adicinemax21/Adicinemax21VidSrc.kt",
+            "com/Adicinemax21/Adicinemax21VidSrcResolver.kt",
+            "com/Adicinemax21/Adicinemax21VidSrcShared.kt",
+            "com/Adicinemax21/Adicinemax21IdlixShared.kt",
+        )
+    }
+}
 
 cloudstream {
     language = "id"

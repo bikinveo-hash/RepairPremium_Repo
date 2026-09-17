@@ -1,8 +1,9 @@
 package com.AdiDrakor
 
+import android.content.Context
+import com.Adicinemax21.Adicinemax21VidSrcShared
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
 class AdiDrakorPlugin : Plugin() {
@@ -10,7 +11,10 @@ class AdiDrakorPlugin : Plugin() {
         // Identity persisten MovieBox disiapkan sebelum request pertama.
         AdiDrakorExtractor.attachContext(context)
 
-        // Hanya mendaftarkan provider utama
-        registerMainAPI(AdiDrakor())
+        // Reuse exact VidSrc/WebView/WASM engine milik Adicinemax21.
+        Adicinemax21VidSrcShared.attachContext(context)
+
+        // Provider utama: MovieBox/VidSrc proven + Idlix prefetch/cache.
+        registerMainAPI(AdiDrakorPrefetchProvider())
     }
 }
