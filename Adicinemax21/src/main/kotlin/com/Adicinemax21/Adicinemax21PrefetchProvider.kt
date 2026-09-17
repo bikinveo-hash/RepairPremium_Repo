@@ -23,7 +23,7 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 class Adicinemax21PrefetchProvider : Adicinemax21() {
     companion object {
-        private const val SOURCE_WINDOW_MS = 14_500L
+        private const val SOURCE_WINDOW_MS = 40_000L
         private const val POLL_MS = 75L
         private const val TARGET_FAMILIES = 3
         private const val FINAL_SETTLE_MS = 200L
