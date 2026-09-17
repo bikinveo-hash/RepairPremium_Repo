@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import okhttp3.Interceptor
 import org.json.JSONObject
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
@@ -262,7 +263,57 @@ class Adicinemax21PlaybackFixedProvider : Adicinemax21() {
         true
     }
 
+    private fun rawQueryParameter(url: String, name: String): String? {
+        return runCatching {
+            URI(url).rawQuery
+                ?.split('&')
+                ?.firstOrNull { part -> part.substringBefore('=') == name }
+                ?.substringAfter('=', "")
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
+
+    private fun getVidSrcInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        val source = extractorLink.source.ifBlank { extractorLink.name }.lowercase()
+        if (!source.contains("vidsrc")) return null
+
+        val mediaHost = runCatching { URI(extractorLink.url).host?.lowercase() }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        val token = rawQueryParameter(extractorLink.url, "token") ?: return null
+
+        Log.i("Adicinemax21", "[VIDSRC-FIX] token propagation active|HOST=$mediaHost")
+
+        return Interceptor { chain ->
+            val request = chain.request()
+            val requestUrl = request.url
+            val builder = request.newBuilder()
+
+            if (
+                requestUrl.host.equals(mediaHost, ignoreCase = true) &&
+                requestUrl.queryParameter("token").isNullOrBlank()
+            ) {
+                builder.url(
+                    requestUrl.newBuilder()
+                        .addEncodedQueryParameter("token", token)
+                        .build()
+                )
+            }
+
+            extractorLink.headers.forEach { (key, value) ->
+                if (value.isNotBlank()) builder.header(key, value)
+            }
+            if (extractorLink.referer.isNotBlank()) {
+                builder.header("Referer", extractorLink.referer)
+            }
+
+            chain.proceed(builder.build())
+        }
+    }
+
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        getVidSrcInterceptor(extractorLink)?.let { return it }
+
         val cookie = extractorLink.headers["Cookie"]
         if (cookie.isNullOrBlank()) return super.getVideoInterceptor(extractorLink)
         val userAgent = extractorLink.headers["User-Agent"]
