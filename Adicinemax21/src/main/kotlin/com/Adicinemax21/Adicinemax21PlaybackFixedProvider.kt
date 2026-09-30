@@ -16,13 +16,12 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Bounded three-source collector.
- * MovieBox is resolved by MovieBoxV2Shared; Idlix and VidSrc keep their
- * existing implementations and parameters.
+ * Collector tiga sumber lokal: MovieBox, Idlix, dan VidSrc.
+ * Tidak bergantung pada source plugin Adi lainnya.
  */
 class Adicinemax21PlaybackFixedProvider : Adicinemax21() {
     companion object {
-        private const val SOURCE_GRACE_MS = 12_000L
+        private const val SOURCE_GRACE_MS = 40_000L
         private const val GRACE_POLL_MS = 75L
         private const val TARGET_SOURCE_COUNT = 3
         private const val FINAL_SETTLE_MS = 250L

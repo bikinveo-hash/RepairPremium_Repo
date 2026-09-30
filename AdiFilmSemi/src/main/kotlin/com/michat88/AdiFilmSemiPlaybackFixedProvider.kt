@@ -1,7 +1,7 @@
 package com.michat88
 
 import android.util.Log
-import com.Adicinemax21.Adicinemax21VidSrcShared
+import com.Adicinemax21.Adicinemax21VidSrc
 import com.Adicinemax21.MovieBoxV2Shared
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -17,9 +17,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 
+/** Tiga sumber lokal: MovieBox, Idlix, dan VidSrc. */
 class AdiFilmSemiPlaybackFixedProvider : AdiFilmSemi() {
     companion object {
-        private const val SOURCE_GRACE_MS = 12_000L
+        private const val SOURCE_GRACE_MS = 40_000L
         private const val GRACE_POLL_MS = 75L
         private const val TARGET_SOURCE_COUNT = 3
         private const val FINAL_SETTLE_MS = 250L
@@ -108,7 +109,7 @@ class AdiFilmSemiPlaybackFixedProvider : AdiFilmSemi() {
     ) {
         val payload = JSONObject(data)
         val tmdbId = intOrNull(payload, "id") ?: return
-        Adicinemax21VidSrcShared.invokeVidSrc(
+        Adicinemax21VidSrc.invokeVidSrc(
             tmdbId = tmdbId,
             type = stringOrNull(payload, "type"),
             season = intOrNull(payload, "season"),

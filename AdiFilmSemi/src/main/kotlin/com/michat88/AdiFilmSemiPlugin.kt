@@ -1,7 +1,7 @@
 package com.michat88
 
 import android.content.Context
-import com.Adicinemax21.Adicinemax21VidSrcShared
+import com.Adicinemax21.Adicinemax21VidSrc
 import com.Adicinemax21.MovieBoxV2Shared
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
@@ -9,14 +9,11 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class AdiFilmSemiPlugin : Plugin() {
     override fun load(context: Context) {
-        // Exact MovieBox runtime profile harus siap sebelum request playback pertama.
         AdiFilmSemiExtractor.attachContext(context)
         MovieBoxV2Shared.attachContext(context)
+        Adicinemax21VidSrc.attachContext(context)
 
-        // Reuse exact VidSrc/WebView/WASM engine milik Adicinemax21.
-        Adicinemax21VidSrcShared.attachContext(context)
-
-        // Provider utama: MovieBox/VidSrc proven + Idlix prefetch/cache.
-        registerMainAPI(AdiFilmSemiPrefetchProvider())
+        // Tiga sumber berdiri sendiri di plugin ini: MovieBox, Idlix, VidSrc.
+        registerMainAPI(AdiFilmSemiPlaybackFixedProvider())
     }
 }
