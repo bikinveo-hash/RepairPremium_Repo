@@ -759,11 +759,13 @@ object AdiDrakorExtractor : AdiDrakor() {
                 val xUser = JSONObject(xUserHeader)
                 val bearer = xUser.optString("token", "").ifBlank { return null }
 
+                val userIdValue = xUser.opt("userId")
+                val snakeUserIdValue = xUser.opt("user_id")
                 val sessionUserId = when {
-                    xUser.has("userId") && xUser.opt("userId") != JSONObject.NULL ->
-                        xUser.opt("userId").toString()
-                    xUser.has("user_id") && xUser.opt("user_id") != JSONObject.NULL ->
-                        xUser.opt("user_id").toString()
+                    userIdValue != null && userIdValue != JSONObject.NULL ->
+                        userIdValue.toString()
+                    snakeUserIdValue != null && snakeUserIdValue != JSONObject.NULL ->
+                        snakeUserIdValue.toString()
                     else -> ""
                 }
 

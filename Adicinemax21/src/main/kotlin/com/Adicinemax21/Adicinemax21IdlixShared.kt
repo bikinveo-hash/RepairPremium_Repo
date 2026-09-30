@@ -248,7 +248,7 @@ internal object Adicinemax21IdlixShared {
             val contentType: String
             val contentId: String
             if (isSeries) {
-                val seasonNum = season ?: return
+                val seasonNum = season
                 val episodeNum = episode ?: return
                 val seasonText = runCatching {
                     app.get("$MAIN_URL/api/series/${base.slug}/season/$seasonNum").text
