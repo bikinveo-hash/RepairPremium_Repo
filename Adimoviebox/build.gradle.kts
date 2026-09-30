@@ -1,29 +1,26 @@
 // use an integer for version numbers
-version = 8
+version = 9
 
+// Reuse ONLY the proven shared MovieBox playback engine from Adicinemax21.
+// The standalone Adimoviebox catalog/search/detail implementation remains local.
+android {
+    sourceSets.getByName("main").java.apply {
+        srcDir(rootProject.file("Adicinemax21/src/main/kotlin"))
+        filter.include(
+            "com/Adicinemax21/MovieBoxV2Shared.kt",
+            "com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt",
+        )
+    }
+}
 
 cloudstream {
     language = "id"
-    // All of these properties are optional, you can safely remove them
-
-    // description = "Lorem Ipsum"
     authors = listOf("aldry84")
-
-    /**
-     * Status int as the following:
-     * 0: Down
-     * 1: Ok
-     * 2: Slow
-     * 3: Beta only
-     * */
-    status = 1 // will be 3 if unspecified
+    status = 1
     tvTypes = listOf(
         "AsianDrama",
         "TvSeries",
         "Movie",
     )
-
-
     iconUrl = "https://moviebox.ph/favicon.ico"
-
 }
