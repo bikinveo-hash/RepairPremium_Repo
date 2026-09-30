@@ -1,11 +1,14 @@
 package com.Adimoviebox
 
-import com.lagradost.cloudstream3.plugins.BasePlugin
+import android.content.Context
+import com.Adicinemax21.MovieBoxV2Shared
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class AdimovieboxProvider: BasePlugin() {
-    override fun load() {
-        registerMainAPI(AdimovieboxPlaybackV2Provider())
+class AdimovieboxProvider : Plugin() {
+    override fun load(context: Context) {
+        MovieBoxV2Shared.attachContext(context)
+        registerMainAPI(AdimovieboxSharedPlaybackProvider())
     }
 }
