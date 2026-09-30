@@ -9,6 +9,7 @@ class Adicinemax21Plugin : Plugin() {
     override fun load(context: Context) {
         // Identity persisten MovieBox disiapkan sebelum request pertama.
         Adicinemax21Extractor.attachContext(context)
+        MovieBoxV2Shared.attachContext(context)
 
         // Context hanya untuk engine VidSrc (WebView/WASM resolver dari Streamzy).
         Adicinemax21VidSrc.attachContext(context)
