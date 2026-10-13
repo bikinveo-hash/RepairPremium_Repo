@@ -180,6 +180,12 @@ object LocalProxy {
         return "http://127.0.0.1:$port/p?u=" + URLEncoder.encode(upstream, "UTF-8") + suffix
     }
 
+    fun hydraxUrl(upstream: String, size: Long, partSize: Long): String? {
+        if (!isRunning || port <= 0) return null
+        val id = HydraxMedia.register(upstream, size, partSize) ?: return null
+        return "http://127.0.0.1:$port/hx?id=$id"
+    }
+
     fun isAllowed(raw: String): Boolean {
         val host = try {
             URL(raw).host?.lowercase() ?: return false
@@ -238,7 +244,7 @@ object LocalProxy {
         }
     }
 
-    private class Req(val path: String, val headers: Map<String, String>)
+    private class Req(val path: String, val headers: Map<String, String>, val method: String)
 
     private fun readRequest(input: InputStream): Req? {
         val sb = StringBuilder()
@@ -261,7 +267,7 @@ object LocalProxy {
         }
         val rl = reqLine ?: return null
         val p = rl.split(" ").getOrNull(1) ?: return null
-        return Req(p, h)
+        return Req(p, h, rl.substringBefore(' '))
     }
 
     private class Up(
@@ -371,6 +377,12 @@ object LocalProxy {
                 }.toByteArray()
                 writeHead(out, 200, "text/plain; charset=utf-8", body.size.toLong(), null)
                 out.write(body); out.flush()
+                return
+            }
+            if (route == "/hx") {
+                sent = HydraxMedia.serve(param(query, "id") ?: "", req.headers["range"], req.method == "HEAD", out)
+                proxied.incrementAndGet()
+                bytesOut.addAndGet(sent)
                 return
             }
             if (route != "/p") {

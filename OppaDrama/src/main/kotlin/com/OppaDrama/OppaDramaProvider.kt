@@ -600,7 +600,8 @@ class OppaDramaProvider : MainAPI() {
         val size: Long?,
         val sub: String?,
         val url: String?,
-        val path: String?
+        val path: String?,
+        val partSize: Long
     )
 
     /**
@@ -806,7 +807,8 @@ class OppaDramaProvider : MainAPI() {
                     url = o.optString("url").takeIf { it.isNotBlank() && it != "null" },
                     path = o.optString("path").takeIf { it.isNotBlank() && it != "null" }
                         ?: o.optString("file").takeIf { it.isNotBlank() && it != "null" }
-                        ?: o.optString("src").takeIf { it.isNotBlank() && it != "null" }
+                        ?: o.optString("src").takeIf { it.isNotBlank() && it != "null" },
+                    partSize = o.optLong("partSize", 0L)
                 )
             )
         }
@@ -857,6 +859,19 @@ class OppaDramaProvider : MainAPI() {
             var fullUrl: String? = null
 
             for (src in order) {
+                // The site's R2 fallback is encrypted at the start and split into
+                // storage parts. It must be served as one decrypted, seekable MP4.
+                if (USE_PROXY && src.size != null && src.url != null && src.path != null) {
+                    val storageUrl = if (src.path.startsWith("https://")) src.path
+                        else "${unescapeJs(src.url).trimEnd('/')}/${unescapeJs(src.path).trimStart('/')}"
+                    fullUrl = LocalProxy.hydraxUrl(storageUrl, src.size, src.partSize)
+                    if (fullUrl != null) {
+                        LocalProxy.obs("HX-6-STORAGE", "label=$label codec=${src.codec} size=${src.size} part=${src.partSize}")
+                        chosen = src
+                        break
+                    }
+                }
+
                 // --- Jalur 1: /sora/ (mp4_native). Mengembalikan file utuh. ---
                 if (src.resId != null && src.size != null && src.sub != null) {
                     val host = domains.firstOrNull { it.contains(src.sub) }
