@@ -29,7 +29,7 @@ data class MovieVersionData(
 )
 
 class OppaDramaProvider : MainAPI() {
-    override var mainUrl = "http://212.86.121.175"
+    override var mainUrl = "https://oppadrama.io"
     override var name = "OPPADRAMA"
     override var lang = "id"
     
@@ -240,16 +240,15 @@ class OppaDramaProvider : MainAPI() {
             ?: "OPPADRAMA"
 
         // 3. Poster Utama
-        // Rantai selector diperlebar: tema memakai .bigcontent/.single-info untuk
-        // thumb, dan WordPress selalu menandai gambar unggulan dengan
-        // class wp-post-image / itemprop=image. og:image jadi jaring terakhir.
+        // Dahulukan poster di area detail. itemprop=image juga dipakai logo
+        // header; selector global dapat mengambil logo atau judul rekomendasi.
         val cleanPoster = posterFrom(
             doc.selectFirst(
-                ".bigcontent .thumb img, .single-info .thumb img, .thumb img, " +
-                    ".megavid .tb img, .poster img, img.wp-post-image, img[itemprop=image]"
+                ".bigcontent .thumb img, .single-info .thumb img, .megavid .tb img, .poster img"
             )
         ) ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
             ?.takeIf { it.isNotBlank() && !isInvalidImage(it) }
+            ?.let { fixUrl(it) }
         logDebug("load -> poster resolved: $cleanPoster")
 
         // 4. Sinopsis / Plot
@@ -799,15 +798,15 @@ class OppaDramaProvider : MainAPI() {
             LocalProxy.obs("HX-5-SOURCE[$i]", o.toString())
             parsed.add(
                 HydraxSource(
-                    label = o.optString("label", null)?.takeIf { it.isNotBlank() } ?: "HD",
-                    codec = o.optString("codec", null)?.takeIf { it.isNotBlank() } ?: "",
-                    resId = o.optString("res_id", null)?.takeIf { it.isNotBlank() && it != "null" },
-                    size = o.optString("size", null)?.toLongOrNull(),
-                    sub = o.optString("sub", null)?.takeIf { it.isNotBlank() && it != "null" },
-                    url = o.optString("url", null)?.takeIf { it.isNotBlank() && it != "null" },
-                    path = o.optString("path", null)?.takeIf { it.isNotBlank() && it != "null" }
-                        ?: o.optString("file", null)?.takeIf { it.isNotBlank() && it != "null" }
-                        ?: o.optString("src", null)?.takeIf { it.isNotBlank() && it != "null" }
+                    label = o.optString("label").takeIf { it.isNotBlank() } ?: "HD",
+                    codec = o.optString("codec").takeIf { it.isNotBlank() } ?: "",
+                    resId = o.optString("res_id").takeIf { it.isNotBlank() && it != "null" },
+                    size = o.optString("size").toLongOrNull(),
+                    sub = o.optString("sub").takeIf { it.isNotBlank() && it != "null" },
+                    url = o.optString("url").takeIf { it.isNotBlank() && it != "null" },
+                    path = o.optString("path").takeIf { it.isNotBlank() && it != "null" }
+                        ?: o.optString("file").takeIf { it.isNotBlank() && it != "null" }
+                        ?: o.optString("src").takeIf { it.isNotBlank() && it != "null" }
                 )
             )
         }
@@ -882,8 +881,8 @@ class OppaDramaProvider : MainAPI() {
                 // --- Jalur 2: url + path (perilaku lama, dipertahankan sebagai cadangan) ---
                 if (fullUrl == null) {
                     val bUrl = src.url
-                        ?: mp4Obj?.optString("url", null)?.takeIf { it.isNotBlank() && it != "null" }
-                        ?: decryptedObj.optString("url", null)?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: mp4Obj?.optString("url")?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: decryptedObj.optString("url").takeIf { it.isNotBlank() && it != "null" }
                     val pPath = src.path
 
                     if (pPath != null && (pPath.startsWith("http://") || pPath.startsWith("https://"))) {
@@ -1132,14 +1131,17 @@ class OppaDramaProvider : MainAPI() {
 
     private fun isInvalidImage(url: String?): Boolean {
         if (url.isNullOrBlank()) return true
-        val lower = url.lowercase()
-        return lower.contains("logo") ||
-               lower.contains("oppadrama") ||
-               lower.contains("cropped-site-icon") ||
-               lower.contains("loading.gif") ||
+        val lower = url.trim().lowercase()
+        // Poster asli juga memuat oppadrama di host/path CDN WordPress.
+        // Identifikasi aset logo/placeholder dari nama berkas, bukan seluruh URL.
+        val fileName = lower.substringBefore('?').substringBefore('#').substringAfterLast('/')
+        return lower.startsWith("data:") ||
                lower.contains("gravatar.com") ||
-               lower.contains("placeholder") ||
-               lower.contains("no-image") ||
-               lower.startsWith("data:")
+               fileName.contains("logo") ||
+               fileName.contains("oppadrama") ||
+               fileName.contains("cropped-site-icon") ||
+               fileName.contains("loading.gif") ||
+               fileName.contains("placeholder") ||
+               fileName.contains("no-image")
     }
 }
