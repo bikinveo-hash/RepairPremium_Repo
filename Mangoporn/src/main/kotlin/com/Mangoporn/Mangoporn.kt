@@ -3,6 +3,12 @@ package com.Mangoporn
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
+import java.net.URI
+import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicBoolean
+import android.util.Log
+import org.json.JSONArray
 import kotlinx.coroutines.*
 
 class MangoPorn : MainAPI() {
@@ -26,59 +32,115 @@ class MangoPorn : MainAPI() {
     // ==============================
     override val mainPage = mainPageOf(
         // Kategori Utama
-        "$mainUrl/ratings/" to "Top Rated",
+        "$mainUrl/" to "Latest",
+        "$mainUrl/?filter=most-viewed" to "Trending / Most Viewed",
+        "$mainUrl/?filter=popular" to "Top Rated",
+        "$mainUrl/genres/porn-movies/" to "Porn Movies",
         "$mainUrl/xxxclips/" to "XXX Clips",
         
         // Kategori Tambahan
-        "$mainUrl/genre/18-teens/" to "18+ Teens",
+        "$mainUrl/movies/genre/18-teens/" to "18+ Teens",
         "$mainUrl/genre/all-girl/" to "All Girl",
         "$mainUrl/genre/all-sex/" to "All Sex",
-        "$mainUrl/genre/asian/" to "Asian",
-        "$mainUrl/genre/bbc/" to "BBC",
-        "$mainUrl/genre/bbw/" to "BBW",
-        "$mainUrl/genre/big-boobs/" to "Big Boobs",
-        "$mainUrl/genre/big-butt/" to "Big Butt",
-        "$mainUrl/genre/big-cocks/" to "Big Cocks",
-        "$mainUrl/genre/blondes/" to "Blondes",
-        "$mainUrl/genre/blowjobs/" to "Blowjobs",
-        "$mainUrl/genre/cuckolds/" to "Cuckolds",
-        "$mainUrl/genre/cumshots/" to "Cumshots",
-        "$mainUrl/genre/deep-throat/" to "Deep Throat",
-        "$mainUrl/genre/facials/" to "Facials"
+        "$mainUrl/movies/genre/asian/" to "Asian",
+        "$mainUrl/movies/genre/bbc/" to "BBC",
+        "$mainUrl/movies/genre/bbw/" to "BBW",
+        "$mainUrl/movies/genre/big-tits/" to "Big Boobs",
+        "$mainUrl/movies/genre/big-butt/" to "Big Butt",
+        "$mainUrl/movies/genre/big-dicks/" to "Big Cocks",
+        "$mainUrl/movies/genre/blondes/" to "Blondes",
+        "$mainUrl/movies/genre/blowjobs/" to "Blowjobs",
+        "$mainUrl/movies/genre/cuckolds/" to "Cuckolds",
+        "$mainUrl/movies/genre/cumshots/" to "Cumshots",
+        "$mainUrl/movies/genre/deep-throat/" to "Deep Throat",
+        "$mainUrl/movies/genre/facials/" to "Facials"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = if (page == 1) {
             request.data
         } else {
-            "${request.data}page/$page/"
+            val uri = URI(request.data)
+            val base = request.data.substringBefore('?').substringBefore('#').trimEnd('/')
+            "$base/page/$page/" + (uri.rawQuery?.let { "?$it" } ?: "")
         }
 
-        val document = app.get(url, headers = headers).document
+        val document = try {
+            getDocument(url)
+        } catch (error: ErrorLoadingException) {
+            // Keep unavailable source categories in the configuration, but isolate
+            // their 404 from the other rows. Never invent a replacement category.
+            if (error.message?.startsWith("MangoPorn: HTTP 404 (") == true) {
+                Log.w("MangoPorn", "Category unavailable: ${request.name}; ${error.message}")
+                return null
+            }
+            throw error
+        }
         
-        val items = document.select("article.item").mapNotNull {
+        val items = document.select("article.card, article.item").mapNotNull {
             toSearchResult(it)
         }
 
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+        val hasNext = if (document.selectFirst("nav.pg") != null) {
+            document.selectFirst("nav.pg a.next.page-numbers") != null
+        } else {
+            items.isNotEmpty()
+        }
+        return newHomePageResponse(request.name, items, hasNext = hasNext)
+    }
+
+    private suspend fun getDocument(url: String): Document {
+        val response = app.get(url, headers = headers)
+        if (response.code !in 200..299) {
+            val path = runCatching { URI(response.url).path }.getOrNull().orEmpty()
+            throw ErrorLoadingException("MangoPorn: HTTP ${response.code} ($path)")
+        }
+        val document = response.document
+        // Resolve relative assets against the actual page after HTTP redirects.
+        document.setBaseUri(response.url)
+        if (document.title().equals("Site Unavailable", ignoreCase = true) ||
+            document.selectFirst("h1")?.text()?.trim().equals("Site Unavailable", ignoreCase = true)
+        ) {
+            throw ErrorLoadingException("MangoPorn: source returned Site Unavailable")
+        }
+        return document
+    }
+
+    private fun httpUrl(raw: String?, base: String): String? {
+        val value = raw?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("#") }
+            ?: return null
+        return runCatching {
+            val uri = URI(base).resolve(value)
+            uri.toString().takeIf {
+                (uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) &&
+                    !uri.host.isNullOrBlank()
+            }
+        }.getOrNull()
+    }
+
+    private fun posterUrl(image: Element?): String? {
+        image ?: return null
+        val base = image.baseUri().ifBlank { mainUrl }
+        return httpUrl(image.attr("data-wpfc-original-src"), base)
+            ?: httpUrl(image.attr("src"), base)
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        val titleElement = element.selectFirst("h3 > a") 
+        val titleElement = element.selectFirst(".card__t a")
+            ?: element.selectFirst("h3 > a")
             ?: element.selectFirst("div.title > a")
+            ?: element.selectFirst("a.card__th")
             ?: element.selectFirst("div.image > a")
             ?: return null
 
-        val title = titleElement.text().trim()
-        val url = fixUrl(titleElement.attr("href"))
-    
-        val imgElement = element.selectFirst("img")
-        val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
-            imgElement.attr("src") 
-        }
+        val image = element.selectFirst("img.card__img") ?: element.selectFirst("img")
+        val title = titleElement.text().trim().ifBlank { image?.attr("alt")?.trim().orEmpty() }
+            .takeIf { it.isNotBlank() } ?: return null
+        val url = httpUrl(titleElement.attr("href"), element.baseUri().ifBlank { mainUrl })
+            ?: return null
 
         return newMovieSearchResponse(title, url, TvType.NSFW) {
-            this.posterUrl = posterUrl
+            this.posterUrl = posterUrl(image)
         }
     }
 
@@ -86,12 +148,12 @@ class MangoPorn : MainAPI() {
     // 2. SEARCH
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        val fixedQuery = query.replace(" ", "+")
+        val fixedQuery = URLEncoder.encode(query, "UTF-8")
         val url = "$mainUrl/?s=$fixedQuery"
         
-        val document = app.get(url, headers = headers).document
+        val document = getDocument(url)
         
-        return document.select("div.result-item, article.item").mapNotNull {
+        return document.select("article.card, div.result-item, article.item").mapNotNull {
             toSearchResult(it)
         }
     }
@@ -100,22 +162,24 @@ class MangoPorn : MainAPI() {
     // 3. LOAD DETAIL
     // ==============================
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers).document
+        val document = getDocument(url)
 
-        val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown"
+        val title = document.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: throw ErrorLoadingException("MangoPorn: detail title missing")
 
-        val description = document.selectFirst("div.wp-content p")?.text()?.trim()
+        val description = document.selectFirst(".entry.vid__txt, div.wp-content p")?.text()?.trim()
         
-        val imgElement = document.selectFirst("div.poster img")
-        val poster = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
-            imgElement.attr("src") 
-        }
+        val imgElement = document.selectFirst(".dp__poster img.vid__poster, div.poster img")
+        val poster = posterUrl(imgElement)
 
-        val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
+        val tags = document.select(".info a[href*='/movies/genre/'], .sgeneros a, .persons a[href*='/genre/']")
+            .map { it.text().trim() }.filter { it.isNotBlank() }
         
-        val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
+        val yearElement = document.selectFirst(".info a[href*='/movies/year/'], .textco a[href*='/year/']")
+        val year = yearElement?.text()?.trim()?.toIntOrNull()
+            ?: yearElement?.attr("href")?.let { Regex("""/year/(\d{4})(?:/|$)""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
         
-        val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
+        val actors = document.select(".row--stars a[href*='/movies/pornstar/'], #cast .persons a[href*='/pornstar/']").map {
             ActorData(Actor(it.text(), null)) 
         }
 
@@ -137,18 +201,47 @@ class MangoPorn : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers).document
+        val document = getDocument(data)
 
-        val potentialLinks = mutableListOf<String>()
+        val potentialLinks = linkedSetOf<String>()
+        val directMedia = linkedMapOf<String, String>()
+        val emitted = AtomicBoolean(false)
+        val mediaCallback: (ExtractorLink) -> Unit = { media ->
+            callback(media)
+            emitted.set(true)
+        }
+
+        // Host Links Manager creates its iframe after a click from data-servers.
+        // Match the site's client: t=video is a direct source; other entries are embeds.
+        document.select(".hlm[data-servers]").forEach { player ->
+            val servers = try {
+                JSONArray(player.attr("data-servers"))
+            } catch (error: Exception) {
+                Log.w("MangoPorn", "Invalid Host Links Manager server JSON")
+                return@forEach
+            }
+            for (index in 0 until servers.length()) {
+                val server = servers.optJSONObject(index) ?: continue
+                val rawUrl = server.opt("u") as? String
+                val url = httpUrl(rawUrl, document.baseUri())
+                if (url == null) {
+                    Log.w("MangoPorn", "Host Links Manager server has no usable direct URL")
+                    continue
+                }
+                if (server.optString("t") == "video") {
+                    directMedia[url] = server.optString("l").ifBlank { name }
+                } else {
+                    potentialLinks.add(url)
+                }
+            }
+        }
 
         document.select("#playeroptionsul li a").forEach { link ->
-            val href = fixUrl(link.attr("href"))
-            if (href.startsWith("http")) potentialLinks.add(href)
+            httpUrl(link.attr("href"), document.baseUri())?.let(potentialLinks::add)
         }
 
         document.select("#playcontainer iframe").forEach { iframe ->
-            val src = fixUrl(iframe.attr("src"))
-            if (src.startsWith("http")) potentialLinks.add(src)
+            httpUrl(iframe.attr("src"), document.baseUri())?.let(potentialLinks::add)
         }
 
         fun getServerPriority(url: String): Int {
@@ -170,49 +263,56 @@ class MangoPorn : MainAPI() {
             }
         }
 
+        directMedia.forEach { (url, label) ->
+            val type = if (URI(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
+            }
+            mediaCallback(newExtractorLink(name, label, url, type = type) {
+                this.referer = httpUrl("/", document.baseUri()).orEmpty()
+                this.quality = Qualities.Unknown.value
+            })
+        }
+
         if (potentialLinks.isNotEmpty()) {
             val sortedLinks = potentialLinks.sortedBy { getServerPriority(it) }
-
             coroutineScope {
                 sortedLinks.map { link ->
-                    launch(Dispatchers.IO) {
+                    async(Dispatchers.IO) {
                         try {
-                            var finalUrl = link
-                            
-                            // Bypass Doodstream Clone (Playmogo)
-                            if (finalUrl.contains("playmogo.com")) {
-                                finalUrl = finalUrl.replace("playmogo.com", "dood.to")
-                            }
-                            
-                            // Route link ke Custom Extractor yang sudah kita buat (memakai getSafeUrl agar tidak crash)
+                            val finalUrl = link
+
+                            // Isolate server failures here while preserving coroutine cancellation.
                             if (finalUrl.contains("luluvid.com")) {
-                                Luluvid().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                Luluvid().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("rpmplay.online")) {
-                                RpmPlay().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                RpmPlay().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("upns.online")) {
-                                UpnsOnline().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                UpnsOnline().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("easyvidplayer.com")) {
-                                EasyVidPlayer().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                EasyVidPlayer().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("embedseek.online")) {
-                                EmbedSeek().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                EmbedSeek().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("seekplayer.vip")) {
-                                SeekPlayer().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                SeekPlayer().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else if (finalUrl.contains("streamtape.com")) {
-                                StreamtapeCustom().getSafeUrl(finalUrl, data, subtitleCallback, callback)
+                                StreamtapeCustom().getUrl(finalUrl, data, subtitleCallback, mediaCallback)
                             } else {
                                 // Eksekutor bawaan Cloudstream untuk server-server lain
-                                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                                loadExtractor(finalUrl, data, subtitleCallback, mediaCallback)
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             // Abaikan error di satu server agar server lain tetap dicoba
                         }
                     }
-                }
+                }.awaitAll()
             }
-            return true
         }
 
-        return false
+        return emitted.get()
     }
 }
 
@@ -232,7 +332,7 @@ class Luluvid : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val response = app.get(url, referer = referer).text
-        val m3u8Regex = Regex("file\"?\\s*:\\s*\"(https?://[^\"]+\\.m3u8[^\"]*)\"")
+        val m3u8Regex = Regex("""["']?file["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""")
         var match = m3u8Regex.find(response)
         
         if (match == null) {
@@ -257,42 +357,11 @@ class Luluvid : ExtractorApi() {
     }
 }
 
-class StreamtapeCustom : ExtractorApi() {
+// Delegate to the maintained extractor, which evaluates the botlink expression.
+// The old parser joined the last string concatenation anywhere in the page,
+// allowing unrelated scripts to corrupt the media token and ignored substring().
+class StreamtapeCustom : com.lagradost.cloudstream3.extractors.StreamTape() {
     override var name = "Streamtape"
-    override var mainUrl = "https://streamtape.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val response = app.get(url).text
-        val part1 = Regex("""innerHTML\s*=\s*['"](//[^'"]+get_video[^'"]+)['"]""").find(response)?.groupValues?.get(1)
-        val part2Regex = Regex("""\+\s*(?:\([^)]+\)\s*\+\s*)?['"]([^'"]+)['"]""")
-        val part2Matches = part2Regex.findAll(response).toList()
-        val part2 = if (part2Matches.isNotEmpty()) part2Matches.last().groupValues[1] else ""
-
-        if (part1 != null) {
-            var videoUrl = "https:$part1$part2"
-            if (!videoUrl.contains("&stream=1")) {
-                videoUrl += "&stream=1"
-            }
-
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = this.name,
-                    url = videoUrl,
-                    type = ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = url
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-        }
-    }
 }
 
 // Pasukan Kloningan Vidhide (Menggunakan VidhideExtractor dengan var)
