@@ -1,0 +1,28 @@
+{
+  "sha256": "40f6cad43ef3c80de2a50fb82351f6b810d36f0555ed15a5e9ee4c11305cb0cb",
+  "size": 67028684,
+  "runtime": "NOT_EXECUTED",
+  "active_spider_route": "NOT_CAPTURED",
+  "versionCode": 50020133,
+  "versionName": "4.0.03.0930.04",
+  "package": "com.community.oneroom",
+  "dex_count": 8,
+  "class_count": 61991,
+  "static_markers": {
+    "Cronet": 123,
+    "Range": 538,
+    "ExoPlayer": 108,
+    "signCookie": 2,
+    "play-info": 1
+  },
+  "endpointReferences": [
+    {
+      "dex": "classes7.dex",
+      "annotation": "Lretrofit2/http/GET;",
+      "endpoint": "/wefeed-mobile-bff/subject-api/play-info",
+      "owner": "Lcom/transsion/videodetail/b;",
+      "method": "b"
+    }
+  ],
+  "interpretation": "Static declaration only, not active Spider-Man network trace"
+}

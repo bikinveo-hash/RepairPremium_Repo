@@ -1,0 +1,59 @@
+package com.AdiDrakor
+
+import kotlinx.coroutines.*
+import okhttp3.Request
+import org.json.JSONObject
+import java.net.URI
+
+/** Optional real transport probe; never executed as a fixture or automatically by CI. */
+fun main(args: Array<String>): Unit=runBlocking {
+    require(args.size>=2 && args[0].matches(Regex("[0-9]{1,24}")) && args[1].matches(Regex("[A-Za-z0-9_-]{1,220}")))
+    val subject=args[0];val path=args[1];val se=args.getOrNull(2)?.toInt() ?: 0;val ep=args.getOrNull(3)?.toInt() ?: 0
+    require(se>=0 && ep>=0)
+    val host=AdiDrakorMovieboxPlayback.webDomains.first()
+    val referer="$host/movies/$path?id=$subject&type=/movie/detail&detailSe=&detailEp=&lang=en"
+    val url="$host/wefeed-h5api-bff/subject/play?subjectId=$subject&se=$se&ep=$ep&detailPath=$path&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1"
+    fun print(stage: String,reason: String,fields: Map<String,Any?> = emptyMap()) {
+        val o=JSONObject().put("stage",stage).put("reason",reason).put("subjectId",subject).put("se",se).put("ep",ep)
+        fields.forEach { (k,v)->if(v!=null)o.put(k,v) };println(o)
+    }
+    try {
+        val raw=withContext(Dispatchers.IO) {
+            val request=Request.Builder().url(url).header("User-Agent",AdiDrakorMovieboxPlayback.WEB_UA)
+                .header("Referer",referer).header("Accept","application/json").header("x-request-lang","en")
+                .header("x-client-info","{\"timezone\":\"Asia/Calcutta\"}").header("x-source","").build()
+            AdiDrakorMovieboxPlayback.client.newCall(request).execute().use { r ->
+                print("H5-PLAY-RESPONSE",if(r.code==200)"H5_RESPONSE" else "H5_REQUEST_FAILED",mapOf("status" to r.code,"protocol" to r.protocol.toString()))
+                if(r.code==200)r.body.string() else "{}"
+            }
+        }
+        val streams=AdiDrakorMovieboxPlayback.parse(raw,"H5",subject,se,ep,"","en")
+            .filter {it.category!=AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED}
+        val decoder=AdiDrakorMovieboxEngine::class.java.getDeclaredMethod("extractPlaybackPolicyResource",String::class.java).apply {isAccessible=true}
+        val engine=AdiDrakorMovieboxEngine("Probe")
+        val candidates=streams.flatMap { stream ->
+            val policy=decoder.invoke(engine,stream.cookie) as? String
+            if(policy!=null && AdiDrakorMovieboxPlayback.http(policy) && policy!=stream.url)
+                listOf(stream.copy(url=policy,format="DASH"),stream.copy(cookie=if(AdiDrakorMovieboxPlayback.scopeHeaders(mapOf("Cookie" to "scope-check"),policy,stream.url)["Cookie"]!=null)stream.cookie else null)) else listOf(stream)
+        }.filterNot {AdiDrakorMovieboxPlayback.notice(it.url)}.distinctBy {AdiDrakorMovieboxPlayback.requestKey(it)}
+            .sortedWith(compareBy<AdiDrakorMovieboxPlayback.Stream> {it.codec.contains("hevc",true)}
+                .thenBy {it.format.equals("DASH",true)}.thenByDescending {it.quality ?: 0}).take(6)
+        print("MEDIA-CANDIDATE","H5_STREAM_PARSED",mapOf("parsed" to streams.size,"candidates" to candidates.size))
+        var valid=0
+        val session=AdiDrakorMovieboxMedia()
+        withTimeout(60000) {
+            for((i,s)in candidates.withIndex()) {
+                val h=AdiDrakorMovieboxPlayback.mediaHeaders(s,host,referer,AdiDrakorMovieboxPlayback.WEB_UA)
+                val result=AdiDrakorMovieboxPlayback.validateObserved(s,h,{reason-> print("MEDIA-VALIDATION",reason,mapOf("candidate" to i,"type" to s.format))}) {u,headers,manifest->
+                    session.sample(u,headers,s.url,manifest) {e-> print(e.stage,e.reason,mapOf("candidate" to i,"host" to e.host,"status" to e.status,"mime" to e.mime,"redirect" to e.redirect,"attempt" to e.attempt,"elapsedMs" to e.elapsedMs,"ranged" to e.ranged,"retryAfterMs" to e.retryAfterMs,"protocol" to e.protocol))}
+                }
+                if(result!=null)valid++
+            }
+        }
+        print("FINAL-PLAYBACK",if(valid>0)"MEDIA_VALIDATED" else "NO_VALID_MEDIA",mapOf("validated" to valid,"device" to "NOT_TESTED"))
+    } catch(e: TimeoutCancellationException) { print("FINAL-PLAYBACK","MEDIA_TIMEOUT") }
+      catch(e: CancellationException) { throw e }
+      catch(e: Exception) { print("FINAL-PLAYBACK","PROBE_BLOCKED",mapOf("errorType" to e.javaClass.simpleName)) }
+    // SDK/NiceHttp may own background threads in a JVM probe; Android lifecycle is separate.
+    kotlin.system.exitProcess(0)
+}

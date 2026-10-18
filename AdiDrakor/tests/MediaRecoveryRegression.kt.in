@@ -1,0 +1,253 @@
+package PACKAGE
+
+import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.json.JSONObject
+import org.json.JSONArray
+import com.lagradost.cloudstream3.PlaybackApiFixture
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+fun main(): Unit=runBlocking {
+    var count=0
+    suspend fun test(name: String, block: suspend ()->Unit) { block();count++;println("PASS $name") }
+    val fixture=File(System.getProperty("migration.fixtures"))
+    val tmdb=JSONObject(File(fixture,"spiderman-tmdb-bilingual.json").readText())
+    val webHtml=File(fixture,"spiderman-public-stars-nuxt.html").readText()
+    val english="Spider-Man: Brand New Day";val local="Spider-Man: Hari Baru"
+    val original=V4MATCHER.catalogPage(webHtml).single()
+    val id=original.getString("subjectId");val path=original.getString("detailPath")
+    val base=V4MATCHER.hydrate(V4MATCHER.Request(listOf(english),2026,1,null,null,tmdbId="969681"),tmdb)
+    fun response(meta: JSONObject)=JSONObject().put("code",0).put("data",meta).toString()
+    fun search(meta: JSONObject)=JSONObject().put("code",0).put("data",JSONObject().put("items",JSONArray().put(meta))).toString()
+    for(requestTitle in listOf(english,local)) for(candidateTitle in listOf(english,local)) {
+        test("V4 cross-language $requestTitle -> $candidateTitle uses independent metadata") {
+            val req=base.copy(titles=listOf(requestTitle),localizedTitles=emptyList())
+            val meta=JSONObject(original.toString()).put("title",candidateTitle)
+            check(V4MATCHER.resolve(req,{search(meta)},{response(meta)},{null}).subject?.id==id)
+        }
+    }
+    test("V4 missing official Indonesian title is not cured by invented alias") {
+        check(local !in base.titles)
+        val meta=JSONObject(original.toString()).put("title",local)
+        check(V4MATCHER.identity(base,meta)=="CROSS_LANGUAGE_VERIFIED")
+        check(V4MATCHER.identity(base,JSONObject(meta.toString()).put("description","unrelated story"))!="CROSS_LANGUAGE_VERIFIED")
+        check(V4MATCHER.identity(base,JSONObject(meta.toString()).put("duration",2400))!="CROSS_LANGUAGE_VERIFIED")
+        check(V4MATCHER.identity(base,JSONObject(meta.toString()).put("staffList",JSONArray()))!="CROSS_LANGUAGE_VERIFIED")
+    }
+    test("V4 same subject display titles cannot merge a different work or borrowed cast") {
+        val meta=JSONObject(original.toString()).put("title",local).put("subjectId","999")
+        check(V4MATCHER.resolve(base,{search(original)},{response(meta)},{null}).subject==null)
+    }
+    for(title in listOf("Spider-Man: No Way Home","Spider-Man: Homecoming","Spider-Man: Far From Home","Spider-Man 2","Spider-Man: Lotus")) {
+        test("V4 wrong franchise work $title rejected without full-title permission") {
+            val wrong=JSONObject(original.toString()).put("title",title).put("releaseDate","2026-01-01")
+                .put("description","Peter Parker returns to school and meets friends during a summer holiday")
+            check(V4MATCHER.resolve(base,{search(wrong)},{response(wrong)},{null}).subject==null)
+        }
+    }
+    for(key in listOf("tmdbId","imdbId")) test("V4 $key conflict overrides localized cast plot and runtime") {
+        val req=base.copy(imdbId="tt1234567")
+        val wrong=JSONObject(original.toString()).put("title",local).put(key,if(key=="tmdbId")"1" else "tt7654321")
+        check(V4MATCHER.resolve(req,{search(wrong)},{response(wrong)},{null}).subject==null)
+    }
+    test("V4 decorated foreign edition is not a localized-title shortcut even with matching cast plot runtime") {
+        val hindi=JSONObject(original.toString()).put("title","Spider-Man: Brand New Day [Hindi] [Full movie]").put("subjectId","999")
+        check(V4MATCHER.resolve(base,{search(hindi)},{response(hindi)},{null}).subject==null)
+        hindi.put("title","Judul lokal lain").put("lanName","Hindi")
+        check(V4MATCHER.resolve(base,{search(hindi)},{response(hindi)},{null}).subject==null)
+    }
+    test("V4 matching external ID cannot override a grossly inconsistent movie duration") {
+        val wrong=JSONObject(original.toString()).put("title",local).put("tmdbId","969681").put("duration",300)
+        check(V4MATCHER.resolve(base,{search(wrong)},{response(wrong)},{null}).subject==null)
+    }
+    test("V4 localized external ID anchor works without a title alias but type conflict remains fatal") {
+        val meta=JSONObject(original.toString()).put("title",local).put("tmdbId","969681").put("description","").put("staffList",JSONArray())
+        check(V4MATCHER.resolve(base,{search(meta)},{response(meta)},{null}).subject?.id==id)
+        meta.put("subjectType",2)
+        check(V4MATCHER.resolve(base,{search(meta)},{response(meta)},{null}).subject==null)
+    }
+    test("V4 localized same cast without plot and runtime never authorizes a franchise fallback") {
+        val wrong=JSONObject(original.toString()).put("title",local).put("description","").apply { remove("duration") }
+        check(V4MATCHER.resolve(base,{search(wrong)},{response(wrong)},{null}).subject==null)
+    }
+    test("V4 localized wrong year cannot use cast plot as a year bypass") {
+        val wrong=JSONObject(original.toString()).put("title",local).put("releaseDate","2021-01-01")
+        check(V4MATCHER.resolve(base,{search(wrong)},{response(wrong)},{null}).subject==null)
+    }
+
+    val hits=ConcurrentHashMap<String,Int>();val ranges=mutableListOf<Pair<String,String?>>()
+    val cookies=mutableListOf<Pair<String,String?>>()
+    val emitted=java.util.concurrent.atomic.AtomicBoolean(false)
+    val early=java.util.concurrent.atomic.AtomicBoolean(false)
+    val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+    val mp4=byteArrayOf(0,0,0,24)+"ftypisom".toByteArray()+ByteArray(8192)
+    val small=byteArrayOf(0,0,0,12)+"ftypisom".toByteArray()
+    server.createContext("/") { x ->
+        val route=x.requestURI.path
+        hits.merge(route,1,Int::plus)
+        synchronized(ranges) { ranges+=route to x.requestHeaders.getFirst("Range") }
+        synchronized(cookies) { cookies+=route to x.requestHeaders.getFirst("Cookie") }
+        var code=200;var body=mp4;var mime="video/mp4"
+        when(route) {
+            "/range.mp4" -> if(x.requestHeaders.containsKey("Range")) {code=416;body="range rejected".toByteArray();mime="text/plain"}
+            "/partial.mp4" -> {code=206;body=small;x.responseHeaders.add("Content-Range","bytes 0-${small.size-1}/${small.size}")}
+            "/rate.mp4" -> if((hits[route] ?: 0)==1) {code=429;body="too many".toByteArray();mime="text/html";x.responseHeaders.add("Retry-After","1")}
+            "/protocol.mp4" -> {code=426;body="upgrade required".toByteArray();mime="text/plain"}
+            "/expired.mp4" -> {code=403;body="expired".toByteArray();mime="application/json"}
+            "/wrong.mp4" -> {body="<html>not video</html>".toByteArray();mime="text/html"}
+            "/redirect.mp4" -> {code=302;body=ByteArray(0);x.responseHeaders.add("Location","/good.mp4")}
+            "/foreign.mp4" -> {code=302;body=ByteArray(0);x.responseHeaders.add("Location","http://localhost:${server.address.port}/good.mp4")}
+            "/reject.mp4" -> {code=302;body=ByteArray(0);x.responseHeaders.add("Location","https://user:credential@invalid.test/file.mp4")}
+            "/callback-slow.mp4" -> {early.set(emitted.get());Thread.sleep(80)}
+            "/slow.mp4" -> {Thread.sleep(250);body=mp4}
+            "/film.mpd" -> {mime="application/dash+xml";body="""<MPD><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" codecs="avc1"><SegmentTemplate initialization="init.mp4" media="seg-${'$'}Number${'$'}.m4s"/></Representation></AdaptationSet></Period></MPD>""".toByteArray()}
+            "/partial.mpd" -> {
+                mime="application/dash+xml"
+                val full=("<MPD><!--"+"padding".repeat(700)+"--><Period><AdaptationSet mimeType=\"video/mp4\"><Representation id=\"v\"><BaseURL>good.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>").toByteArray()
+                if(x.requestHeaders.containsKey("Range")) {code=206;body=full.take(4096).toByteArray();x.responseHeaders.add("Content-Range","bytes 0-4095/${full.size}")} else body=full
+            }
+            "/film.m3u8" -> {mime="application/vnd.apple.mpegurl";body="#EXTM3U\n#EXTINF:6,\nseg-1.m4s\n#EXT-X-ENDLIST\n".toByteArray()}
+        }
+        try {x.responseHeaders.add("Content-Type",mime);x.sendResponseHeaders(code,body.size.toLong());x.responseBody.use {it.write(body)}} catch (_: Exception) {} finally {x.close()}
+    }
+    server.executor=java.util.concurrent.Executors.newCachedThreadPool { task -> Thread(task).apply { isDaemon=true } }
+    server.start()
+    val root="http://127.0.0.1:${server.address.port}"
+    fun stream(route: String)=V4PLAYBACK.Stream(root+route,"","resource",1080,"h264","scope-secret","X-MB-Token","","H5",V4PLAYBACK.AudioCategory.ORIGINAL)
+    val events=mutableListOf<V4MEDIA.Event>()
+    suspend fun validate(route: String, session: V4MEDIA=V4MEDIA()): V4PLAYBACK.Validated? {
+        val s=stream(route);val h=V4PLAYBACK.mediaHeaders(s,root,root,V4PLAYBACK.WEB_UA)
+        return V4PLAYBACK.validateObserved(s,h,{}) { u,headers,m -> session.sample(u,headers,s.url,m,events::add) }
+    }
+    try {
+        test("V4 real HTTP 200 MP4 bytes validate") { check(validate("/good.mp4")?.format==V4PLAYBACK.Format.VIDEO) }
+        test("V4 real HTTP 206 complete partial content validates") { check(validate("/partial.mp4")!=null) }
+        test("V4 range-specific 416 retries one bounded normal GET") {
+            check(validate("/range.mp4")!=null)
+            check(ranges.filter {it.first=="/range.mp4"}.map {it.second}==listOf("bytes=0-4095",null))
+        }
+        test("V4 429 blocks a batch and honors Retry-After without normal-GET retry") {
+            var now=0L;val session=V4MEDIA(clock={now})
+            check(validate("/rate.mp4",session)==null)
+            val before=hits.values.sum()
+            check(validate("/different.mp4",session)==null && hits.values.sum()==before)
+            check(events.last().reason=="MEDIA_HTTP_429" && events.last().attempt==0)
+            now=1001;check(validate("/rate.mp4",session)!=null)
+            check(ranges.filter {it.first=="/rate.mp4"}.all {it.second=="bytes=0-4095"})
+        }
+        test("V4 Retry-After supports seconds HTTP date and invalid input") {
+            val session=V4MEDIA(wall={0})
+            check(session.retryMillis("3")==3000L)
+            check(session.retryMillis("Thu, 01 Jan 1970 00:00:05 GMT")==5000L)
+            check(session.retryMillis("bad")==null && session.retryMillis("-1")==null)
+        }
+        test("V4 426 is diagnosed and never bypassed with protocol/header guessing") {
+            val before=hits["/protocol.mp4"] ?: 0
+            check(validate("/protocol.mp4")==null && (hits["/protocol.mp4"] ?: 0)==before+1)
+            check(events.last().reason=="MEDIA_HTTP_426")
+        }
+        test("V4 valid same-scope redirect retains media cookie") {
+            check(validate("/redirect.mp4")!=null)
+            check(cookies.last {it.first=="/good.mp4"}.second=="scope-secret")
+        }
+        test("V4 cross-host redirect strips credential before validating public media") {
+            check(validate("/foreign.mp4")!=null)
+            check(cookies.last {it.first=="/good.mp4"}.second==null)
+        }
+        test("V4 credential-bearing redirect is rejected before sending any request") {
+            check(validate("/reject.mp4")==null)
+            check(events.last().reason=="MEDIA_REDIRECT_REJECTED")
+        }
+        test("V4 expired server signature never reaches valid callback") { check(validate("/expired.mp4")==null) }
+        test("V4 explicit expired URL is rejected before transport and before cache") {
+            val before=hits.values.sum();val session=V4MEDIA(wall={2000})
+            check(session.sample(root+"/good.mp4?Expires=1",emptyMap(),root+"/good.mp4",false,events::add)==null)
+            check(hits.values.sum()==before)
+        }
+        test("V4 HTML error HTTP 200 is never video") { check(validate("/wrong.mp4")==null) }
+        test("V4 complete DASH manifest is fetched once and both init/segment validated") {
+            val before=hits["/film.mpd"] ?: 0
+            check(validate("/film.mpd")?.format==V4PLAYBACK.Format.DASH)
+            check((hits["/film.mpd"] ?: 0)==before+1)
+            check((hits["/init.mp4"] ?: 0)>0 && (hits["/seg-1.m4s"] ?: 0)>0)
+        }
+        test("V4 Content-Range proves a 4096-byte manifest is incomplete and requires one full fetch") {
+            check(validate("/partial.mpd")?.format==V4PLAYBACK.Format.DASH)
+            check(hits["/partial.mpd"]==2)
+            check(ranges.filter {it.first=="/partial.mpd"}.map {it.second}==listOf("bytes=0-4095",null))
+        }
+        test("V4 ignored Range cannot download an entire direct media resource") {
+            val s=stream("/bounded.mp4")
+            val sampled=V4MEDIA().sample(s.url,emptyMap(),s.url,false)!!
+            check(sampled.bytes.size==4096 && sampled.truncated)
+        }
+        test("V4 HLS validates media segments") { check(validate("/film.m3u8")?.format==V4PLAYBACK.Format.HLS) }
+        test("V4 identical requests reuse bounded request-local samples across qualities") {
+            val session=V4MEDIA();val before=hits["/cache.mp4"] ?: 0
+            check(validate("/cache.mp4",session)!=null && validate("/cache.mp4",session)!=null)
+            check((hits["/cache.mp4"] ?: 0)==before+1)
+        }
+        test("V4 cache expires and signed identities never collide") {
+            var now=0L;val session=V4MEDIA(clock={now})
+            check(validate("/identity.mp4?sig=a",session)!=null && validate("/identity.mp4?sig=b",session)!=null)
+            check(hits["/identity.mp4"]==2)
+            now=5001;check(validate("/identity.mp4?sig=a",session)!=null && hits["/identity.mp4"]==3)
+        }
+        test("V4 timeout and cancellation propagate through in-flight media IO") {
+            check(withTimeoutOrNull(30) {validate("/slow.mp4")}==null)
+            val job=async { validate("/slow.mp4") };delay(20);job.cancelAndJoin();check(job.isCancelled)
+        }
+        test("V4 diagnostic ring is bounded and refuses secret/header/URL fields") {
+            V4LOG.clear()
+            repeat(200) {V4LOG.record("MEDIA-PREFLIGHT","MEDIA_HTTP_429",mapOf("status" to 429,"Authorization" to "secret","url" to "signed-secret"))}
+            val log=V4LOG.snapshot();check("secret" !in log && log.lines().size==161)
+        }
+        fun api(req: Request,body: String,code: Int=200)=Response.Builder().request(req).protocol(Protocol.HTTP_1_1)
+            .code(code).message("fixture").body(body.toResponseBody("application/json".toMediaType())).build()
+        test("V4 selected TMDB English -> localized subject -> H5 0/0 -> validated media MainAPI") {
+            PlaybackApiFixture.requests.clear()
+            PlaybackApiFixture.responder={ req -> when {
+                req.url.host=="api.themoviedb.org" -> api(req,if(req.url.encodedPath.contains("/search/")) "{\"results\":[]}" else tmdb.toString())
+                req.url.host=="moviebox.ph" -> api(req,webHtml.replace(english,local))
+                req.url.encodedPath.endsWith("subject/play") -> {
+                    check(req.url.queryParameter("subjectId")==id && req.url.queryParameter("detailPath")==path)
+                    check(req.url.queryParameter("se")=="0" && req.url.queryParameter("ep")=="0")
+                    api(req,"""{"code":0,"data":{"subjectId":"$id","se":0,"ep":0,"dash":[{"url":"$root/film.mpd"}],"streams":[{"url":"$root/good.mp4","resolutions":"1080"},{"url":"$root/good.mp4","resolutions":"720"},{"url":"$root/good.mp4","resolutions":"480"}]}}""")
+                }
+                else -> api(req,"{}",403)
+            } }
+            val links=mutableListOf<ExtractorLink>()
+            check(V4PROVIDER().loadLinks("""{"id":969681,"tmdbId":"969681","title":"$english","year":2026,"type":"movie","isTvSeries":false}""",false,{},links::add))
+            // The multisource boundary emits each URL once, retaining DASH plus the
+            // first validated progressive URL even when the catalog repeats quality labels.
+            check(links.size==2 && links.all {it.source=="Moviebox"})
+            check(links.map { it.url }.distinct().size==links.size)
+            val log=V4LOG.snapshot();check("IDENTITY_VERIFIED" in log && "MEDIA_VALIDATED" in log && "PLAYBACK_READY" in log)
+            check("scope-secret" !in log && root !in log && "Authorization" !in log)
+        }
+        test("V4 validated callback precedes a slower optional quality without removing quality choices") {
+            emitted.set(false);early.set(false)
+            PlaybackApiFixture.responder={req -> if(req.url.encodedPath.endsWith("subject/play"))
+                api(req,"""{"code":0,"data":{"subjectId":"$id","se":0,"ep":0,"streams":[{"url":"$root/callback-fast.mp4","resolutions":"1080"},{"url":"$root/callback-slow.mp4","resolutions":"720"}]}}""") else api(req,"{}",403)}
+            val links=mutableListOf<ExtractorLink>()
+            check(V4ENGINE("V4PROVIDER").loadLinks("""{"subjectId":"$id","se":0,"ep":0,"subjectType":1}""",false,{}, {link-> emitted.set(true);links+=link},mapOf(id to JSONObject(original.toString()))))
+            check(early.get() && links.map {it.quality}.toSet()==setOf(1080,720))
+        }
+        test("V4 rate-limited MainAPI batch never gives a wrong or invalid source callback") {
+            hits.remove("/rate.mp4");PlaybackApiFixture.requests.clear()
+            PlaybackApiFixture.responder={req -> if(req.url.encodedPath.endsWith("subject/play"))
+                api(req,"""{"code":0,"data":{"subjectId":"$id","se":0,"ep":0,"streams":[{"url":"$root/rate.mp4"},{"url":"$root/rate-other.mp4"}]}}""") else api(req,"{}",403)}
+            val links=mutableListOf<ExtractorLink>();val context=JSONObject(original.toString())
+            check(!V4ENGINE("V4PROVIDER").loadLinks("""{"subjectId":"$id","se":0,"ep":0,"subjectType":1}""",false,{},links::add,mapOf(id to context)))
+            check(links.isEmpty() && hits["/rate.mp4"]==1 && hits["/rate-other.mp4"]==null)
+        }
+    } finally {server.stop(0);PlaybackApiFixture.requests.clear()}
+    println("MEDIA_RECOVERY $count PASS; fixture/local HTTP only; Android/live playback NOT_TESTED")
+    kotlin.system.exitProcess(0)
+}

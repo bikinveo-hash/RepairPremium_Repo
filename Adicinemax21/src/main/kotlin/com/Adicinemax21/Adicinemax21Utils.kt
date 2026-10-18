@@ -2,7 +2,6 @@ package com.Adicinemax21
 
 import com.lagradost.cloudstream3.APIHolder.unixTimeMS
 import com.lagradost.cloudstream3.mvvm.logError
-import com.lagradost.cloudstream3.utils.Qualities
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -17,9 +16,7 @@ import java.util.Locale
 // Engine Moviebox yang baru memakai android.util.Base64 secara langsung
 // dengan flag NO_WRAP, jadi tidak butuh wrapper di sini.
 
-/**
- * Dipakai di Adicinemax21.load() untuk menandai episode/film yang belum rilis.
- */
+/** Dipakai di Adicinemax21.load() untuk menandai episode/film yang belum rilis. */
 fun isUpcoming(dateString: String?): Boolean {
     return try {
         val format = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
@@ -29,18 +26,4 @@ fun isUpcoming(dateString: String?): Boolean {
         logError(t)
         false
     }
-}
-
-/**
- * Dipakai oleh source Moviebox untuk memetakan field "resolutions" ke Qualities.
- */
-fun getQualityFromName(qualityName: String?): Int {
-    if (qualityName == null)
-        return Qualities.Unknown.value
-
-    val match = qualityName.lowercase().replace("p", "").trim()
-    return when (match) {
-        "4k" -> Qualities.P2160
-        else -> null
-    }?.value ?: match.toIntOrNull() ?: Qualities.Unknown.value
 }

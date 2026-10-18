@@ -1,0 +1,303 @@
+{
+  "observedUtc": "2026-10-17T22:32:52.140294+00:00",
+  "baselineMain": "2c31f13068aef47a4c0dd25d791a98716f53cac4",
+  "type": "live transport observations, not fixture or device playback PASS",
+  "controlledRangeVsNormal": [
+    {
+      "mode": "range",
+      "host": "bcdnxw.hakunaymatata.com",
+      "http": 429,
+      "headers": {
+        "Content-Type": "text/html",
+        "Server": "nginx"
+      },
+      "bytes": 587,
+      "video": false,
+      "error_markers": [
+        "too many"
+      ],
+      "body_hash": "0dd4b9984480",
+      "elapsedMs": 7817
+    },
+    {
+      "mode": "normal",
+      "host": "bcdnxw.hakunaymatata.com",
+      "http": 429,
+      "headers": {
+        "Content-Type": "text/html",
+        "Server": "nginx"
+      },
+      "bytes": 587,
+      "video": false,
+      "error_markers": [
+        "too many"
+      ],
+      "body_hash": "0dd4b9984480",
+      "elapsedMs": 7480
+    }
+  ],
+  "newKotlinTransport": [
+    {
+      "reason": "H5_RESPONSE",
+      "se": 0,
+      "protocol": "h2",
+      "stage": "H5-PLAY-RESPONSE",
+      "ep": 0,
+      "subjectId": "6026412232966389904",
+      "status": 200
+    },
+    {
+      "reason": "H5_STREAM_PARSED",
+      "candidates": 5,
+      "se": 0,
+      "stage": "MEDIA-CANDIDATE",
+      "parsed": 4,
+      "ep": 0,
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "redirect": false,
+      "reason": "MEDIA_TIMEOUT",
+      "mime": "",
+      "ep": 0,
+      "attempt": 1,
+      "subjectId": "6026412232966389904",
+      "se": 0,
+      "candidate": 0,
+      "protocol": "",
+      "stage": "MEDIA-PREFLIGHT",
+      "ranged": true,
+      "host": "bcdnxw.hakunaymatata.com",
+      "elapsedMs": 6037
+    },
+    {
+      "reason": "MEDIA_UNAVAILABLE",
+      "se": 0,
+      "candidate": 0,
+      "stage": "MEDIA-VALIDATION",
+      "ep": 0,
+      "type": "MP4",
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "redirect": false,
+      "reason": "MEDIA_HTTP_429",
+      "mime": "text/html",
+      "ep": 0,
+      "attempt": 1,
+      "subjectId": "6026412232966389904",
+      "se": 0,
+      "candidate": 1,
+      "protocol": "h2",
+      "stage": "MEDIA-PREFLIGHT",
+      "ranged": true,
+      "host": "bcdnxw.hakunaymatata.com",
+      "status": 429,
+      "elapsedMs": 1902
+    },
+    {
+      "reason": "MEDIA_HTTP_429",
+      "se": 0,
+      "candidate": 1,
+      "stage": "MEDIA-VALIDATION",
+      "ep": 0,
+      "type": "MP4",
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "redirect": false,
+      "retryAfterMs": 4998,
+      "reason": "MEDIA_HTTP_429",
+      "mime": "",
+      "ep": 0,
+      "attempt": 0,
+      "subjectId": "6026412232966389904",
+      "se": 0,
+      "candidate": 2,
+      "protocol": "",
+      "stage": "MEDIA-PREFLIGHT",
+      "ranged": false,
+      "host": "bcdnxw.hakunaymatata.com",
+      "status": 429,
+      "elapsedMs": 0
+    },
+    {
+      "reason": "MEDIA_UNAVAILABLE",
+      "se": 0,
+      "candidate": 2,
+      "stage": "MEDIA-VALIDATION",
+      "ep": 0,
+      "type": "MP4",
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "redirect": false,
+      "reason": "MEDIA_TIMEOUT",
+      "mime": "",
+      "ep": 0,
+      "attempt": 1,
+      "subjectId": "6026412232966389904",
+      "se": 0,
+      "candidate": 3,
+      "protocol": "",
+      "stage": "MEDIA-PREFLIGHT",
+      "ranged": true,
+      "host": "sbcdnw.hakunaymatata.com",
+      "elapsedMs": 6043
+    },
+    {
+      "reason": "MEDIA_UNAVAILABLE",
+      "se": 0,
+      "candidate": 3,
+      "stage": "MEDIA-VALIDATION",
+      "ep": 0,
+      "type": "DASH",
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "redirect": false,
+      "reason": "MEDIA_HTTP_429",
+      "mime": "text/html",
+      "ep": 0,
+      "attempt": 1,
+      "subjectId": "6026412232966389904",
+      "se": 0,
+      "candidate": 4,
+      "protocol": "h2",
+      "stage": "MEDIA-PREFLIGHT",
+      "ranged": true,
+      "host": "sbcdnw.hakunaymatata.com",
+      "status": 429,
+      "elapsedMs": 1918
+    },
+    {
+      "reason": "MEDIA_HTTP_429",
+      "se": 0,
+      "candidate": 4,
+      "stage": "MEDIA-VALIDATION",
+      "ep": 0,
+      "type": "DASH",
+      "subjectId": "6026412232966389904"
+    },
+    {
+      "reason": "NO_VALID_MEDIA",
+      "se": 0,
+      "stage": "FINAL-PLAYBACK",
+      "validated": 0,
+      "ep": 0,
+      "device": "NOT_TESTED",
+      "subjectId": "6026412232966389904"
+    }
+  ],
+  "devicePlayback": "NOT_TESTED",
+  "nativeAppResourceIdentity": "NOT_CAPTURED",
+  "controlledDashRangeVsNormal": [
+    {
+      "mode": "range",
+      "host": "sbcdnw.hakunaymatata.com",
+      "http": 429,
+      "headers": {
+        "Content-Type": "text/html",
+        "Server": "nginx"
+      },
+      "bytes": 587,
+      "video": false,
+      "error_markers": [
+        "too many"
+      ],
+      "body_hash": "0dd4b9984480",
+      "elapsedMs": 7793
+    },
+    {
+      "mode": "normal",
+      "host": "sbcdnw.hakunaymatata.com",
+      "error": "URLError",
+      "elapsedMs": 10343
+    }
+  ],
+  "h5Schema": {
+    "http": 200,
+    "code": 0,
+    "dataKeys": [
+      "codecPriority",
+      "dash",
+      "freeNum",
+      "hasResource",
+      "hls",
+      "limited",
+      "limitedCode",
+      "playConfig",
+      "shareUnlocked",
+      "streams",
+      "vipLocked"
+    ],
+    "flags": {
+      "hasResource": true,
+      "vipLocked": false,
+      "limited": false,
+      "limitedCode": "",
+      "freeNum": 999
+    },
+    "playConfigKeys": [
+      "adFree",
+      "maxResolution"
+    ],
+    "groups": {
+      "dash": {
+        "count": 1,
+        "fieldNames": [
+          "codecName",
+          "duration",
+          "format",
+          "id",
+          "resolutions",
+          "signCookie",
+          "signHeaderKey",
+          "size",
+          "url",
+          "vipLocked"
+        ],
+        "headerNames": [],
+        "durations": [
+          8700
+        ],
+        "locked": [
+          false
+        ]
+      },
+      "hls": {
+        "count": 0,
+        "fieldNames": [],
+        "headerNames": [],
+        "durations": [],
+        "locked": []
+      },
+      "streams": {
+        "count": 3,
+        "fieldNames": [
+          "codecName",
+          "duration",
+          "format",
+          "id",
+          "resolutions",
+          "signCookie",
+          "signHeaderKey",
+          "size",
+          "url",
+          "vipLocked"
+        ],
+        "headerNames": [],
+        "durations": [
+          8700,
+          8700,
+          8700
+        ],
+        "locked": [
+          false,
+          false,
+          false
+        ]
+      }
+    }
+  }
+}

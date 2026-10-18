@@ -1,25 +1,21 @@
 name: Build
 
 concurrency:
-  group: "build"
+  group: build
   cancel-in-progress: true
 
 on:
   push:
-    branches:
-      - master
-      - main
-    paths-ignore:
-      - '*.md'
+    branches: [master, main]
+    paths-ignore: ['*.md']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
-  # Ubah sesuai selera, dipakai kalau repo.json perlu dibuat ulang
-  REPO_NAME: "Premium_RepoX"
-  REPO_DESC: "CloudStream Premium Repository"
+  REPO_NAME: Freemium_Repo
+  REPO_DESC: Repository Plugin Michat88
 
 jobs:
   build:
@@ -28,34 +24,20 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          path: "src"
+          path: src
 
-      - name: Checkout repo untuk folder builds
+      - name: Checkout distribution
         uses: actions/checkout@v4
         with:
-          path: "builds"
+          path: builds
 
-      - name: Siapkan branch builds (buat ulang kalau terhapus)
+      - name: Use existing builds history
         run: |
           cd "$GITHUB_WORKSPACE/builds"
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-
-          if git ls-remote --exit-code --heads origin builds >/dev/null 2>&1; then
-            echo ">> Branch 'builds' ditemukan, checkout..."
-            git fetch origin builds:builds
-            git checkout builds
-          else
-            echo ">> Branch 'builds' TIDAK ADA. Membuat ulang sebagai orphan branch..."
-            git checkout --orphan builds
-            git rm -rf . >/dev/null 2>&1 || true
-            find . -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
-          fi
-
-      - name: Bersihkan build lama
-        run: |
-          cd "$GITHUB_WORKSPACE/builds"
-          rm -f ./*.cs3 ./*.jar ./plugins.json
+          git ls-remote --exit-code --heads origin builds >/dev/null
+          git fetch origin builds
+          git checkout --detach FETCH_HEAD
+          cp plugins.json "$RUNNER_TEMP/plugins-before.json"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -69,75 +51,57 @@ jobs:
           cache-read-only: false
 
       - name: Create local.properties
+        run: touch "$GITHUB_WORKSPACE/src/local.properties"
+
+      - name: Verify source parity and isolated playback regressions
         run: |
           cd "$GITHUB_WORKSPACE/src"
-          touch local.properties
+          python3 AdiDrakor/tests/run_migration.py
 
-      - name: Build Plugins
+      - name: Build four replacement plugins
         run: |
           cd "$GITHUB_WORKSPACE/src"
           chmod +x gradlew
+          ./gradlew :AdiDrakor:assembleRelease :AdiFilmSemi:assembleRelease :AdiXtream:assembleRelease :Adicinemax21:assembleRelease
           ./gradlew makePluginsJson
-          shopt -s globstar nullglob
-          cp **/build/*.cs3 "$GITHUB_WORKSPACE/builds" || true
-          cp **/build/*.jar "$GITHUB_WORKSPACE/builds" || true
-          cp build/plugins.json "$GITHUB_WORKSPACE/builds"
 
-      - name: Buat ulang repo.json kalau hilang
+      - name: Stage Adi only and verify every catalog artifact
+        run: |
+          cd "$GITHUB_WORKSPACE/src"
+          python3 AdiDrakor/tests/prepare_distribution.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
+          python3 AdiDrakor/tests/verify_artifacts.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
+
+      - name: Preserve repository identity
         run: |
           cd "$GITHUB_WORKSPACE/builds"
-
-          if [ -f "repo.json" ]; then
-            echo ">> repo.json sudah ada, tidak diubah."
-            exit 0
-          fi
-
-          echo ">> repo.json hilang, membuat ulang..."
-          cat > repo.json << EOF
+          if [ ! -f repo.json ]; then
+            cat > repo.json << EOF_REPO
           {
             "name": "$REPO_NAME",
+            "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/main/Icons/Adi.png",
             "description": "$REPO_DESC",
             "manifestVersion": 1,
-            "pluginLists": [
-              "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/builds/plugins.json"
-            ]
+            "pluginLists": ["https://raw.githubusercontent.com/$GITHUB_REPOSITORY/builds/plugins.json"]
           }
-          EOF
-          cat repo.json
+          EOF_REPO
+          fi
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('repo.json').read_text())
+          expected = 'https://raw.githubusercontent.com/' + os.environ['GITHUB_REPOSITORY'] + '/builds/plugins.json'
+          assert data['pluginLists'] == [expected], 'Incorrect distribution repository URL'
+          PY
 
-      - name: Push builds
+      - name: Publish without rewriting history
         run: |
           cd "$GITHUB_WORKSPACE/builds"
-
-          # Safety check hasil build
-          if [ ! -f "plugins.json" ]; then
-            echo "BAHAYA: plugins.json tidak terbentuk. Membatalkan proses."
-            exit 1
-          fi
-          if [ ! -f "repo.json" ]; then
-            echo "BAHAYA: repo.json hilang! Membatalkan proses."
-            exit 1
-          fi
-          if ! ls ./*.cs3 >/dev/null 2>&1; then
-            echo "BAHAYA: tidak ada file .cs3 sama sekali. Membatalkan proses."
-            exit 1
-          fi
-
-          echo ">> Total file .cs3: $(ls -1 ./*.cs3 | wc -l)"
-
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
           git add -A
-
-          if git rev-parse --verify HEAD >/dev/null 2>&1; then
-            if git diff --cached --quiet; then
-              echo ">> Tidak ada perubahan, skip push."
-              exit 0
-            fi
-            git commit --amend -m "Build $GITHUB_SHA"
-          else
-            # Branch builds baru dibuat, belum ada commit sama sekali
-            git commit -m "Build $GITHUB_SHA"
+          if git diff --cached --quiet; then
+            echo "No distribution changes."
+            exit 0
           fi
-
-          git push --force origin builds
+          git commit -m "Build $GITHUB_SHA"
+          git push origin HEAD:refs/heads/builds

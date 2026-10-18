@@ -6,12 +6,13 @@ import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
 class Adicinemax21Plugin : Plugin() {
-    override fun load(context: Context) {
-        Adicinemax21Extractor.attachContext(context)
-        MovieBoxV2Shared.attachContext(context)
-        Adicinemax21VidSrc.attachContext(context)
+    override fun beforeUnload() {
+        com.Adicinemax21.sources.LocalProxy.stop()
+    }
 
-        // Tiga sumber berdiri sendiri di plugin ini: MovieBox, Idlix, VidSrc.
-        registerMainAPI(Adicinemax21PlaybackFixedProvider())
+    override fun load(context: Context) {
+        Adicinemax21MovieboxEngine.attachContext(context)
+        openSettings = { settingsContext -> Adicinemax21MovieboxDiagnostics.show(settingsContext) }
+        registerMainAPI(Adicinemax21())
     }
 }

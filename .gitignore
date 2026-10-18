@@ -10,3 +10,8 @@
 .cxx
 local.properties
 .vscodetest.txt
+
+# Local Kotlin and Python test caches
+.kotlin/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,75 @@
+{
+  "id": 969681,
+  "title": "Spider-Man: Brand New Day",
+  "original_title": "Spider-Man: Brand New Day",
+  "release_date": "2026-07-29",
+  "overview": "Fighting crime full-time as Spider-Man in a world that doesn't remember him—and the pressure of seeing his old friends move on without him—sparks a change in Peter Parker he may not have the power to control. But that transformation might also be the only thing that can stop a shocking new threat to the city and those he loves - a powerful villain no one can even see.",
+  "runtime": 145,
+  "translations": {
+    "translations": [
+      {
+        "iso_3166_1": "ID",
+        "iso_639_1": "id",
+        "name": "Bahasa indonesia",
+        "english_name": "Indonesian",
+        "data": {
+          "homepage": "",
+          "overview": "Empat tahun setelah peristiwa Spider-Man: No Way Home, Peter Parker sudah tidak ada lagi dan Spider-Man kini berada di puncak kemampuannya dalam menjaga Kota New York tetap aman. Semuanya berjalan dengan baik hingga serangkaian kejahatan yang tidak biasa menyeret Spider-Man ke dalam jaring misteri yang lebih besar dari apa pun yang pernah ia hadapi sebelumnya. Untuk menghadapi apa yang akan datang, Spider-Man tidak hanya harus berada dalam kondisi fisik dan mental terbaiknya, tetapi juga harus siap menghadapi konsekuensi dari masa lalunya!",
+          "runtime": 0,
+          "tagline": "",
+          "title": ""
+        }
+      }
+    ]
+  },
+  "alternative_titles": {
+    "titles": [
+      {
+        "iso_3166_1": "US",
+        "title": "Spider-Man 4",
+        "type": "working title"
+      },
+      {
+        "iso_3166_1": "US",
+        "title": "Marvel Studios' Spider-Man: Brand New Day",
+        "type": "promotional title"
+      }
+    ]
+  },
+  "external_ids": {
+    "imdb_id": "tt22084616",
+    "wikidata_id": "Q113244935",
+    "facebook_id": "SpiderManMovie",
+    "instagram_id": "spidermanmovie",
+    "twitter_id": "SpiderManMovie"
+  },
+  "credits": {
+    "cast": [
+      {
+        "name": "Tom Holland"
+      },
+      {
+        "name": "Sadie Sink"
+      },
+      {
+        "name": "Tramell Tillman"
+      },
+      {
+        "name": "Zendaya"
+      },
+      {
+        "name": "Jacob Batalon"
+      },
+      {
+        "name": "Jon Bernthal"
+      },
+      {
+        "name": "Mark Ruffalo"
+      },
+      {
+        "name": "Florence Pugh"
+      }
+    ]
+  },
+  "original_language": "en"
+}

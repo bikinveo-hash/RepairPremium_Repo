@@ -1,0 +1,1346 @@
+{
+  "sourceRepo": "trinityzanetamanu-code/Premium_RepoX",
+  "sourceSha": "15338233a29ffebd3b734411529f57e5c780bc4f",
+  "targetRepo": "bikinveo-hash/RepairPremium_Repo",
+  "targetBefore": "256791bfdc06009750bd7b5f2a3d87379aa7e33a",
+  "sourceFiles": {
+    "AdiDrakor/build.gradle.kts": "664a9d72e546fd1ac011a2a32285b22d44983e6d8bdc4211a6215967892d5199",
+    "AdiDrakor/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakor.kt": "a093aff5705d917d4be2450009372c010a3495123d1fe11c8cae0217a3c3a6d0",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxDiagnostics.kt": "b5b31fd627de6b5afde6bcbb4f5b2d2afba321d1793a52ec19330b5b3ecf16ed",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxEngine.kt": "16a8507047e8e22b06f10197742534a85212e1bf7bfa92a4e07975850da1f37d",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMapping.kt": "4920b2930624c7490e279b1487bc60392b6af0d9b60eb4fdcdfd109f853b1a10",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMedia.kt": "5fc19f4faddd13a0350ed4d33e6b5b29cbba5f9e0b4ee79ba760869380aa6170",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxPlayback.kt": "a010df28681dff20f3259e89d0b0702d913105e6b20f09d2616be977b997529f",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlugin.kt": "97c4ffc91b3cbe7a0f17cc493b766121cc0f74ff490513af59066be2a5b1ff5c",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorUtils.kt": "53672be042975a94bc0fb30e6f66f904f986010e9bb94ac39fc43e4db9a7363c",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/HydraxMedia.kt": "932583418426db756b786fc0e4f1c6e6f423e9fcfae68fdfe76e17c21ec88e66",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/IdlixSource.kt": "047d7d891162c00c1f297da5926a3ac680ef337fb4ba32fae70f5925f238a9ea",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/LocalProxy.kt": "817d2b3a45cb7ef02ec84ae305aefe0bf06a6a59e5133d7b7751bbfd4bd056eb",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/Majorplay.kt": "f70f64736b0493c8181e226b084b349ed105d83ce8ce04672bedfba2b1021b26",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MediaIdentity.kt": "a106d781b07674341a140a49ca392f7ad5c04980f55d82ece94d712aa679cecd",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MultiSource.kt": "3dfd5b6768e2b72cf5919d6e5c7d91f73e7fc06f884a2838764dec917af84170",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaPlayback.kt": "32a931943faeba3524d191c008a9f6652b46b62082bd572841dbff7df78ab6f7",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaSource.kt": "8abd35e749895c6ef0945dec07961d38daee525fac2bdd6126014c2d98d91cb5",
+    "AdiDrakor/tests/BILINGUAL_DISCOVERY_CONTRACT.md": "f41b5c79ef1e490409f6749673fa6fadcd8490eb9bc2a03efaeb2908abad50d1",
+    "AdiDrakor/tests/H5_MIGRATION.md": "3ebcf1dd3f8b68de794bfa3e71c4ad53553ec50f7524643f52405a1e654eabc7",
+    "AdiDrakor/tests/LiveMediaProbe.kt.in": "29c6657b500fd45dc3a2068cfc50e715404e0e8bbfc2a41a43d4fbd624e770a2",
+    "AdiDrakor/tests/MULTISOURCE.md": "90e5e0863a470c5cbef2fda06dde0f40ce5c8a9c930bf42b6b7d7b0e2bf54c7b",
+    "AdiDrakor/tests/MappingRegression.kt.in": "a25b23b1b15691fe6d73f3492d06b573ac72b1cac377b7538116e22c87c55c07",
+    "AdiDrakor/tests/MediaRecoveryRegression.kt.in": "5956efcc3b27d4f4f78e4ac7148a060dd0eef8d603a91ac753ccfcd622c83ac6",
+    "AdiDrakor/tests/MultiSourceRegression.kt.in": "351e695c49b57980b9f59410886fbfafc9dac418653b534ebf3e1f7af5c7f086",
+    "AdiDrakor/tests/ProxyIsolation.kt": "fe8066a192c44d9fc4f71dabbe90a8a2fac05b67f6611e684a845b8b56066b46",
+    "AdiDrakor/tests/ProxyRegression.kt.in": "6c3acac178435055f583abc8e4de1da86644682b847faede2abef5372c3f773f",
+    "AdiDrakor/tests/SPIDER_V4_CONTRACT.md": "ae7aaed13629e91d17d0e2b623c3a1244f5a724fd07edeeb98ce9b577b458aae",
+    "AdiDrakor/tests/fixtures/hotd-edition-public-detail.json": "238b9e783371f4dcb3dec773187083f7bb7c0967129eee4c9c8ad0a41349a01d",
+    "AdiDrakor/tests/fixtures/hotd-edition-public-nuxt.html": "15a56e9e1d9eabef0f2e71fc0b6df51d9fb01ec40b0336b54a98b30b3ba2d40e",
+    "AdiDrakor/tests/fixtures/hotd-public-detail.json": "a7e339aaa7e5f4b4e6d95ce8bf932003d700217f8a346aca739d900b126546b9",
+    "AdiDrakor/tests/fixtures/hotd-public-nuxt.html": "de33e0bdf722f24db7bdc27026550cea0b153205467cac3d8a913b5e59143733",
+    "AdiDrakor/tests/fixtures/insidious-public-detail.json": "c5bc051d55c9f2fd6b986a8dc4236aaa687339d86d19b4a7867c4bad9d7a5967",
+    "AdiDrakor/tests/fixtures/insidious-public-nuxt.html": "94ddbde4096e6b40651339ebe4140a797a71423bed358a7d0e4ddc6e3e4e8f4d",
+    "AdiDrakor/tests/fixtures/spider-v4-apk-observed.json": "d8ec7a703375abbff64def62be840150f08646b5c747e162cc33473277498a37",
+    "AdiDrakor/tests/fixtures/spider-v4-media-observed.json": "8cc902dd1401de9648aaa204039a6a7fc5cc082a99161df8b432049df6df4551",
+    "AdiDrakor/tests/fixtures/spiderman-public-detail.json": "56325be2a7d5c3b9333325989dad8c1249c5f1bdbd5787615c7074b9d383274d",
+    "AdiDrakor/tests/fixtures/spiderman-public-nuxt.html": "03599b4437719f9db2f17aeddf8988445ce6c2d7f7428784f23c08c4179aee5a",
+    "AdiDrakor/tests/fixtures/spiderman-public-stars-nuxt.html": "427be57bd1ba04e417bb3c022b42e089dca3dbf5b6f87adad7ac88bc6e89e099",
+    "AdiDrakor/tests/fixtures/spiderman-tmdb-bilingual.json": "0828fc87676dbbf7192949381d4c9475c63583555af0ed3af8e4bcc86144b517",
+    "AdiDrakor/tests/probe_finder_v2.py": "5f77941f075b9406975b957d10d874810dd0b07d66210bb05569a9a81fd7abdf",
+    "AdiDrakor/tests/probe_insidious_catalog.py": "226ccfa1a8fef5c9729903f65ae847dc2e1cbe0d44cd341139a304f036df0edc",
+    "AdiDrakor/tests/run_live_media.py": "170fc62103298c7931f22c0630291419b059bc014fa3d22af0a07950afeb6a82",
+    "AdiDrakor/tests/run_migration.py": "33d8d09fbff91e98f5cc901e040de425f32ddcddb33cea0f866db074e743d2a7",
+    "AdiDrakor/tests/shims/TestMediaCodec.kt": "5a8ea4d8746c39b64e8a4cf585ad1b31150de9a8cc85038891e5bec7d85cf63f",
+    "AdiDrakor/tests/verify_artifacts.py": "d87d16494dd015abaec129bfcc6e14a12070348de4bf680cc627db9c41e0235d",
+    "AdiFilmSemi/build.gradle.kts": "d43a48e96aa9ee5d789026e3191b69075441484cb38ddb69b42685dd3f9d5ade",
+    "AdiFilmSemi/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemi.kt": "b53b5ae398b01a6bb669d3b3579082d12c8065225294c5d7129fc89a60bb1ed3",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxDiagnostics.kt": "ae6acec4a294b2920a6bdf929c9102761ca6067dff12461a1e1e44417825f3ed",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxEngine.kt": "c11a7735f0cb375db185bad2fa63bde367dba2040b0ceea8b451f65846465b98",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMapping.kt": "45d583b87fedf88f9fe8f30238253e2d5cbfb44ae4d0829e06e6a77478c81d01",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMedia.kt": "712c7248234fac865b8e54cfc6154a255fd2ab82ba273bc1ecd7731b5b560f83",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxPlayback.kt": "bfedc877f6cfa196e271538ad6af1e9cb1f680e9660564f5ddd219fba3326499",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlugin.kt": "caa1f284c18f180c6741edaedf7094f928c39ab40b0c53e83016993e81ac155b",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiUtils.kt": "c89cb1a3508d953dbc31ea5dcda385b61b7223d6571dbaf21ccaec97e9b8efdf",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/HydraxMedia.kt": "7d86fdc727f798531ebc9288db13c340becb70b11256a24bc2467cc866e3ca64",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/IdlixSource.kt": "6122376f5cae15e1fb9d93b97907f1cf812312eda62dea3d86621dff64bf6d54",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/LocalProxy.kt": "f510a013a44b4f2610148738199566ef39450593937ce11f88e92c754a13146a",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/Majorplay.kt": "f9a69aeab99dc1ec1e92e7bf778ebf61fddc229c106070ed60f1507b595937ff",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MediaIdentity.kt": "0d93818b6c6dcf5ab64c1df7588abca7fae87123b947b03874c29c01bd90601e",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MultiSource.kt": "3e94c8f8d27abe8b43130ab0747d71b95da0d69e06e34f61d352fd3ceee5a6f2",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaPlayback.kt": "879d00ea46e1e5cb5bf3283ba43aa3d80d44ce478f225a9b01f41461204ace37",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaSource.kt": "6387a7ad041aea0cdec63e43bddcc187a5d648eb9024c78bd97daca6ac5fbba9",
+    "AdiXtream/build.gradle.kts": "9baad37cf2ae6018ef64a4e78e1f1ed7043b3f50ff3176f5fa768be4a49d6c9b",
+    "AdiXtream/src/main/AndroidManifest.xml": "daa0fb1f32ba7ea85a07ef6302ab3d58c3407d7fd2aa03ec132cb9e38e8d9849",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtream.kt": "ef474e967b484dc97c144e2f820db6ff985e0ef9df24df308d825f0c473986fb",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxDiagnostics.kt": "81ccadd072cbbe87efe7f99fb2b132b85727325a05858ff300d3a8e25c5e0524",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxEngine.kt": "9b1fb4eb2ae4bbf82684e3e86bab81101092116fdf092b3024b431fe386712d9",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMapping.kt": "7fb23520067304df86b5d0896d1d0c0c420ad427cde959a6a03b0ea0cfe4cfbf",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMedia.kt": "01f8ab65838a9bc3858cd78a342bd656b0878c9021ed81a8b7ea54a035d4e9fb",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxPlayback.kt": "65e9ad1b097d26b0e8d2419a0dc8838d8bae5c0fef04e843cb1534797f77a563",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamParser.kt": "88e1b5d09baa4a64cba7832d8ba7e80ccaa187412d7286f943ba64ad7e856d26",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlugin.kt": "5cb71586e11883d165c54ec02da2f07b9462724f2f37dd53a88c33982d5fe4bc",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/HydraxMedia.kt": "4dbc5700ec4c9d0c23f4f908b66e9926c18b3e5c7969c710c3dd82aeec924f8c",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/IdlixSource.kt": "48a940f80dde5fe5783383b7d26aed052cda39c074588cfbdb414ae2f82380b2",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/LocalProxy.kt": "80eed3cd580ff4474156db74ee3f5d15f4c8866627b631b41b0f43c391d28472",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/Majorplay.kt": "9a54efe78b9c1f50cdb12acf50fea09224c3235b6c058cc246053fdccec0fea1",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MediaIdentity.kt": "8f2b7f3388f9a4e90571c22359659636abcfc91fe9aba8f376d0e4076771b33b",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MultiSource.kt": "6567dd177303f21d9a6c461dc7259824578469595683b4c5e29512c71fbfdcf6",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaPlayback.kt": "bbff31c69c5f74f2b4e862d31564aaa8cea1195e8e89455849cf451b96517814",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaSource.kt": "1f31efa359aab4145818ad6ad581d30887c0f0b0a939169abaa5ce503d695deb",
+    "Adicinemax21/build.gradle.kts": "b137c1239dd93a130080c86768366d6f02453378b740aa8cb1e9923f6f69a385",
+    "Adicinemax21/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21.kt": "ca3da37f6681a0768ce2a3f1b24189c3428b2e05bc81cef101638796b9294410",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxDiagnostics.kt": "a70ec28e85310a833620b293e5982bfc0353b277a2f60ae416c18576b514982d",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxEngine.kt": "1b440a94d8d5482dd6c82a66da8ba8ee8c5775a0c8efdd851cd6c31f56f2251b",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMapping.kt": "f7eceb746a8a7671ce2da821383f56c1edbfebc3629cdc7e9911190d090e302b",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMedia.kt": "d768851fe80705f5032112392da26ff4f441cfe96bdd63351912432d242c9795",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxPlayback.kt": "7cf96ea0629d172f71dda85603e7aa80786aff9ef10832c25eb30e6d638a7d86",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Plugin.kt": "860839d89949cbb510bea954a4f117c098c6428411360a5fa900124393f61059",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Utils.kt": "385cbc35d19184f1acdd819350f853ea2be395af680d338fb7f329bc10fb8329",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/HydraxMedia.kt": "fd9205b732fc79c01aa9f27874cfd4a116bb64f451cf136d915fda848e5358d3",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/IdlixSource.kt": "1d18ee83829a323c09902283aa9dc7f23b930c3ab9e31bf90223a3e93f2a04ea",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/LocalProxy.kt": "ce46a17ead95f4a57e264a2ae032081d89a69914dbda31ec97d3f81d6395bcab",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/Majorplay.kt": "2c8de2d2a1f7cfc4bee1498e19e6af17d86a473aec87a8058b408beae986f1c5",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MediaIdentity.kt": "af8f1425797dd430416e51042adebe0afbe776579c6a949ffc449fecfeb43542",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MultiSource.kt": "6377a6e82fcdfb62eb51eba3d6916589e606f00724df101e699d75815004ffe7",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaPlayback.kt": "18aac028e38b5695ba271ee41687ba3648221598251bbab328baa01278eb5fff",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaSource.kt": "4804fc9a777b73a9170244d9dfe2693801a217581f703b4a3bc5452dbab9f29d"
+  },
+  "targetBeforeFiles": {
+    "AdiDrakor/build.gradle.kts": "ad1f35b0d93b948e43c7fc3a8747e96c0e6ac2de262156cb780604d018de05eb",
+    "AdiDrakor/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakor.kt": "56c009f90a768feac2c239f03b674bae1caead60e0ebaea3ad05cb24146ab5ba",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorExtractor.kt": "64a3e3bff3098ce9c71ed31502f00331a43f4018929c350cb96389f6e750d72e",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorIdlix.kt": "e98eef7f963a16f96f458f83bc6d3249108ff0762c364c7abab28decbbf7300f",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorParser.kt": "94a5dfe63464e7e57eccc4e747cf2510da0c57ac184e260096eceebb3e0aacce",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlaybackFixedProvider.kt": "fcfc7f0fc5b4302848e97dd8db48dc7c2db389a99b96f7d52ed2d760f68386b2",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlugin.kt": "71383c50ee05ec1f2b8c441b8a6bffec806fcc11370d275e5c7fa33206041530",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorUtils.kt": "2ea02738d83ea685a07122258b5a754b5fbaa43fe3cd65cc0174c4df9afacefd",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt": "76cbe649063edd87a932175adba0f838c9470e0275f837645be3d196053e9e31",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt": "b05b4a8f8f44c7e5f897b5d6f3e308fed08e75b016744c6b8289c4d1363d97b5",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt": "d9cc386ae3d3e706e2aacb0e13a28027d8a0c1aec132a7743f97e649c64f2ae1",
+    "AdiDrakor/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt": "a56ac5af2c4c02ab15d0c4919e66054fd9243049cf77cd79b1e8364a49dc40a4",
+    "AdiFilmSemi/build.gradle.kts": "9c758a8046260248bdb8ccfc604d1eee35dc436cefd33f04718bf69002ab1413",
+    "AdiFilmSemi/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt": "76cbe649063edd87a932175adba0f838c9470e0275f837645be3d196053e9e31",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt": "b05b4a8f8f44c7e5f897b5d6f3e308fed08e75b016744c6b8289c4d1363d97b5",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt": "d9cc386ae3d3e706e2aacb0e13a28027d8a0c1aec132a7743f97e649c64f2ae1",
+    "AdiFilmSemi/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt": "a56ac5af2c4c02ab15d0c4919e66054fd9243049cf77cd79b1e8364a49dc40a4",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemi.kt": "ddd92de2254c1171cbf28cac68049a7e329c9e83d1e50d75c7de40652cd84911",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiExtractor.kt": "9e294c7bdc8124f72093b76d7b32513ebfce58afde60006203f04c8317ea8942",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiIdlix.kt": "72d61dbba68e7ea2d1e31820a1cfa81e049dbb3d280155cccf77ddbfa043b29a",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiParser.kt": "f2bbe2dda6d61d6efcbbaa121d2dfae2fa53514bb724e78c3805801254529536",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlaybackFixedProvider.kt": "441b7add1806ed8d5dacdb98a91344a7b2bb1ca473233b862c8c6518febb1bfb",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlugin.kt": "b2dd682d9803da3af887b8446800fca1638f10e426613ec1e393b0de3a93b693",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiUtils.kt": "6f46925cac9e9963fe291c499016afe14d927dd828af80bf6f44541df07fd2f2",
+    "AdiXtream/build.gradle.kts": "7d3664abfd73673e4e2421184560e8b2af3f5b67a92d84de9fa98f0140996da5",
+    "AdiXtream/src/main/AndroidManifest.xml": "daa0fb1f32ba7ea85a07ef6302ab3d58c3407d7fd2aa03ec132cb9e38e8d9849",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt": "76cbe649063edd87a932175adba0f838c9470e0275f837645be3d196053e9e31",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt": "b05b4a8f8f44c7e5f897b5d6f3e308fed08e75b016744c6b8289c4d1363d97b5",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt": "d9cc386ae3d3e706e2aacb0e13a28027d8a0c1aec132a7743f97e649c64f2ae1",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtream.kt": "01af4c3c169c5e3093941b10f0e56508e392b636017f0f8e6c6b0ed44bebef29",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamExtractor.kt": "a08baee424d7df55e2892bfcca691e949f2310d78f623fa689c502b4868772e4",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamIdlix.kt": "3a607e4c3342bcda272cd4f32cc260de2e58b3bf2a5cf050a206b490a92beb20",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamParser.kt": "9dcf54999f92636f6b722cc62382fb4a4e94d7afac60f143d5c972038fe179fb",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlaybackFixedProvider.kt": "0f42a4a824974f8f94efa38c3dbd140eea52e61f2227f97a63bfed3caddd2190",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlugin.kt": "be2d07c32a3b963b9cc591fbd830c36e524e19d57c9bdb418505f3d743e73a77",
+    "AdiXtream/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt": "a56ac5af2c4c02ab15d0c4919e66054fd9243049cf77cd79b1e8364a49dc40a4",
+    "Adicinemax21/build.gradle.kts": "b3f8b5fa7782466fbc0aab2272b5d22a5cf9b7406fd6a72a2b0f6c93be301960",
+    "Adicinemax21/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21.kt": "2f7e057e7f2c854ce3abda78fe239c2b2a724919c2e6eb7490f0bcd71e4765f0",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Extractor.kt": "27888615ff4e83da2b1c0811416d512b328ef61120b75b8723fd40c313b81fce",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Idlix.kt": "50ca88f540fef0ce4c94222567824c023b9cd3c612fd2d1af5dafb4c15801049",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Parser.kt": "424f87ceb0fa9568c8b4a8619334db6704b1d8b82b64bc8c36f8979b8fb93b9b",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21PlaybackFixedProvider.kt": "651477b28c7ef1059fe0b10e58be874ef5b4b46e5d4acb18600b05f5285b8179",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Plugin.kt": "26140491ac22be97dee1f62c5616dbe371d6be8da43f99b83cfa5369f8a9b8be",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Utils.kt": "114e6de7380a0fcad375b62b73762c17fdf55e0145ebf5420a91502c8b781f9a",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt": "76cbe649063edd87a932175adba0f838c9470e0275f837645be3d196053e9e31",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt": "b05b4a8f8f44c7e5f897b5d6f3e308fed08e75b016744c6b8289c4d1363d97b5",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt": "d9cc386ae3d3e706e2aacb0e13a28027d8a0c1aec132a7743f97e649c64f2ae1",
+    "Adicinemax21/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt": "a56ac5af2c4c02ab15d0c4919e66054fd9243049cf77cd79b1e8364a49dc40a4"
+  },
+  "removedLegacyPaths": [
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorExtractor.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorIdlix.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorParser.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlaybackFixedProvider.kt",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt",
+    "AdiDrakor/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt",
+    "AdiDrakor/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt",
+    "AdiFilmSemi/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt",
+    "AdiFilmSemi/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiExtractor.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiIdlix.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiParser.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlaybackFixedProvider.kt",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt",
+    "AdiXtream/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamExtractor.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamIdlix.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlaybackFixedProvider.kt",
+    "AdiXtream/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Extractor.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Idlix.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Parser.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21PlaybackFixedProvider.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrc.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21VidSrcResolver.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/MovieBoxV2Shared.kt",
+    "Adicinemax21/src/main/kotlin/com/lagradost/cloudstream3/utils/MovieBoxSubtitleCompat.kt"
+  ],
+  "sourceFileCount": 100,
+  "testOnlySnapshot": {
+    "src/main/AndroidManifest.xml": "daa0fb1f32ba7ea85a07ef6302ab3d58c3407d7fd2aa03ec132cb9e38e8d9849",
+    "src/main/kotlin/com/Moviebox/MovieboxEpisodes.kt": "c011efcb799db475b7cb00503603a96d2cb9f2f97eeb278f1feca4b19b8a17ae",
+    "src/main/kotlin/com/Moviebox/MovieboxPlayback.kt": "c20a7a8937493dbf03daf995d60d375ee8f62fa4bdc988379787c0ea78e18ec8",
+    "src/main/kotlin/com/Moviebox/MovieboxPlaybackContext.kt": "d09529c87f39cc97b2cb0cb93947d5167290de1c6981ebd173947e60b848a5fb",
+    "src/main/kotlin/com/Moviebox/MovieboxPlugin.kt": "1d7011cc1e4e5759f3ee83dc55f0d4f4c7e419bff2a01dddc712915b0dfb7805",
+    "src/main/kotlin/com/Moviebox/MovieboxProvider.kt": "79280325567730296455c7fe0ca3bb16da66d7517d5686d158afa884385735c9",
+    "tests/EpisodeMetadataRegression.kt": "dfa24d82896323049eeef4de7017bbd31da73f04b1af1bd3f26e61b126d5b1e7",
+    "tests/PLAYBACK_CONTEXT_CONTRACT.md": "37ec0bd1cc3756909c7bff8217c3bb97f384a32440227e0075008cb474a9e0e0",
+    "tests/PlaybackContextRegression.kt": "80ae9b60676a9a464a2852dc2e49eec9ee94c379432a3ba03129d3ae6f0a34d0",
+    "tests/PlaybackIntegration.kt": "274ec0bae14e84d286c8e69d11430b9e252faa6800d66f1d6157ff0508297e72",
+    "tests/PlaybackRegression.kt": "fe17e60801dcc04327458664bfab19d2afa39bc33dfd86de23686c19d9fc1635",
+    "tests/REACHER_APK_CONTRACT.md": "2299f99f52b12ae2bbadbdec99521cf8e3c88d0d07a96b580e01bfa189debc0f",
+    "tests/README.md": "c5d3aa9e3c6222a42c42047e155d05faf3496e84ee2495e22f7414a20340781e",
+    "tests/episode_cards_reacher_observed.json": "029117583d8ea192908d43af73deabfb276e1c2f7b828dc6260b198952b84cea",
+    "tests/fixtures/spiderman-context.html": "03599b4437719f9db2f17aeddf8988445ce6c2d7f7428784f23c08c4179aee5a",
+    "tests/fixtures/spiderman-share.json": "efcfc6c1f3a4d2835c4be19e6ae9efeb4dd0adc7e0c37bf20160a63dfcca7c37",
+    "tests/run_regression.py": "312a0a5654f2afaceb046cada7905806df84d4c73bb06fedcfc8479657b62f32",
+    "tests/shims/TestAndroid.kt": "8226142de9ae382f413e2771d64fce624c594fd2be65bb525cb52470f43903db",
+    "tests/shims/TestApp.kt": "af203329d8d36f817d2630070916ab2d7c9b631a55821751938838be43951c8c",
+    "tests/shims/TestBuild.kt": "d7bac7569c024a054de610685add7751463804a2c308baae66812159bc7be36e",
+    "tests/shims/TestLinkBuilder.kt": "d4fb582fca5b7f61f9e92131a0ab504b368b881ceba6a4b2f59ca9eb67b483ac"
+  },
+  "productionFingerprints": {
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakor.kt": {
+      "semanticSha256": "8fa33eab3bf58e864b07b30f8bca2c5c34c0ec7877f7994f2e7c5ed858105ed4",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer",
+        "import com.lagradost.cloudstream3.metaproviders.TmdbProvider",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId",
+        "import com.lagradost.cloudstream3.network.CloudflareKiller",
+        "import com.lagradost.cloudstream3.utils.AppUtils.parseJson",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.cloudstream3.utils.ExtractorLink",
+        "import java.text.SimpleDateFormat",
+        "import java.util.Date",
+        "import java.util.Locale"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxDiagnostics.kt": {
+      "semanticSha256": "db9a9eb7c5c7b03e8a56650d3150173b8d14c005be6f8a7c9119fe83889395b2",
+      "imports": [
+        "import android.app.AlertDialog",
+        "import android.content.ClipData",
+        "import android.content.ClipboardManager",
+        "import android.content.Context",
+        "import android.util.Log",
+        "import org.json.JSONObject"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxEngine.kt": {
+      "semanticSha256": "5f6b31ce8564a3cd8c0e65b8a5026f8c6c04adc4e98456d301a10b3c17aa88a7",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.app",
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import kotlinx.coroutines.withTimeoutOrNull",
+        "import okhttp3.Interceptor",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import org.json.JSONObject",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Mac",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import android.content.Context",
+        "import android.util.Base64",
+        "import android.util.Log",
+        "import java.util.UUID",
+        "import java.net.URLEncoder",
+        "import java.net.URI"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMapping.kt": {
+      "semanticSha256": "78220b6f404ccf22cfd89ef1e3345c451c82e8d0343840e7625dcb73a4029209",
+      "imports": [
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import kotlinx.coroutines.*",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMedia.kt": {
+      "semanticSha256": "a601a5867740cb48068447737f542651339dcd895ac3d37d720d004037cebb74",
+      "imports": [
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import okhttp3.*",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxPlayback.kt": {
+      "semanticSha256": "cc9d1a66f3023bcfb991dc8b2a8505ba228236b5f49b58afe992479b292f5ed9",
+      "imports": [
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.Dispatchers",
+        "import kotlinx.coroutines.withContext",
+        "import okhttp3.*",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import org.jsoup.nodes.Element",
+        "import org.jsoup.parser.Parser",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import java.net.URLDecoder",
+        "import java.util.Locale",
+        "import java.util.concurrent.TimeUnit",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlugin.kt": {
+      "semanticSha256": "7220aef1d6c16e88da6bb5b0df1d7a6834489fdeb90bcf0bfaf22dfa118e002b",
+      "imports": [
+        "import android.content.Context",
+        "import com.lagradost.cloudstream3.plugins.CloudstreamPlugin",
+        "import com.lagradost.cloudstream3.plugins.Plugin"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorUtils.kt": {
+      "semanticSha256": "f57bf7621f907ecb931027a86043f810f2977438e29dd342a35f728114571e5f",
+      "imports": [
+        "import com.lagradost.cloudstream3.APIHolder.unixTimeMS",
+        "import com.lagradost.cloudstream3.mvvm.logError",
+        "import java.text.SimpleDateFormat",
+        "import java.util.Locale"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/HydraxMedia.kt": {
+      "semanticSha256": "c7c2c3a6b9491efa4cac0728196aff1e4f9e0a0e6a2c79a9a28291313e13753c",
+      "imports": [
+        "import java.io.EOFException",
+        "import java.io.IOException",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.URL",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/IdlixSource.kt": {
+      "semanticSha256": "25a9e8decd133c5eb09e47160dfa5b0e97f12631cacde888a46581ca8a23f928",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.delay",
+        "import org.json.JSONObject",
+        "import okhttp3.MediaType.Companion.toMediaType",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/LocalProxy.kt": {
+      "semanticSha256": "6c4835c5451736083463ef8fa480d72ab2f61ec41d3b9114646d4dcca7d65018",
+      "imports": [
+        "import java.io.IOException",
+        "import java.io.InputStream",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.InetAddress",
+        "import java.net.ServerSocket",
+        "import java.net.Socket",
+        "import java.net.SocketException",
+        "import java.net.URL",
+        "import java.net.URLDecoder",
+        "import java.net.URLEncoder",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import java.util.concurrent.atomic.AtomicInteger",
+        "import java.util.concurrent.atomic.AtomicLong"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/Majorplay.kt": {
+      "semanticSha256": "77ce500f550835ce1a7ed776156fb3a8af68668418d96655106e35abf3bd30a9",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.fasterxml.jackson.annotation.JsonIgnoreProperties",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.nicehttp.RequestBodyTypes",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MediaIdentity.kt": {
+      "semanticSha256": "bbfc39877bb959ad4e008d7028abe85efc2f5fa6b9bad10f97426915f635159a",
+      "imports": [
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.nodes.Document"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MultiSource.kt": {
+      "semanticSha256": "7d003fa7c7113c88a5a981259fceafa3632716210fcec06512711c43bdb27ce3",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.*",
+        "import org.json.JSONObject",
+        "import java.net.URI"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaPlayback.kt": {
+      "semanticSha256": "852ec243f9d3f292e2f19e85de1d3805e9894474f8063a173b60f11e6cd81c23",
+      "imports": [
+        "import android.media.MediaCodecList",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.awaitAll",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.security.MessageDigest",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import kotlinx.coroutines.ensureActive"
+      ]
+    },
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaSource.kt": {
+      "semanticSha256": "ef448a566fcd9de387ba8f317c92a2bf30b36e80b8e48bf53bed95f68b6e7406",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import org.jsoup.Jsoup",
+        "import java.net.URI",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemi.kt": {
+      "semanticSha256": "c106a1d720f143b2d06f594a73cde12375b1235624131c9cdef1c9b40751e035",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer",
+        "import com.lagradost.cloudstream3.metaproviders.TmdbProvider",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId",
+        "import com.lagradost.cloudstream3.utils.AppUtils.parseJson",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.cloudstream3.utils.ExtractorLink"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxDiagnostics.kt": {
+      "semanticSha256": "d108041ec5651ff92affb497bad13d570c82e6dc58ee60e4d441238714446985",
+      "imports": [
+        "import android.app.AlertDialog",
+        "import android.content.ClipData",
+        "import android.content.ClipboardManager",
+        "import android.content.Context",
+        "import android.util.Log",
+        "import org.json.JSONObject"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxEngine.kt": {
+      "semanticSha256": "efdacdd024a90364d6168041cbcd84d40215564e7b648b494980a0647847a7e8",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.app",
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import kotlinx.coroutines.withTimeoutOrNull",
+        "import okhttp3.Interceptor",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import org.json.JSONObject",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Mac",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import android.content.Context",
+        "import android.util.Base64",
+        "import android.util.Log",
+        "import java.util.UUID",
+        "import java.net.URLEncoder",
+        "import java.net.URI"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMapping.kt": {
+      "semanticSha256": "6525d04c3b4da9f8a8ed31de54ba2db69d7f587b0388629d358c6956f4916260",
+      "imports": [
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import kotlinx.coroutines.*",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMedia.kt": {
+      "semanticSha256": "45a0067c90f678863e244c3d9863ca0c1b22da91cf4af9b6d51182d364214d81",
+      "imports": [
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import okhttp3.*",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxPlayback.kt": {
+      "semanticSha256": "d5ad42e42073a063b55727a22256d8dfad16171413abd520d23b49f916e38e88",
+      "imports": [
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.Dispatchers",
+        "import kotlinx.coroutines.withContext",
+        "import okhttp3.*",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import org.jsoup.nodes.Element",
+        "import org.jsoup.parser.Parser",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import java.net.URLDecoder",
+        "import java.util.Locale",
+        "import java.util.concurrent.TimeUnit",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlugin.kt": {
+      "semanticSha256": "b0e6a17655fe3bd8705c2ce5da127b1f84e2793b4a5a3dd4c84bd3390e4a3e36",
+      "imports": [
+        "import android.content.Context",
+        "import com.lagradost.cloudstream3.plugins.CloudstreamPlugin",
+        "import com.lagradost.cloudstream3.plugins.Plugin"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiUtils.kt": {
+      "semanticSha256": "5a1decec3d4978253cc28026d02b24b6bfbdc2e99c564aa78a9408ab379633bf",
+      "imports": [
+        "import com.lagradost.cloudstream3.APIHolder.unixTimeMS",
+        "import com.lagradost.cloudstream3.mvvm.logError",
+        "import java.text.SimpleDateFormat",
+        "import java.util.Locale"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/HydraxMedia.kt": {
+      "semanticSha256": "e00269353df12b46bb0a09ef35286d96c67973778073e642d480218e60b413d7",
+      "imports": [
+        "import java.io.EOFException",
+        "import java.io.IOException",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.URL",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/IdlixSource.kt": {
+      "semanticSha256": "9e79f97c61259d6aa73a69f967b662ebff7dc46ad115faae54b7f9b56ef4d614",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.delay",
+        "import org.json.JSONObject",
+        "import okhttp3.MediaType.Companion.toMediaType",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/LocalProxy.kt": {
+      "semanticSha256": "24cd32f35880e4b6804850c8dd9c778024a18407ed0b103ab9371b2e52e2d756",
+      "imports": [
+        "import java.io.IOException",
+        "import java.io.InputStream",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.InetAddress",
+        "import java.net.ServerSocket",
+        "import java.net.Socket",
+        "import java.net.SocketException",
+        "import java.net.URL",
+        "import java.net.URLDecoder",
+        "import java.net.URLEncoder",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import java.util.concurrent.atomic.AtomicInteger",
+        "import java.util.concurrent.atomic.AtomicLong"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/Majorplay.kt": {
+      "semanticSha256": "9c408766bc0c10fb432394fc220c92c6490dc6fdce49d4fa059d1dee14d440f7",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.fasterxml.jackson.annotation.JsonIgnoreProperties",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.nicehttp.RequestBodyTypes",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MediaIdentity.kt": {
+      "semanticSha256": "737a03991aaca7f72c21cb333f76186445e5a5c704da5c994c75770bb3f095ff",
+      "imports": [
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.nodes.Document"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MultiSource.kt": {
+      "semanticSha256": "2995f6680540e89bd27e1ef21152507fab5de9f01efde1cae9744ebfa18066e8",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.*",
+        "import org.json.JSONObject",
+        "import java.net.URI"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaPlayback.kt": {
+      "semanticSha256": "73a502afc251632b0d88d54b3cfad28283f0b57ae52ae55be34bbe098e15edc3",
+      "imports": [
+        "import android.media.MediaCodecList",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.awaitAll",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.security.MessageDigest",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import kotlinx.coroutines.ensureActive"
+      ]
+    },
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaSource.kt": {
+      "semanticSha256": "1da96eb5085364d19bea6dfb231c20b306f7eb37b5f9c8b609b0c0dc7880ec24",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import org.jsoup.Jsoup",
+        "import java.net.URI",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtream.kt": {
+      "semanticSha256": "488ea8c47eb3363b2afbd548266b2e1efba78a19e6dce85b3b711af0c996bb20",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxDiagnostics.kt": {
+      "semanticSha256": "b404ce2c683e3afd29adcdc41800dc7e165ba69035b5cc6f98cbc89cacae2ad0",
+      "imports": [
+        "import android.app.AlertDialog",
+        "import android.content.ClipData",
+        "import android.content.ClipboardManager",
+        "import android.content.Context",
+        "import android.util.Log",
+        "import org.json.JSONObject"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxEngine.kt": {
+      "semanticSha256": "438ccb67b07f32fd466a8d40993a7ed81078b6e2591b01bf1a17bd238e74794c",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.app",
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import kotlinx.coroutines.withTimeoutOrNull",
+        "import okhttp3.Interceptor",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import org.json.JSONObject",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Mac",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import android.content.Context",
+        "import android.util.Base64",
+        "import android.util.Log",
+        "import java.util.UUID",
+        "import java.net.URLEncoder",
+        "import java.net.URI"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMapping.kt": {
+      "semanticSha256": "a18c1552a2bcbc1f4513ae23c83f6233374e96c8f842b82fcbb37a446bf065a7",
+      "imports": [
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import kotlinx.coroutines.*",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMedia.kt": {
+      "semanticSha256": "3768ae507fd746808b22dfebac332ae71d73eb7c89320ade530e93fa070d1284",
+      "imports": [
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import okhttp3.*",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxPlayback.kt": {
+      "semanticSha256": "101bfc8bec14b306f5280155d374b2c4c5a03abb336cb9d1624ee4ba43d9e47d",
+      "imports": [
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.Dispatchers",
+        "import kotlinx.coroutines.withContext",
+        "import okhttp3.*",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import org.jsoup.nodes.Element",
+        "import org.jsoup.parser.Parser",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import java.net.URLDecoder",
+        "import java.util.Locale",
+        "import java.util.concurrent.TimeUnit",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamParser.kt": {
+      "semanticSha256": "972c812c0a161a4faa5ce28a639cd5c3c4e4410990c756f583dfc9621d4ae687",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlugin.kt": {
+      "semanticSha256": "cb7f1ee74f9404b4689f9bb6081b229c3f3f4d955973e64d47e7e85bc5181be4",
+      "imports": [
+        "import android.content.Context",
+        "import com.lagradost.cloudstream3.plugins.CloudstreamPlugin",
+        "import com.lagradost.cloudstream3.plugins.Plugin"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/HydraxMedia.kt": {
+      "semanticSha256": "2d2f38ced8215ac5723c9efaf39e2d48f3a89f5f852d021e23c2733e517d4dc2",
+      "imports": [
+        "import java.io.EOFException",
+        "import java.io.IOException",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.URL",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/IdlixSource.kt": {
+      "semanticSha256": "40a377c2280388659e2858320afa8e82dfea72e479bd80ee43be9293ac6e8fb4",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.delay",
+        "import org.json.JSONObject",
+        "import okhttp3.MediaType.Companion.toMediaType",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/LocalProxy.kt": {
+      "semanticSha256": "9d08ef79d08be76812d559c3b926487f1085ef843ab4f3183c2388ab84402233",
+      "imports": [
+        "import java.io.IOException",
+        "import java.io.InputStream",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.InetAddress",
+        "import java.net.ServerSocket",
+        "import java.net.Socket",
+        "import java.net.SocketException",
+        "import java.net.URL",
+        "import java.net.URLDecoder",
+        "import java.net.URLEncoder",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import java.util.concurrent.atomic.AtomicInteger",
+        "import java.util.concurrent.atomic.AtomicLong"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/Majorplay.kt": {
+      "semanticSha256": "94b2f23026b923923573ad01a315c2e9b98710573e9c1ad4a1590b98aa7eefd3",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.fasterxml.jackson.annotation.JsonIgnoreProperties",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.nicehttp.RequestBodyTypes",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MediaIdentity.kt": {
+      "semanticSha256": "73774fefc313a532e6af751a03596efe28b47aeb6bd65bad75f6ea0a9cb76032",
+      "imports": [
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.nodes.Document"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MultiSource.kt": {
+      "semanticSha256": "336a3ab373e176212779fa64b05eab60b66b82e1f2542ad935f9cc73be5a55d8",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.*",
+        "import org.json.JSONObject",
+        "import java.net.URI"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaPlayback.kt": {
+      "semanticSha256": "e1190d48c7d696fe8dd8d3266f46a7feee705d02a95dd5d16ae00c1cdbc52971",
+      "imports": [
+        "import android.media.MediaCodecList",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.awaitAll",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.security.MessageDigest",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import kotlinx.coroutines.ensureActive"
+      ]
+    },
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaSource.kt": {
+      "semanticSha256": "8e23702542894026532407a76e2475185886831002ca4902f8eb103c095d979d",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import org.jsoup.Jsoup",
+        "import java.net.URI",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21.kt": {
+      "semanticSha256": "884e67955e4cd504b7418be66c1a38f8ece93d35280ab74c560c143c668e1e08",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer",
+        "import com.lagradost.cloudstream3.metaproviders.TmdbProvider",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId",
+        "import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId",
+        "import com.lagradost.cloudstream3.network.CloudflareKiller",
+        "import com.lagradost.cloudstream3.utils.AppUtils.parseJson",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.cloudstream3.utils.ExtractorLink"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxDiagnostics.kt": {
+      "semanticSha256": "f5f2090156349eea06328d6f6d8d574e83a31346b340f593f44aab05a69b5154",
+      "imports": [
+        "import android.app.AlertDialog",
+        "import android.content.ClipData",
+        "import android.content.ClipboardManager",
+        "import android.content.Context",
+        "import android.util.Log",
+        "import org.json.JSONObject"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxEngine.kt": {
+      "semanticSha256": "8b0f865610d25aa00eacb98b4725c61f17fc6e6d52672f2b0d5e92312b243227",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.app",
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import kotlinx.coroutines.withTimeoutOrNull",
+        "import okhttp3.Interceptor",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import org.json.JSONObject",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Mac",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import android.content.Context",
+        "import android.util.Base64",
+        "import android.util.Log",
+        "import java.util.UUID",
+        "import java.net.URLEncoder",
+        "import java.net.URI"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMapping.kt": {
+      "semanticSha256": "bba1d5578d69f1966060d3e7c1d9972ca823b1c586fb330f28f5bfa413dec899",
+      "imports": [
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import kotlinx.coroutines.*",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMedia.kt": {
+      "semanticSha256": "22bddfaf86adcbcc2fc98fda6e0aad575ab239a91e496eb78c5aa2399851b015",
+      "imports": [
+        "import kotlinx.coroutines.CancellationException",
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.sync.Mutex",
+        "import kotlinx.coroutines.sync.withLock",
+        "import okhttp3.*",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxPlayback.kt": {
+      "semanticSha256": "557803648d9bca9489852b5904026a681b6f72e7921624711adb76ec987b6a75",
+      "imports": [
+        "import kotlinx.coroutines.suspendCancellableCoroutine",
+        "import kotlinx.coroutines.Dispatchers",
+        "import kotlinx.coroutines.withContext",
+        "import okhttp3.*",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import org.jsoup.nodes.Element",
+        "import org.jsoup.parser.Parser",
+        "import java.io.IOException",
+        "import java.net.URI",
+        "import java.net.URLDecoder",
+        "import java.util.Locale",
+        "import java.util.concurrent.TimeUnit",
+        "import kotlin.coroutines.resume"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Plugin.kt": {
+      "semanticSha256": "345a684960b62dd1d85cdcadce5dbbb87f9fb3e8e1ec40a0310ddf9a73c04021",
+      "imports": [
+        "import android.content.Context",
+        "import com.lagradost.cloudstream3.plugins.CloudstreamPlugin",
+        "import com.lagradost.cloudstream3.plugins.Plugin"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Utils.kt": {
+      "semanticSha256": "f94314510dd5772089cc5e5ebb62631c31814d235f6e9a3cec4fd47853d25e48",
+      "imports": [
+        "import com.lagradost.cloudstream3.APIHolder.unixTimeMS",
+        "import com.lagradost.cloudstream3.mvvm.logError",
+        "import java.text.SimpleDateFormat",
+        "import java.util.Locale"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/HydraxMedia.kt": {
+      "semanticSha256": "0066229a39cfbbe13f7a5f61b843f7f3ac4301cd73fd584b603eb12bda0bad5f",
+      "imports": [
+        "import java.io.EOFException",
+        "import java.io.IOException",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.URL",
+        "import java.security.MessageDigest",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/IdlixSource.kt": {
+      "semanticSha256": "26c86cbcb2c62c895b5d20d8e37611a84b21c5f4973fe26be53c9d4e6a77cd74",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.delay",
+        "import org.json.JSONObject",
+        "import okhttp3.MediaType.Companion.toMediaType",
+        "import okhttp3.RequestBody.Companion.toRequestBody",
+        "import java.net.URLEncoder"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/LocalProxy.kt": {
+      "semanticSha256": "0022de72e89f87173e69c021d20fcb01e76b0f7b09cf412b7b22cbff491c6b33",
+      "imports": [
+        "import java.io.IOException",
+        "import java.io.InputStream",
+        "import java.io.OutputStream",
+        "import java.net.HttpURLConnection",
+        "import java.net.InetAddress",
+        "import java.net.ServerSocket",
+        "import java.net.Socket",
+        "import java.net.SocketException",
+        "import java.net.URL",
+        "import java.net.URLDecoder",
+        "import java.net.URLEncoder",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import java.util.concurrent.atomic.AtomicInteger",
+        "import java.util.concurrent.atomic.AtomicLong"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/Majorplay.kt": {
+      "semanticSha256": "1b29ee777db6e33af1fb9463b31a905e2109a3af5cf4224fbe90b7bcdc56ec19",
+      "imports": [
+        "import com.fasterxml.jackson.annotation.JsonProperty",
+        "import com.fasterxml.jackson.annotation.JsonIgnoreProperties",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.toJson",
+        "import com.lagradost.nicehttp.RequestBodyTypes",
+        "import okhttp3.MediaType.Companion.toMediaTypeOrNull",
+        "import okhttp3.RequestBody.Companion.toRequestBody"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MediaIdentity.kt": {
+      "semanticSha256": "7bc57071c0ac9ab41750d450f599752ec7afa5c27e765854dfff4daff37a2916",
+      "imports": [
+        "import java.text.Normalizer",
+        "import java.util.Locale",
+        "import org.json.JSONArray",
+        "import org.json.JSONObject",
+        "import org.jsoup.nodes.Document"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MultiSource.kt": {
+      "semanticSha256": "fa608c1d30c31af62e98deb2e0e401305e145d71fc2246e6ee1e5fef337c49bd",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import kotlinx.coroutines.*",
+        "import org.json.JSONObject",
+        "import java.net.URI"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaPlayback.kt": {
+      "semanticSha256": "bb8b4782779469cb028e121f1d52b6b96d7a5fb6c2515b4b2ebd8a2927d3bd4c",
+      "imports": [
+        "import android.media.MediaCodecList",
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson",
+        "import kotlinx.coroutines.async",
+        "import kotlinx.coroutines.awaitAll",
+        "import kotlinx.coroutines.coroutineScope",
+        "import kotlinx.coroutines.sync.Semaphore",
+        "import kotlinx.coroutines.sync.withPermit",
+        "import org.json.JSONObject",
+        "import org.jsoup.Jsoup",
+        "import java.security.MessageDigest",
+        "import java.util.concurrent.ConcurrentHashMap",
+        "import javax.crypto.Cipher",
+        "import javax.crypto.spec.IvParameterSpec",
+        "import javax.crypto.spec.SecretKeySpec",
+        "import kotlinx.coroutines.ensureActive"
+      ]
+    },
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaSource.kt": {
+      "semanticSha256": "a8143cd9a418319d6cc6b69cd07792fd726609f94d93527b47e223b3cf17b499",
+      "imports": [
+        "import com.lagradost.cloudstream3.*",
+        "import com.lagradost.cloudstream3.utils.*",
+        "import org.jsoup.Jsoup",
+        "import java.net.URI",
+        "import java.net.URLEncoder"
+      ]
+    }
+  },
+  "formattedFiles": [
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakor.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxDiagnostics.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxEngine.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMapping.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMedia.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxPlayback.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlugin.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorUtils.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/HydraxMedia.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/IdlixSource.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/LocalProxy.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/Majorplay.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MediaIdentity.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MultiSource.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaPlayback.kt",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaSource.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemi.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxDiagnostics.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxEngine.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMapping.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMedia.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxPlayback.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlugin.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiUtils.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/HydraxMedia.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/IdlixSource.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/LocalProxy.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/Majorplay.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MediaIdentity.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MultiSource.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaPlayback.kt",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaSource.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtream.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxDiagnostics.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxEngine.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMapping.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMedia.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxPlayback.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamParser.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlugin.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/HydraxMedia.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/IdlixSource.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/LocalProxy.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/Majorplay.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MediaIdentity.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MultiSource.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaPlayback.kt",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaSource.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxDiagnostics.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxEngine.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMapping.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMedia.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxPlayback.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Plugin.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Utils.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/HydraxMedia.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/IdlixSource.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/LocalProxy.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/Majorplay.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MediaIdentity.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MultiSource.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaPlayback.kt",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaSource.kt",
+    "AdiDrakor/build.gradle.kts",
+    "AdiFilmSemi/build.gradle.kts",
+    "AdiXtream/build.gradle.kts",
+    "Adicinemax21/build.gradle.kts"
+  ],
+  "removedImports": {
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxEngine.kt": [
+      "import kotlinx.coroutines.sync.Semaphore",
+      "import kotlinx.coroutines.sync.withPermit"
+    ],
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMedia.kt": [
+      "import kotlinx.coroutines.CancellationException"
+    ],
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxPlayback.kt": [
+      "import org.jsoup.nodes.Element"
+    ],
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxEngine.kt": [
+      "import kotlinx.coroutines.sync.Semaphore",
+      "import kotlinx.coroutines.sync.withPermit"
+    ],
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMedia.kt": [
+      "import kotlinx.coroutines.CancellationException"
+    ],
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxPlayback.kt": [
+      "import org.jsoup.nodes.Element"
+    ],
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxEngine.kt": [
+      "import kotlinx.coroutines.sync.Semaphore",
+      "import kotlinx.coroutines.sync.withPermit"
+    ],
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMedia.kt": [
+      "import kotlinx.coroutines.CancellationException"
+    ],
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxPlayback.kt": [
+      "import org.jsoup.nodes.Element"
+    ],
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxEngine.kt": [
+      "import kotlinx.coroutines.sync.Semaphore",
+      "import kotlinx.coroutines.sync.withPermit"
+    ],
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMedia.kt": [
+      "import kotlinx.coroutines.CancellationException"
+    ],
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxPlayback.kt": [
+      "import org.jsoup.nodes.Element"
+    ]
+  },
+  "migratedFinalFiles": {
+    "AdiDrakor/build.gradle.kts": "85bace1f22e56a7ef6f0aa3457a460e5f5165b5e59a542cdf528fb9364a4471c",
+    "AdiDrakor/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakor.kt": "b155a154d0283396ba9cbd8aee71869a1e30ed15102445d1d170198860b5a9f4",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxDiagnostics.kt": "6a2482447408bd8a2e4e4e1eff77a4bae102e7c27768d29d7a8e682b2d7871dc",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxEngine.kt": "1c9e40099364fddd21e08c33fd211901647ef42e3e18efd44efac5c8bcbba83b",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMapping.kt": "280dbf756ceda1ee9282e5f74a5e9e7da1373e759ed452cb31776d39e6f2fb30",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxMedia.kt": "cb3def46d500947ba67ddf0e82977846720800cc8e9f6876c89639ff6ba1bc1d",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorMovieboxPlayback.kt": "fc2d294d7cd525d40a20d90dedbd37ec1b89d873d4b4756604c5d99f1426a9af",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorPlugin.kt": "97c4ffc91b3cbe7a0f17cc493b766121cc0f74ff490513af59066be2a5b1ff5c",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/AdiDrakorUtils.kt": "29ca611b89f80e5ffec80198b1298644fec25158d8a72f3b383268babd0f3950",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/HydraxMedia.kt": "b26baf8375379b10cf24c4c027e08b368afedf555d79d9c52e96f0bf75f1e500",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/IdlixSource.kt": "3636c232cd9d9487ef8484ba13b1c731a312f261ec8e58a132af83eccc0912a7",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/LocalProxy.kt": "90654a03c661003d733e48217a77335616c777eb1ae0cb7ef07ec22fd63b552a",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/Majorplay.kt": "2111fd88f8c3d301e29ec402ee7e141cebf4264b53576f04878e9be1e4aba3e5",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MediaIdentity.kt": "5c3611eb769be721f068719f1f19ee85dfd2345cbaebc7374abc1b6cc66d7c4d",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/MultiSource.kt": "7b833de1edea58597ea8b2070fde2191963d86887119c86def391c7f6a2d38f5",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaPlayback.kt": "25443e3c0a416126cb7e3690ec6226a77e491179049e775e1a7f8ada63a4ce19",
+    "AdiDrakor/src/main/kotlin/com/AdiDrakor/sources/OppaSource.kt": "643ae2a6c351f4a74ace569e77bc5abfcfecfe5a181c5ddfbeafa664281b907e",
+    "AdiDrakor/tests/BILINGUAL_DISCOVERY_CONTRACT.md": "f41b5c79ef1e490409f6749673fa6fadcd8490eb9bc2a03efaeb2908abad50d1",
+    "AdiDrakor/tests/H5_MIGRATION.md": "1ace781205435cb8b5846cdb80af96bdbc3eb6cf21a12aeda435f745a4ad588b",
+    "AdiDrakor/tests/LiveMediaProbe.kt.in": "29c6657b500fd45dc3a2068cfc50e715404e0e8bbfc2a41a43d4fbd624e770a2",
+    "AdiDrakor/tests/MULTISOURCE.md": "44b35978c1ad1f7e7b1a5868c3b0f1dca36c33dd3ced9f175241e4cf8b935ed3",
+    "AdiDrakor/tests/MappingRegression.kt.in": "a25b23b1b15691fe6d73f3492d06b573ac72b1cac377b7538116e22c87c55c07",
+    "AdiDrakor/tests/MediaRecoveryRegression.kt.in": "5956efcc3b27d4f4f78e4ac7148a060dd0eef8d603a91ac753ccfcd622c83ac6",
+    "AdiDrakor/tests/MultiSourceRegression.kt.in": "351e695c49b57980b9f59410886fbfafc9dac418653b534ebf3e1f7af5c7f086",
+    "AdiDrakor/tests/ProxyIsolation.kt": "fe8066a192c44d9fc4f71dabbe90a8a2fac05b67f6611e684a845b8b56066b46",
+    "AdiDrakor/tests/ProxyRegression.kt.in": "6c3acac178435055f583abc8e4de1da86644682b847faede2abef5372c3f773f",
+    "AdiDrakor/tests/SPIDER_V4_CONTRACT.md": "ae7aaed13629e91d17d0e2b623c3a1244f5a724fd07edeeb98ce9b577b458aae",
+    "AdiDrakor/tests/fixtures/hotd-edition-public-detail.json": "238b9e783371f4dcb3dec773187083f7bb7c0967129eee4c9c8ad0a41349a01d",
+    "AdiDrakor/tests/fixtures/hotd-edition-public-nuxt.html": "15a56e9e1d9eabef0f2e71fc0b6df51d9fb01ec40b0336b54a98b30b3ba2d40e",
+    "AdiDrakor/tests/fixtures/hotd-public-detail.json": "a7e339aaa7e5f4b4e6d95ce8bf932003d700217f8a346aca739d900b126546b9",
+    "AdiDrakor/tests/fixtures/hotd-public-nuxt.html": "de33e0bdf722f24db7bdc27026550cea0b153205467cac3d8a913b5e59143733",
+    "AdiDrakor/tests/fixtures/insidious-public-detail.json": "c5bc051d55c9f2fd6b986a8dc4236aaa687339d86d19b4a7867c4bad9d7a5967",
+    "AdiDrakor/tests/fixtures/insidious-public-nuxt.html": "94ddbde4096e6b40651339ebe4140a797a71423bed358a7d0e4ddc6e3e4e8f4d",
+    "AdiDrakor/tests/fixtures/spider-v4-apk-observed.json": "d8ec7a703375abbff64def62be840150f08646b5c747e162cc33473277498a37",
+    "AdiDrakor/tests/fixtures/spider-v4-media-observed.json": "8cc902dd1401de9648aaa204039a6a7fc5cc082a99161df8b432049df6df4551",
+    "AdiDrakor/tests/fixtures/spiderman-public-detail.json": "56325be2a7d5c3b9333325989dad8c1249c5f1bdbd5787615c7074b9d383274d",
+    "AdiDrakor/tests/fixtures/spiderman-public-nuxt.html": "03599b4437719f9db2f17aeddf8988445ce6c2d7f7428784f23c08c4179aee5a",
+    "AdiDrakor/tests/fixtures/spiderman-public-stars-nuxt.html": "427be57bd1ba04e417bb3c022b42e089dca3dbf5b6f87adad7ac88bc6e89e099",
+    "AdiDrakor/tests/fixtures/spiderman-tmdb-bilingual.json": "0828fc87676dbbf7192949381d4c9475c63583555af0ed3af8e4bcc86144b517",
+    "AdiDrakor/tests/probe_finder_v2.py": "5f77941f075b9406975b957d10d874810dd0b07d66210bb05569a9a81fd7abdf",
+    "AdiDrakor/tests/probe_insidious_catalog.py": "226ccfa1a8fef5c9729903f65ae847dc2e1cbe0d44cd341139a304f036df0edc",
+    "AdiDrakor/tests/run_live_media.py": "c7188ae69ab9a0b22d64c13217d41dd7fc127355599c52a8342e299eac85a620",
+    "AdiDrakor/tests/run_migration.py": "fb9cc8f6971fe787790b05fa302741bc763d1f19852c146f51cc4b8e7b128751",
+    "AdiDrakor/tests/shims/TestMediaCodec.kt": "5a8ea4d8746c39b64e8a4cf585ad1b31150de9a8cc85038891e5bec7d85cf63f",
+    "AdiDrakor/tests/verify_artifacts.py": "8c67b813ac6fc11f30fad7e88d56d0526d6d8f627ebe2deae13bb89ec17a10c0",
+    "AdiFilmSemi/build.gradle.kts": "57e926acb8fa612903037a3039fdea0553090550c1709f1393023af2043929b6",
+    "AdiFilmSemi/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemi.kt": "46ee1e2c2142d756f45b5abc7044872c1abb9f09678dc833a18fc6f54e30a3f7",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxDiagnostics.kt": "00c7e868ca8b685a173987ab063d502e6e5bc24e2f7b8591897b3c77179f1ea6",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxEngine.kt": "8ca5ea72e20d0ad5597d33dc675f7528cc208a90f5dde99ed9ea856862d5e9c3",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMapping.kt": "39786ac68c1c8a7484ce8030e6fd15c950005f337add5f4c5f78acc55b443c4c",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxMedia.kt": "18f5e4fbbbbebf344e2c51d2d6cecefa8729026447e4d837720721388af2f196",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiMovieboxPlayback.kt": "94b1fb2db0287c9883098c2eee76720f57e49b002bb6bb07092340a23d98df6f",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiPlugin.kt": "caa1f284c18f180c6741edaedf7094f928c39ab40b0c53e83016993e81ac155b",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/AdiFilmSemiUtils.kt": "840592cb200d7171db8ada3263c061e288d04fd3238c63efdcdedf13111c54a1",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/HydraxMedia.kt": "e099c816c7819731012aae0a0ba573cab6e71bb23dcb902a67f384438ed0dca4",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/IdlixSource.kt": "ca68411f843bfb80a48ce87a5f6c65b09060db53091402ea01535f3fe4541db0",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/LocalProxy.kt": "1afb5b284888aebb57026a8efc7134e05f151737e866502f4730b636f025ab82",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/Majorplay.kt": "674413f7f69e11bf674c6875feaa1e24048a9d8f61d4a76dd763f07a9e7083e6",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MediaIdentity.kt": "421e1f267cbbbd1e9c3d030fee66d58c3af370e258b1667bb6e25f3fbc682ac6",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/MultiSource.kt": "3845016eea72f7aaea9cb904ba8ef95a4cbc5860144d489feff098f9610538bf",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaPlayback.kt": "5d81e3bdd04db817d0d1a67e657ebfc501f0e52908d50c66d8c6a379a67d6aa6",
+    "AdiFilmSemi/src/main/kotlin/com/michat88/sources/OppaSource.kt": "48c1892df7140b29aa8b34d0a0577a626ddd223e0791323ce27971e677995984",
+    "AdiXtream/build.gradle.kts": "97a939e83bfc3bdd328f583ceef62e42db260620fd012c887804512ed6dc9f8f",
+    "AdiXtream/src/main/AndroidManifest.xml": "daa0fb1f32ba7ea85a07ef6302ab3d58c3407d7fd2aa03ec132cb9e38e8d9849",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtream.kt": "d9fb47ecc5c2c91b302ba15093a577c5c77be5849a0d13c76eceb9ab923d7919",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxDiagnostics.kt": "a875f4c757856a2d924270c5082a5ce52d140ffa481b408976813a01b20f00dc",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxEngine.kt": "791d99b9f495da3f2f3ff461ae1cd8f3288a5aecda4a5ec7378bd7d6531b85e1",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMapping.kt": "72cd6cbc0af272c51f8a55e406c9b1cf6bed52a70a646cc1fbde882ed1837718",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxMedia.kt": "c914f5351441e026c46a180fa6104363a2a72d04fcdfbde4e526e3f894747f5c",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamMovieboxPlayback.kt": "283d0fa135d0fc5ee4adb705add3c3b0ec3461cf05c451f6aeb1b7d4fb8e358d",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamParser.kt": "ccfb36bd330088e85cbb2372a38da3d39b52719cdeef24ff6f43ab736ca0d152",
+    "AdiXtream/src/main/kotlin/com/adixtream/AdiXtreamPlugin.kt": "5cb71586e11883d165c54ec02da2f07b9462724f2f37dd53a88c33982d5fe4bc",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/HydraxMedia.kt": "70609855fb13f69a7912f7cea5b878b3e57e07fbfbe50bbec86135a0eefbd9ee",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/IdlixSource.kt": "6c2d3efb2346897ef5c089b8295e35952b5791d672522f83320576ddfd06c5e0",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/LocalProxy.kt": "b4ff09d8d87ce72fdffc5012e9480ea901168cbd5942edab16a7d47c10e8ae56",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/Majorplay.kt": "9af85453584cbad3113abf1fc1c490c00863703903df084a442d608423d34c47",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MediaIdentity.kt": "12fca4ae0404f81f0b41454da65d9206638dbd690866e496669ae5486f39787c",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/MultiSource.kt": "ef69307a4f5c2d3157441925333839c7c8cab9b2f589aee5b18699e1165941bf",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaPlayback.kt": "4d86cab135ea532c26d50bc25845706faceef88aa272b3858f9748fcd4795db0",
+    "AdiXtream/src/main/kotlin/com/adixtream/sources/OppaSource.kt": "223f9258c60967eedb9c78947a341672acb9935c41cc296e2fdc9824939b5d71",
+    "Adicinemax21/build.gradle.kts": "d38e2de967bb9babe1d099696a05ce6a9144075d0480bfefa42ae3d7e4a09a68",
+    "Adicinemax21/src/main/AndroidManifest.xml": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21.kt": "9a48ccd9df9a079f8004f95e4bcca4f537baa425a560cab87ccaa9bc35113460",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxDiagnostics.kt": "8449d4d3c5047be7a23949bc4cba74a082124b65adb1e5a754617facf2b6a7e5",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxEngine.kt": "ca334034a27515c59140a43c391787b23a7e6e1bf3093b5dd75285b716b334dd",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMapping.kt": "c3523480c54346f7f0eb103d6b2ec666e423ad07c6a2086c7634a3c6394fd814",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxMedia.kt": "d22faf5393bdb983b000e2c690dd0e1275170f765844614996c4e753cd65d616",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21MovieboxPlayback.kt": "871453899026d9b87df161fa6ca3ca879e4eec21d7680bedf7dc864b8066f0fe",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Plugin.kt": "860839d89949cbb510bea954a4f117c098c6428411360a5fa900124393f61059",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/Adicinemax21Utils.kt": "c81ae6af38622c5c707af32c8d76c580e4d585120a95c56f4925786fc8f26915",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/HydraxMedia.kt": "3b0fc199bf44f5c030f4379b757dcf22dc1e658f714e95505de370f9c1fb194b",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/IdlixSource.kt": "8ff1810e28f5eb14e49ed28660ef31e9dbac90f0fe68d89cb4095ba352c84031",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/LocalProxy.kt": "8de3f37ee3e99a5e51266c395d985cbb9c3d3ba547e12680585233292220e974",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/Majorplay.kt": "b0dac68c6cf34ce7ce1498cbf859e760d821d702661f31a6fa337ecea27ec585",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MediaIdentity.kt": "fa1c25757a9bee803e9f6551c5b4989327b5958b083f71bccc5ea17134c2e840",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/MultiSource.kt": "f878a1847d974ec82cf097f322841feaa243aea9b7870a6c897b0387ad31e5c2",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaPlayback.kt": "f57a04b2d81c5eee304da0de23866203dc009e8f20b916295007a990b61d205c",
+    "Adicinemax21/src/main/kotlin/com/Adicinemax21/sources/OppaSource.kt": "a8a1ce5ad29df2e539321e0ca6a1897f1c27078ab2a55fa8b563f03c71068344"
+  },
+  "publishedBeforeVersions": {
+    "Adicinemax21": 24,
+    "AdiDrakor": 19,
+    "AdiFilmSemi": 17,
+    "AdiXtream": 23
+  }
+}
