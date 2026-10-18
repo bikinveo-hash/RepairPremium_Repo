@@ -1,0 +1,467 @@
+{
+  "scope": "REAL_SHARE_REDIRECTS_AND_READ_ONLY_H5_HTTP; NOT_PLUGIN_DEVICE_PLAYBACK",
+  "baseline_main": "466d5db7bb49593aa7f15a6513ee66135c1d980e",
+  "redirects": [
+    {
+      "shareUrl": "https://v.moviebox.ph/kW2VHLAW2ia",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "reacher-indonesian-WjrjjPIHwW4",
+      "subjectId": "4149489342181954296"
+    },
+    {
+      "shareUrl": "https://v.moviebox.ph/4qq9KlyIys8",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "reacher-e1nw56h5sj4",
+      "subjectId": "3620534210064175096"
+    }
+  ],
+  "video": {
+    "filename": "585430.mp4",
+    "sha256": "588e5463009586ef80710a6eb2ac20a30d20c75c891cf21352a8ddd33f835c4b",
+    "recordingDurationSeconds": 84.136678,
+    "visibleEpisode": "Reacher S01 E01",
+    "visibleDurationSeconds": 3345,
+    "visiblePosition": "17:59",
+    "observedScenesAdvance": true,
+    "observedOriginalAndIndonesianSelection": true,
+    "apkVersionVisible": false,
+    "unmodifiedOfficialOriginVerified": false,
+    "pluginPlaybackTest": "NOT_TESTED"
+  },
+  "h5_exact_provider_headers": [
+    {
+      "subjectId": "3620534210064175096",
+      "detailPath": "reacher-e1nw56h5sj4",
+      "profile": "EXISTING_PROVIDER_H5_WITH_VERIFIED_SHARE_PATH",
+      "http": 200,
+      "code": 0,
+      "keys": [
+        "streams",
+        "freeNum",
+        "limited",
+        "limitedCode",
+        "dash",
+        "hls",
+        "hasResource",
+        "vipLocked",
+        "codecPriority",
+        "playConfig",
+        "shareUnlocked"
+      ],
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      },
+      "hasResource": true,
+      "vipLocked": false
+    },
+    {
+      "subjectId": "4149489342181954296",
+      "detailPath": "reacher-indonesian-WjrjjPIHwW4",
+      "profile": "EXISTING_PROVIDER_H5_WITH_VERIFIED_SHARE_PATH",
+      "http": 200,
+      "code": 0,
+      "keys": [
+        "streams",
+        "freeNum",
+        "limited",
+        "limitedCode",
+        "dash",
+        "hls",
+        "hasResource",
+        "vipLocked",
+        "codecPriority",
+        "playConfig",
+        "shareUnlocked"
+      ],
+      "counts": {
+        "streams": 2,
+        "dash": 1,
+        "hls": 0
+      },
+      "hasResource": true,
+      "vipLocked": false
+    }
+  ],
+  "controlled_query_referer_requests": [
+    {
+      "subjectId": "3620534210064175096",
+      "se": 1,
+      "ep": 1,
+      "queryPath": "",
+      "refererPath": "reacher-e1nw56h5sj4",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      }
+    },
+    {
+      "subjectId": "3620534210064175096",
+      "se": 1,
+      "ep": 1,
+      "queryPath": "reacher-e1nw56h5sj4",
+      "refererPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      }
+    },
+    {
+      "subjectId": "3620534210064175096",
+      "se": 1,
+      "ep": 1,
+      "queryPath": "reacher-e1nw56h5sj4",
+      "refererPath": "reacher-e1nw56h5sj4",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      },
+      "media_metadata": [
+        {
+          "format": "MP4",
+          "id": "5481330508506320792",
+          "resolutions": "360",
+          "size": "152973900",
+          "duration": 3345,
+          "codecName": "h264"
+        },
+        {
+          "format": "MP4",
+          "id": "7685587439406445144",
+          "resolutions": "480",
+          "size": "279454414",
+          "duration": 3345,
+          "codecName": "h264"
+        },
+        {
+          "format": "MP4",
+          "id": "2976041587572200152",
+          "resolutions": "1080",
+          "size": "673611473",
+          "duration": 3345,
+          "codecName": "h264"
+        }
+      ],
+      "dash_shapes": [
+        {
+          "url_host": "sbcdnw.hakunaymatata.com",
+          "cookie_present": true,
+          "duration": 3345
+        }
+      ]
+    }
+  ],
+  "production_validator_real_http": [
+    {
+      "se": 1,
+      "devicePlayback": "NOT_TESTED",
+      "ep": 1,
+      "error": "SocketTimeoutException",
+      "subjectId": "3620534210064175096",
+      "detailPath": ""
+    },
+    {
+      "se": 1,
+      "devicePlayback": "NOT_TESTED",
+      "ep": 1,
+      "error": "SocketTimeoutException",
+      "subjectId": "3620534210064175096",
+      "detailPath": "reacher-e1nw56h5sj4"
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": false,
+      "http": 200,
+      "parsed": 0,
+      "ep": 2,
+      "subjectId": "3620534210064175096",
+      "detailPath": ""
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [
+        {
+          "codec": "hevc",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": true,
+          "format": "DASH",
+          "mediaValidated": false,
+          "id": "2747395945552924568",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 0,
+              "http": -1,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 1080
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "6647762811995290832",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 360
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "2011755596361396824",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 480
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "6187108121887273560",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 1080
+        }
+      ],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": true,
+      "http": 200,
+      "parsed": 4,
+      "ep": 2,
+      "subjectId": "3620534210064175096",
+      "detailPath": "reacher-e1nw56h5sj4"
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": false,
+      "http": 200,
+      "parsed": 0,
+      "ep": 1,
+      "subjectId": "4149489342181954296",
+      "detailPath": ""
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [
+        {
+          "codec": "hevc",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": true,
+          "format": "DASH",
+          "mediaValidated": false,
+          "id": "3834879483056636352",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 0,
+              "http": -1,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 1080
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "2889787666332115640",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 480
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "1598200153276569856",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 1080
+        }
+      ],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": true,
+      "http": 200,
+      "parsed": 3,
+      "ep": 1,
+      "subjectId": "4149489342181954296",
+      "detailPath": "reacher-indonesian-WjrjjPIHwW4"
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": false,
+      "http": 200,
+      "parsed": 0,
+      "ep": 2,
+      "subjectId": "4149489342181954296",
+      "detailPath": ""
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [
+        {
+          "codec": "hevc",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": true,
+          "format": "DASH",
+          "mediaValidated": false,
+          "id": "8932954261240039928",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 1080
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "4488565534048641720",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 480
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "3749258313578469632",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "INDONESIAN",
+          "knownNotice": false,
+          "quality": 1080
+        }
+      ],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": true,
+      "http": 200,
+      "parsed": 3,
+      "ep": 2,
+      "subjectId": "4149489342181954296",
+      "detailPath": "reacher-indonesian-WjrjjPIHwW4"
+    }
+  ],
+  "media_validation_limit": "CDN HTTP 429 and socket timeouts from this execution environment. Do not infer successful plugin playback from API streams alone.",
+  "no_private_data": "Referral uid, tokens, cookies, signed media URLs, request headers and media bytes omitted.",
+  "separate_dash_http": {
+    "subjectId": "3620534210064175096",
+    "se": 1,
+    "ep": 1,
+    "scope": "REAL_HTTP_DASH_SOURCE_ONLY_NO_CDN_RETRY_AFTER_429",
+    "devicePlayback": "NOT_TESTED",
+    "host": "sbcdnw.hakunaymatata.com",
+    "http": 429,
+    "bytes_read": 587,
+    "content_type": "text/html",
+    "truncated": false,
+    "mediaValidated": false
+  }
+}

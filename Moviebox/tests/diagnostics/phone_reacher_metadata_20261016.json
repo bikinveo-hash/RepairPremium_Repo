@@ -1,0 +1,355 @@
+{
+  "source": "User phone diagnostic 2026-10-16; original kit version 1; sanitized on device",
+  "bootstrap": {
+    "http": 200,
+    "code": "0",
+    "guest_session_available": true
+  },
+  "selections": [
+    {
+      "subjectId": "4149489342181954296",
+      "se": 1,
+      "ep": 1
+    },
+    {
+      "subjectId": "3620534210064175096",
+      "se": 1,
+      "ep": 1
+    }
+  ],
+  "source_request_count": 18,
+  "distinct_response_records": [
+    {
+      "endpoint": "dub-info",
+      "subjectId": "4149489342181954296",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "dubs": "array"
+        },
+        "detailPath": "UNKNOWN",
+        "dubs": [
+          {
+            "subjectId": "3620534210064175096",
+            "category": "ORIGINAL",
+            "original": true
+          },
+          {
+            "subjectId": "9216356266832971496",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "548993662278140712",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "4149489342181954296",
+            "category": "INDONESIAN",
+            "original": false
+          },
+          {
+            "subjectId": "6280508509004484832",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "1281179147829761456",
+            "category": "UNSUPPORTED",
+            "original": false
+          }
+        ]
+      }
+    },
+    {
+      "endpoint": "get",
+      "subjectId": "4149489342181954296",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "subjectId": "str",
+          "dubs": "array",
+          "resourceDetectors": "array",
+          "detailUrl": "str",
+          "hasResource": "bool",
+          "playUrl": "dict"
+        },
+        "subjectId": "4149489342181954296",
+        "hasResource": true,
+        "resourceDetectors_count": 1,
+        "title": "Reacher [Indonesian]",
+        "year": 2022,
+        "detailPath": "UNKNOWN",
+        "dubs": [
+          {
+            "subjectId": "3620534210064175096",
+            "category": "ORIGINAL",
+            "original": true
+          },
+          {
+            "subjectId": "9216356266832971496",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "548993662278140712",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "4149489342181954296",
+            "category": "INDONESIAN",
+            "original": false
+          },
+          {
+            "subjectId": "6280508509004484832",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "1281179147829761456",
+            "category": "UNSUPPORTED",
+            "original": false
+          }
+        ],
+        "play_url_type": "PLAY_URL_WEB",
+        "play_url_present": false
+      }
+    },
+    {
+      "endpoint": "season-info",
+      "subjectId": "4149489342181954296",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "subjectId": "str",
+          "seasons": "array"
+        },
+        "subjectId": "4149489342181954296",
+        "detailPath": "UNKNOWN",
+        "seasons": [
+          {
+            "se": 1,
+            "maxEp": 8,
+            "allEp": ""
+          },
+          {
+            "se": 2,
+            "maxEp": 8,
+            "allEp": ""
+          }
+        ]
+      },
+      "audio_context": "SELECTED"
+    },
+    {
+      "endpoint": "resource",
+      "subjectId": "4149489342181954296",
+      "http": 407,
+      "code": "407",
+      "requested_se": 1,
+      "requested_ep": 1,
+      "exact_subject": false,
+      "exact_episode_resources": "UNKNOWN"
+    },
+    {
+      "endpoint": "resource",
+      "subjectId": "4149489342181954296",
+      "http": 407,
+      "code": "407",
+      "requested_se": 1,
+      "requested_ep": 2,
+      "exact_subject": false,
+      "exact_episode_resources": "UNKNOWN"
+    },
+    {
+      "endpoint": "get",
+      "subjectId": "3620534210064175096",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "subjectId": "str",
+          "dubs": "array",
+          "resourceDetectors": "array",
+          "detailUrl": "str",
+          "hasResource": "bool",
+          "playUrl": "dict"
+        },
+        "subjectId": "3620534210064175096",
+        "hasResource": true,
+        "resourceDetectors_count": 1,
+        "title": "Reacher",
+        "year": 2022,
+        "detailPath": "UNKNOWN",
+        "dubs": [
+          {
+            "subjectId": "3620534210064175096",
+            "category": "ORIGINAL",
+            "original": true
+          },
+          {
+            "subjectId": "9216356266832971496",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "548993662278140712",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "4149489342181954296",
+            "category": "INDONESIAN",
+            "original": false
+          },
+          {
+            "subjectId": "6280508509004484832",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "1281179147829761456",
+            "category": "UNSUPPORTED",
+            "original": false
+          }
+        ],
+        "play_url_type": "PLAY_URL_WEB",
+        "play_url_present": false
+      }
+    },
+    {
+      "endpoint": "season-info",
+      "subjectId": "3620534210064175096",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "subjectId": "str",
+          "seasons": "array"
+        },
+        "subjectId": "3620534210064175096",
+        "detailPath": "UNKNOWN",
+        "seasons": [
+          {
+            "se": 1,
+            "maxEp": 8,
+            "allEp": ""
+          },
+          {
+            "se": 2,
+            "maxEp": 8,
+            "allEp": ""
+          },
+          {
+            "se": 3,
+            "maxEp": 8,
+            "allEp": ""
+          },
+          {
+            "se": 4,
+            "maxEp": 8,
+            "allEp": ""
+          }
+        ]
+      },
+      "audio_context": "ORIGINAL"
+    },
+    {
+      "endpoint": "resource",
+      "subjectId": "3620534210064175096",
+      "http": 407,
+      "code": "407",
+      "requested_se": 1,
+      "requested_ep": 1,
+      "exact_subject": false,
+      "exact_episode_resources": "UNKNOWN"
+    },
+    {
+      "endpoint": "resource",
+      "subjectId": "3620534210064175096",
+      "http": 407,
+      "code": "407",
+      "requested_se": 1,
+      "requested_ep": 2,
+      "exact_subject": false,
+      "exact_episode_resources": "UNKNOWN"
+    },
+    {
+      "endpoint": "dub-info",
+      "subjectId": "3620534210064175096",
+      "http": 200,
+      "code": "0",
+      "data": {
+        "schema": {
+          "dubs": "array"
+        },
+        "detailPath": "UNKNOWN",
+        "dubs": [
+          {
+            "subjectId": "3620534210064175096",
+            "category": "ORIGINAL",
+            "original": true
+          },
+          {
+            "subjectId": "9216356266832971496",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "548993662278140712",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "4149489342181954296",
+            "category": "INDONESIAN",
+            "original": false
+          },
+          {
+            "subjectId": "6280508509004484832",
+            "category": "UNSUPPORTED",
+            "original": false
+          },
+          {
+            "subjectId": "1281179147829761456",
+            "category": "UNSUPPORTED",
+            "original": false
+          }
+        ]
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "from": "4149489342181954296",
+      "to": "3620534210064175096",
+      "category": "ORIGINAL",
+      "evidence": "dub-info"
+    },
+    {
+      "from": "4149489342181954296",
+      "to": "4149489342181954296",
+      "category": "INDONESIAN",
+      "evidence": "dub-info"
+    },
+    {
+      "from": "3620534210064175096",
+      "to": "3620534210064175096",
+      "category": "ORIGINAL",
+      "evidence": "dub-info"
+    },
+    {
+      "from": "3620534210064175096",
+      "to": "4149489342181954296",
+      "category": "INDONESIAN",
+      "evidence": "dub-info"
+    }
+  ],
+  "media_validation": "NOT_TESTED",
+  "device_playback": "NOT_TESTED"
+}

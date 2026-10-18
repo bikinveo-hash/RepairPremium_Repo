@@ -1,0 +1,673 @@
+{
+  "scope": "REAL_PUBLIC_SHARE_REDIRECTS_AND_READ_ONLY_H5_HTTP; NOT_FIXED_PLUGIN_DEVICE_PLAYBACK",
+  "baseline_main": "89afc69f45bd425afd1e6611096146e485ce94dc",
+  "observed_utc": "2026-10-16",
+  "redirects": [
+    {
+      "shareUrl": "https://v.moviebox.ph/q3XeoVCyta2",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "house-of-the-dragon-indonesian-2vLI2nqm1d8",
+      "subjectId": "6890674365592471456"
+    },
+    {
+      "shareUrl": "https://v.moviebox.ph/YA5Jg23jdc",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "house-of-the-dragon-uTatZHG9Wo6",
+      "subjectId": "5373384118887662624"
+    },
+    {
+      "shareUrl": "https://v.moviebox.ph/8uHrrrN9Nw8",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "house-of-the-dragon-G7LGtmOdqc9",
+      "subjectId": "7721864815710718808"
+    },
+    {
+      "shareUrl": "https://v.moviebox.ph/EmzlSBQbV59",
+      "http": 301,
+      "detailHost": "movie-box.co",
+      "detailPath": "house-of-the-dragon-kkZZ8pvUAJ3",
+      "subjectId": "3135126230249492760"
+    }
+  ],
+  "h5_same_headers_context_controls": [
+    {
+      "subjectId": "6890674365592471456",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "vipLocked": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      },
+      "media": []
+    },
+    {
+      "subjectId": "6890674365592471456",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "house-of-the-dragon-indonesian-2vLI2nqm1d8",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 1,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "7737351095538123960",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3769,
+          "size": "1068219115",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "7973978624502434232",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3769,
+          "size": "1484226325",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "6890674365592471456",
+      "season": 1,
+      "episode": 2,
+      "detailPath": "house-of-the-dragon-indonesian-2vLI2nqm1d8",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 1,
+        "dash": 0,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "2801405903939977384",
+          "format": "MP4",
+          "resolutions": "480",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "294665690",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        }
+      ]
+    },
+    {
+      "subjectId": "5373384118887662624",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "vipLocked": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      },
+      "media": []
+    },
+    {
+      "subjectId": "5373384118887662624",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "house-of-the-dragon-uTatZHG9Wo6",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "2742484450197078432",
+          "format": "MP4",
+          "resolutions": "360",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "228921213",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "7835723772199424456",
+          "format": "MP4",
+          "resolutions": "480",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "266837056",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "1278645869281166424",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "992320679",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "8725538259239158800",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3936,
+          "size": "760179508",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "5373384118887662624",
+      "season": 1,
+      "episode": 2,
+      "detailPath": "house-of-the-dragon-uTatZHG9Wo6",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "8726368337367810336",
+          "format": "MP4",
+          "resolutions": "360",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "186999856",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "7271620575498748960",
+          "format": "MP4",
+          "resolutions": "480",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "267569372",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "8014246758790351040",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "472739004",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "1038296795715095728",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3231,
+          "size": "557573920",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "7721864815710718808",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "vipLocked": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      },
+      "media": []
+    },
+    {
+      "subjectId": "7721864815710718808",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "house-of-the-dragon-G7LGtmOdqc9",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 4,
+        "dash": 2,
+        "hls": 2
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "820922603337571632",
+          "format": "MP4",
+          "resolutions": "360",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "221133745",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "4454186770586027568",
+          "format": "MP4",
+          "resolutions": "480",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "322072506",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "5374061826609149824",
+          "format": "MP4",
+          "resolutions": "720",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "423761810",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "4015050289685431768",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "708890925",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "1732606090501573408",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3936,
+          "size": "716831618",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        },
+        {
+          "group": "dash",
+          "id": "8766878960677519648",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3936,
+          "size": "846326443",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        },
+        {
+          "group": "hls",
+          "id": "8766878960677519648",
+          "format": "HLS",
+          "resolutions": "360",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "249554583",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        },
+        {
+          "group": "hls",
+          "id": "8766878960677519648",
+          "format": "HLS",
+          "resolutions": "720",
+          "codecName": "h264",
+          "duration": 3936,
+          "size": "469809367",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "7721864815710718808",
+      "season": 1,
+      "episode": 2,
+      "detailPath": "house-of-the-dragon-G7LGtmOdqc9",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 4,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "4239154720511872264",
+          "format": "MP4",
+          "resolutions": "360",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "186912440",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "6372536095187814584",
+          "format": "MP4",
+          "resolutions": "480",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "239566692",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "1185714173154579552",
+          "format": "MP4",
+          "resolutions": "720",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "282697225",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "streams",
+          "id": "7022379290226744624",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3231,
+          "size": "472738942",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "7274828317457794008",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3231,
+          "size": "1203348788",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "3135126230249492760",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "vipLocked": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      },
+      "media": []
+    },
+    {
+      "subjectId": "3135126230249492760",
+      "season": 1,
+      "episode": 1,
+      "detailPath": "house-of-the-dragon-kkZZ8pvUAJ3",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 1,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "7080279503826047408",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3769,
+          "size": "2678978008",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "1198734521131323824",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3769,
+          "size": "622182471",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    },
+    {
+      "subjectId": "3135126230249492760",
+      "season": 1,
+      "episode": 2,
+      "detailPath": "house-of-the-dragon-kkZZ8pvUAJ3",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "vipLocked": false,
+      "counts": {
+        "streams": 1,
+        "dash": 1,
+        "hls": 0
+      },
+      "media": [
+        {
+          "group": "streams",
+          "id": "450980852336677240",
+          "format": "MP4",
+          "resolutions": "1080",
+          "codecName": "h264",
+          "duration": 3036,
+          "size": "2242303786",
+          "host": "bcdnxw.hakunaymatata.com",
+          "signedCookie": false
+        },
+        {
+          "group": "dash",
+          "id": "41654663548227960",
+          "format": "DASH",
+          "resolutions": "1080,720,480",
+          "codecName": "hevc",
+          "duration": 3035,
+          "size": "440944990",
+          "host": "sbcdnw.hakunaymatata.com",
+          "signedCookie": true
+        }
+      ]
+    }
+  ],
+  "query_vs_referer_controls": [
+    {
+      "subjectId": "5373384118887662624",
+      "season": 1,
+      "episode": 1,
+      "queryPath": "house-of-the-dragon-uTatZHG9Wo6",
+      "refererPath": "",
+      "http": 200,
+      "code": 0,
+      "hasResource": false,
+      "counts": {
+        "streams": 0,
+        "dash": 0,
+        "hls": 0
+      }
+    },
+    {
+      "subjectId": "5373384118887662624",
+      "season": 1,
+      "episode": 1,
+      "queryPath": "",
+      "refererPath": "house-of-the-dragon-uTatZHG9Wo6",
+      "http": 200,
+      "code": 0,
+      "hasResource": true,
+      "counts": {
+        "streams": 3,
+        "dash": 1,
+        "hls": 0
+      }
+    }
+  ],
+  "production_parser_validator_http": [
+    {
+      "se": 1,
+      "devicePlayback": "NOT_TESTED",
+      "ep": 1,
+      "error": "SocketTimeoutException",
+      "subjectId": "6890674365592471456",
+      "detailPath": "house-of-the-dragon-indonesian-2vLI2nqm1d8"
+    },
+    {
+      "se": 1,
+      "code": 0,
+      "mediaChecks": [
+        {
+          "codec": "hevc",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": true,
+          "format": "DASH",
+          "mediaValidated": false,
+          "id": "1732606090501573408",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 0,
+              "http": -1,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 1080
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": true,
+          "format": "HLS",
+          "mediaValidated": false,
+          "id": "8766878960677519648",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 587,
+              "http": 429,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 360
+        },
+        {
+          "codec": "h264",
+          "actualFormat": "UNKNOWN",
+          "signedCookiePresent": false,
+          "format": "MP4",
+          "mediaValidated": false,
+          "id": "820922603337571632",
+          "httpChecks": [
+            {
+              "manifest": false,
+              "bytes": 0,
+              "http": -1,
+              "truncated": false
+            }
+          ],
+          "category": "ORIGINAL",
+          "knownNotice": false,
+          "quality": 360
+        }
+      ],
+      "devicePlayback": "NOT_TESTED",
+      "hasResource": true,
+      "http": 200,
+      "parsed": 8,
+      "ep": 1,
+      "subjectId": "7721864815710718808",
+      "detailPath": "house-of-the-dragon-G7LGtmOdqc9"
+    }
+  ],
+  "owner_videos": [
+    {
+      "filename": "585521.mp4",
+      "sha256": "5831c23f7f538c2eb294abbfc859e718755ef7a549b38a39e0eed373c02f0ac3"
+    },
+    {
+      "filename": "585522.mp4",
+      "sha256": "25036f4cc6765f9db623b271b2f2bc3703345f3af41be4a16539c152f9282514"
+    }
+  ],
+  "video_observations": {
+    "585521.mp4": "Multiple catalog entries: episode cards visible; one has no links; another reaches playback/source selection. Cannot attribute each visible entry to a subject ID from the recording alone.",
+    "585522.mp4": "MovieBox application shows Indonesian sub entry at 00:15 / 1:02:49 and Original Audio entry with moving scenes. APK version and unmodified origin are not verified."
+  },
+  "changes": "Only exact-subject fallback paths; no cross-edition mapping, guessed slug, episode substitution, native/v2, header or validator change.",
+  "media_validation": "BLOCKED: CDN 429 or timeout; no media validated here. Fixed-plugin Android playback NOT_TESTED."
+}

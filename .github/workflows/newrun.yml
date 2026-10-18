@@ -58,18 +58,39 @@ jobs:
           cd "$GITHUB_WORKSPACE/src"
           python3 AdiDrakor/tests/run_migration.py
 
-      - name: Build four replacement plugins
+      - name: Verify standalone Moviebox and protected Adi bytes
+        run: |
+          cd "$GITHUB_WORKSPACE/src"
+          python3 Moviebox/tests/verify_migration.py
+          python3 Moviebox/tests/run_regression.py
+          python3 -m unittest discover -s Moviebox/tests/diagnostics -p 'test_*.py'
+          python3 -m unittest discover -s Moviebox/tests -p 'test_distribution.py'
+          python3 Moviebox/tests/distribution.py snapshot "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
+
+      - name: Compile Adi controls and standalone Moviebox
         run: |
           cd "$GITHUB_WORKSPACE/src"
           chmod +x gradlew
           ./gradlew :AdiDrakor:assembleRelease :AdiFilmSemi:assembleRelease :AdiXtream:assembleRelease :Adicinemax21:assembleRelease
+          ./gradlew :Moviebox:assembleRelease
           ./gradlew makePluginsJson
+
+      - name: Retain released Adi publication inputs
+        run: |
+          cd "$GITHUB_WORKSPACE/src"
+          python3 Moviebox/tests/distribution.py retain-adi "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
 
       - name: Stage Adi only and verify every catalog artifact
         run: |
           cd "$GITHUB_WORKSPACE/src"
           python3 AdiDrakor/tests/prepare_distribution.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
           python3 AdiDrakor/tests/verify_artifacts.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
+
+      - name: Stage only Moviebox and verify the complete release
+        run: |
+          cd "$GITHUB_WORKSPACE/src"
+          python3 Moviebox/tests/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
+          python3 Moviebox/tests/verify_migration.py
 
       - name: Preserve repository identity
         run: |
@@ -95,6 +116,8 @@ jobs:
 
       - name: Publish without rewriting history
         run: |
+          cd "$GITHUB_WORKSPACE/src"
+          python3 Moviebox/tests/distribution.py verify "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
           cd "$GITHUB_WORKSPACE/builds"
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
