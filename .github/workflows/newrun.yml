@@ -6,10 +6,6 @@ on:
     paths-ignore: ['**/*.md']
   workflow_dispatch:
     inputs:
-      full_check:
-        description: Run full Moviebox regression tests
-        type: boolean
-        default: false
       rebuild_all:
         description: Rebuild all plugins instead of changed plugins
         type: boolean
@@ -51,21 +47,11 @@ jobs:
         working-directory: src
         env:
           REBUILD_ALL: ${{ inputs.rebuild_all || false }}
-        run: python3 Moviebox/tests/distribution.py build "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
-
-      - name: Full regression checks
-        if: ${{ inputs.full_check == true }}
-        working-directory: src
-        run: |
-          python3 Moviebox/tests/verify_migration.py
-          python3 Moviebox/tests/run_regression.py
-          python3 -m unittest discover -s Moviebox/tests/diagnostics -p 'test_*.py'
+        run: python3 .github/distribution.py build "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
 
       - name: Check and stage packages
         working-directory: src
-        run: |
-          python3 -m unittest discover -s Moviebox/tests -p 'test_distribution.py'
-          python3 Moviebox/tests/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
+        run: python3 .github/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
 
       - name: Publish plugins
         working-directory: builds

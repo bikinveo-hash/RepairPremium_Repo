@@ -12,13 +12,13 @@ import subprocess
 import zipfile
 import zlib
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "bikinveo-hash/RepairPremium_Repo"
 ADI = {"AdiDrakor": "com.AdiDrakor", "AdiFilmSemi": "com.michat88",
        "AdiXtream": "com.adixtream", "Adicinemax21": "com.Adicinemax21"}
 MOVIEBOX_CLASSES = {"Lcom/Moviebox/" + name + ";" for name in (
     "MovieBoxProvider", "MovieboxPlugin", "MovieboxPlayback",
-    "MovieboxPlaybackContext", "MovieboxEpisodes",
+    "MovieboxPlaybackContext",
 )}
 
 
@@ -77,6 +77,10 @@ def verify_package(path, row, selected=False):
             assert {c for c in classes if c.endswith("Plugin;")} == {entry}, "Duplicate plugin entry: " + name
         if name == "Moviebox" and row["version"] >= 20:
             assert MOVIEBOX_CLASSES <= classes, "Missing Moviebox production classes"
+            if row["version"] >= 21:
+                dex = archive.read("classes.dex")
+                assert not any(word in dex.lower() for word in (b"tmdb", b"themoviedb")), "External metadata packaged in Moviebox"
+                assert "Lcom/Moviebox/MovieboxEpisodes;" not in classes, "Old episode metadata helper packaged"
         if selected and name in ADI:
             prefix = "L" + ADI[name].replace(".", "/") + "/"
             required = {"MediaIdentity", "MultiSource", "IdlixSource", "Majorplay", "OppaSource",
