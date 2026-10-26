@@ -686,17 +686,7 @@ class MovieBoxProvider : MainAPI() {
                         try {
                             val url =
                                 "https://moviebox.ph/web/searchResult?keyword=${URLEncoder.encode(query.trim().take(200),"UTF-8")}"
-                            val response =
-                                playbackRequest(
-                                    url,
-                                    mapOf(
-                                        "User-Agent" to MovieboxPlayback.WEB_UA,
-                                        "Referer" to "https://moviebox.ph/",
-                                    ),
-                                )
-                            response
-                                ?.takeIf { it.first == 200 }
-                                ?.second
+                            catalogRequest(url)
                                 ?.let { playbackContext.catalogSubjects(it) }
                                 .orEmpty()
                                 .mapNotNull(::subjectToSearchResponse)
@@ -919,6 +909,50 @@ class MovieBoxProvider : MainAPI() {
                 }
                 .build()
         return Interceptor { chain -> mediaClient.newCall(chain.request()).execute() }
+    }
+
+    // Public catalog redirects select a web alias; API and media redirects keep their own rules.
+    private suspend fun catalogRequest(url: String): String? {
+        val hosts =
+            (MovieboxPlayback.webDomains + "https://moviebox.ph")
+                .mapNotNull { URI(it).host }
+                .toSet()
+        var current = url
+        return try {
+            repeat(4) {
+                val uri = URI(current)
+                if (
+                    uri.scheme != "https" ||
+                        uri.host !in hosts ||
+                        uri.userInfo != null ||
+                        uri.port !in listOf(-1, 443) ||
+                        uri.path != "/web/searchResult" ||
+                        uri.rawFragment != null
+                )
+                    return null
+                val response =
+                    app.get(
+                        current,
+                        headers =
+                            mapOf(
+                                "User-Agent" to MovieboxPlayback.WEB_UA,
+                                "Referer" to "https://${uri.host}/",
+                            ),
+                        timeout = 4,
+                        allowRedirects = false,
+                    )
+                Log.d(TAG, "[CATALOG] ${uri.host} HTTP=${response.code}")
+                if (response.code == 200) return response.text.takeIf { it.length <= 2_000_000 }
+                if (response.code !in listOf(301, 302, 303, 307, 308)) return null
+                val location = response.headers["Location"] ?: return null
+                current = uri.resolve(location).toString()
+            }
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** Do not log response bodies, full signed URLs, cookies or bearer values. */
@@ -1169,15 +1203,7 @@ class MovieBoxProvider : MainAPI() {
                         selected.detailPath,
                         detail,
                     ) { url ->
-                        playbackRequest(
-                                url,
-                                mapOf(
-                                    "User-Agent" to MovieboxPlayback.WEB_UA,
-                                    "Referer" to "https://moviebox.ph/",
-                                ),
-                            )
-                            ?.takeIf { it.first == 200 }
-                            ?.second
+                        catalogRequest(url)
                     }
                 }
             Log.d(
