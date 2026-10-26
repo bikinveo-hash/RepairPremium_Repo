@@ -42,7 +42,11 @@ def artifact(path, name, version, classes=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps({"name": name, "version": version,
-            "pluginClassName": "com.Moviebox.MovieboxPlugin" if name == "Moviebox" else "com.example." + name + "Plugin"}))
+            "pluginClassName": (
+                "com.Moviebox.MovieboxPlugin" if name == "Moviebox" else
+                "com.Mangoporn.MangoPornPlugin" if name == "Mangoporn" else
+                "com.example." + name + "Plugin"
+            )}))
         archive.writestr("classes.dex", dex_fixture(sorted(classes or release.MOVIEBOX_CLASSES)))
     return {"internalName": name, "name": name, "version": version,
         "fileSize": path.stat().st_size, "fileHash": "sha256-" + release.sha256(path),
@@ -142,6 +146,81 @@ class DistributionTests(unittest.TestCase):
         with patch.object(release, "preserved", return_value=(release.catalog(self.state["catalog"]), {})):
             with self.assertRaisesRegex(AssertionError, "version increase"):
                 release.prepare(self.folder, self.state)
+
+    def mango_update(self, version=7):
+        classes = {"Lcom/Mangoporn/MangoPorn;", "Lcom/Mangoporn/MangoPornPlugin;"}
+        old = artifact(self.folder / "Mangoporn.cs3", "Mangoporn", 6, classes)
+        rows = json.loads((self.folder / "plugins.json").read_text()) + [old]
+        (self.folder / "plugins.json").write_text(json.dumps(rows))
+        output = self.root / "Mangoporn/build/Mangoporn.cs3"
+        row = artifact(output, "Mangoporn", version, classes)
+        (self.root / "Mangoporn/build.gradle.kts").write_text(f"version = {version}\n")
+        self.generated.append(row)
+        (self.root / "build/plugins.json").write_text(json.dumps(self.generated))
+        return row
+
+    def test_selected_publication_preserves_already_staged_moviebox(self):
+        release.prepare(self.folder, self.state)
+        row = self.mango_update()
+        before = release.inventory(self.folder)
+        old_rows = release.verify_catalog(self.folder)
+        release.publish_plugin(self.folder, "Mangoporn")
+        after = release.inventory(self.folder)
+        self.assertEqual({p for p in before if before[p] != after[p]}, {"Mangoporn.cs3", "plugins.json"})
+        rows = release.verify_catalog(self.folder)
+        self.assertEqual(rows["Mangoporn"], row)
+        self.assertEqual(rows["Moviebox"], self.update)
+        self.assertEqual(list(rows), list(old_rows))
+
+    def test_selected_publication_is_idempotent(self):
+        self.mango_update()
+        release.publish_plugin(self.folder, "Mangoporn")
+        before = release.inventory(self.folder)
+        release.publish_plugin(self.folder, "Mangoporn")
+        self.assertEqual(before, release.inventory(self.folder))
+
+    def test_selected_downgrade_rejected_before_staging(self):
+        self.mango_update(version=5)
+        before = release.inventory(self.folder)
+        with self.assertRaisesRegex(AssertionError, "downgrade"):
+            release.publish_plugin(self.folder, "Mangoporn")
+        self.assertEqual(before, release.inventory(self.folder))
+
+    def test_selected_same_version_changed_bytes_rejected(self):
+        self.mango_update()
+        self.generated[-1]["version"] = 6
+        with patch.object(release, "verify_package"):
+            (self.root / "Mangoporn/build.gradle.kts").write_text("version = 6\n")
+            (self.root / "build/plugins.json").write_text(json.dumps(self.generated))
+            before = release.inventory(self.folder)
+            with self.assertRaisesRegex(AssertionError, "version increase"):
+                release.publish_plugin(self.folder, "Mangoporn")
+            self.assertEqual(before, release.inventory(self.folder))
+
+    def test_selected_corrupt_package_rejected_before_staging(self):
+        self.mango_update()
+        (self.root / "Mangoporn/build/Mangoporn.cs3").write_bytes(b"bad")
+        before = release.inventory(self.folder)
+        with self.assertRaisesRegex(AssertionError, "size mismatch"):
+            release.publish_plugin(self.folder, "Mangoporn")
+        self.assertEqual(before, release.inventory(self.folder))
+
+    def test_selected_wrong_source_version_rejected(self):
+        self.mango_update()
+        (self.root / "Mangoporn/build.gradle.kts").write_text("version = 8\n")
+        with self.assertRaisesRegex(AssertionError, "differs from source"):
+            release.publish_plugin(self.folder, "Mangoporn")
+
+    def test_mango_missing_entry_class_rejected(self):
+        row = artifact(self.root / "missing-mango.cs3", "Mangoporn", 7, {"Lcom/Mangoporn/MangoPorn;"})
+        with self.assertRaisesRegex(AssertionError, "Missing MangoPorn"):
+            release.verify_package(self.root / "missing-mango.cs3", row)
+
+    def test_mango_duplicate_entry_class_rejected(self):
+        row = artifact(self.root / "duplicate-mango.cs3", "Mangoporn", 7, {
+            "Lcom/Mangoporn/MangoPorn;", "Lcom/Mangoporn/MangoPornPlugin;", "Lcom/old/OtherPlugin;"})
+        with self.assertRaisesRegex(AssertionError, "Duplicate MangoPorn"):
+            release.verify_package(self.root / "duplicate-mango.cs3", row)
 
     def test_retain_adi_uses_released_bytes_without_source_changes(self):
         compiled = copy.deepcopy(self.generated)

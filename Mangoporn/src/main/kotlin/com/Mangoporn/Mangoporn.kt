@@ -1,15 +1,21 @@
 package com.Mangoporn
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
-import org.jsoup.nodes.Document
+import com.lagradost.nicehttp.Requests
+import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import android.util.Log
-import org.json.JSONArray
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import okhttp3.Protocol
+import org.json.JSONArray
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 class MangoPorn : MainAPI() {
     override var mainUrl = "https://mangoporn.net"
@@ -19,6 +25,26 @@ class MangoPorn : MainAPI() {
 
     override val hasMainPage = true
     override val hasQuickSearch = false
+
+    private companion object {
+        const val MAX_DOCUMENT_REQUESTS = 4
+        const val REQUEST_TIMEOUT_SECONDS = 8L
+        const val HOME_CACHE_MAX_AGE_MS = 600_000L
+    }
+
+    // Cloudstream requests all home rows concurrently. Bound the pressure on
+    // this source without changing the application's shared HTTP client.
+    private val documentRequests = Semaphore(MAX_DOCUMENT_REQUESTS)
+    private val homePages = ConcurrentHashMap<String, Pair<Long, HomePageResponse>>()
+    @Volatile
+    private var useHttp1 = false
+    private val http1Requests by lazy {
+        Requests(
+            baseClient = app.baseClient.newBuilder()
+                .protocols(listOf(Protocol.HTTP_1_1))
+                .build()
+        )
+    }
 
     // HEADERS PENTING (JANGAN DIUBAH)
     private val headers = mapOf(
@@ -67,14 +93,13 @@ class MangoPorn : MainAPI() {
 
         val document = try {
             getDocument(url)
+        } catch (error: IOException) {
+            currentCoroutineContext().ensureActive()
+            Log.w("MangoPorn", "Category request failed: ${request.name}; ${error.javaClass.simpleName}")
+            return cachedHomePage(url, page)
         } catch (error: ErrorLoadingException) {
-            // Keep unavailable source categories in the configuration, but isolate
-            // their 404 from the other rows. Never invent a replacement category.
-            if (error.message?.startsWith("MangoPorn: HTTP 404 (") == true) {
-                Log.w("MangoPorn", "Category unavailable: ${request.name}; ${error.message}")
-                return null
-            }
-            throw error
+            Log.w("MangoPorn", "Category unavailable: ${request.name}; ${error.message}")
+            return cachedHomePage(url, page)
         }
         
         val items = document.select("article.card, article.item").mapNotNull {
@@ -86,11 +111,41 @@ class MangoPorn : MainAPI() {
         } else {
             items.isNotEmpty()
         }
-        return newHomePageResponse(request.name, items, hasNext = hasNext)
+        if (page == 1 && items.isEmpty()) {
+            cachedHomePage(url, page)?.let { return it }
+        }
+        val result = newHomePageResponse(request.name, items, hasNext = hasNext)
+        if (page == 1 && items.isNotEmpty()) {
+            homePages[url] = System.currentTimeMillis() to result
+        }
+        return result
     }
 
-    private suspend fun getDocument(url: String): Document {
-        val response = app.get(url, headers = headers)
+    private fun cachedHomePage(url: String, page: Int): HomePageResponse? {
+        if (page != 1) return null
+        val cached = homePages[url] ?: return null
+        if (System.currentTimeMillis() - cached.first !in 0L..HOME_CACHE_MAX_AGE_MS) {
+            homePages.remove(url, cached)
+            return null
+        }
+        return cached.second
+    }
+
+    private suspend fun getDocument(url: String): Document = documentRequests.withPermit {
+        val response = try {
+            if (useHttp1) {
+                http1Requests.get(url, headers = headers, timeout = REQUEST_TIMEOUT_SECONDS)
+            } else {
+                app.get(url, headers = headers, timeout = REQUEST_TIMEOUT_SECONDS)
+            }
+        } catch (error: IOException) {
+            // A stalled HTTP/2 response must not cancel every home row. Retry
+            // once over HTTP/1.1, preserving cookies, TLS checks and headers.
+            currentCoroutineContext().ensureActive()
+            useHttp1 = true
+            Log.w("MangoPorn", "Document transport retry: ${error.javaClass.simpleName}")
+            http1Requests.get(url, headers = headers, timeout = REQUEST_TIMEOUT_SECONDS)
+        }
         if (response.code !in 200..299) {
             val path = runCatching { URI(response.url).path }.getOrNull().orEmpty()
             throw ErrorLoadingException("MangoPorn: HTTP ${response.code} ($path)")
@@ -103,7 +158,7 @@ class MangoPorn : MainAPI() {
         ) {
             throw ErrorLoadingException("MangoPorn: source returned Site Unavailable")
         }
-        return document
+        document
     }
 
     private fun httpUrl(raw: String?, base: String): String? {

@@ -67,12 +67,13 @@ jobs:
           python3 -m unittest discover -s Moviebox/tests -p 'test_distribution.py'
           python3 Moviebox/tests/distribution.py snapshot "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
 
-      - name: Compile Adi controls and standalone Moviebox
+      - name: Compile Adi controls, standalone Moviebox and MangoPorn
         run: |
           cd "$GITHUB_WORKSPACE/src"
           chmod +x gradlew
           ./gradlew :AdiDrakor:assembleRelease :AdiFilmSemi:assembleRelease :AdiXtream:assembleRelease :Adicinemax21:assembleRelease
           ./gradlew :Moviebox:assembleRelease
+          ./gradlew :Mangoporn:assembleRelease
           ./gradlew makePluginsJson
 
       - name: Retain released Adi publication inputs
@@ -118,6 +119,7 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/src"
           python3 Moviebox/tests/distribution.py verify "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
+          python3 Moviebox/tests/distribution.py publish-plugin "$GITHUB_WORKSPACE/builds" --module Mangoporn
           cd "$GITHUB_WORKSPACE/builds"
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"

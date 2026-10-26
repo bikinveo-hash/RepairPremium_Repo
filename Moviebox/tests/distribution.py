@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish standalone Moviebox while preserving every other released file and entry.
+"""Publish standalone Moviebox or one selected plugin, preserving unrelated bytes.
 
 The existing Adi staging/verification scripts remain unchanged. retain-adi supplies
 their publication inputs from the release, after compilation has already succeeded.
@@ -77,6 +77,12 @@ def verify_package(path, row, moviebox=False):
             assert [name for name in classes if name.endswith("Plugin;")] == ["Lcom/Moviebox/MovieboxPlugin;"], "Duplicate plugin entry"
             assert not any(name.startswith(("Lcom/AdiDrakor/", "Lcom/michat88/", "Lcom/adixtream/", "Lcom/Adicinemax21/")) for name in classes), "Adi dependency in standalone Moviebox"
             assert not any("Regression" in name or "Integration" in name or name.startswith("Landroid/") for name in classes), "Test classes packaged"
+        elif row["internalName"] == "Mangoporn" and row["version"] >= 7:
+            plugin = "com.Mangoporn.MangoPornPlugin"
+            entry = "Lcom/Mangoporn/MangoPornPlugin;"
+            assert manifest["pluginClassName"] == plugin, "Incorrect MangoPorn plugin class"
+            assert {"Lcom/Mangoporn/MangoPorn;", entry} <= set(classes), "Missing MangoPorn production classes"
+            assert [name for name in classes if name.endswith("Plugin;")] == [entry], "Duplicate MangoPorn plugin entry"
         assert not any(name.startswith("com/Moviebox/tests/") or name.endswith(("Regression.class", "Integration.class")) for name in archive.namelist()), "Test classes packaged"
         return manifest
 
@@ -176,13 +182,53 @@ def verify(folder, state):
     print("PASS Adi artifact hash parity; all non-Moviebox entries and published bytes unchanged")
 
 
+def publish_plugin(folder, module):
+    """Run after Moviebox verification; allow exactly this module's package/entry."""
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", module), "Invalid plugin identity"
+    before = verify_catalog(folder)
+    files_before = inventory(folder)
+    generated = catalog(json.loads((ROOT / "build/plugins.json").read_text()))
+    row = generated[module]
+    old = before[module]
+    source = ROOT / module / "build" / (module + ".cs3")
+    verify_package(source, row)
+    version = int(re.search(r"^version\s*=\s*(\d+)", (ROOT / module / "build.gradle.kts").read_text(), re.M)[1])
+    assert row["version"] == version, "Generated version differs from source"
+    assert version >= old["version"], "Plugin version downgrade"
+    if version == old["version"]:
+        assert row["fileHash"] == old["fileHash"], "Changed plugin needs a version increase"
+    # All inputs have been validated before changing the distribution checkout.
+    shutil.copyfile(source, folder / source.name)
+    rows = [row if item["internalName"] == module else item for item in before.values()]
+    (folder / "plugins.json").write_text(json.dumps(rows, indent=2) + "\n")
+    after = verify_catalog(folder)
+    files_after = inventory(folder)
+    assert list(before) == list(after), "Catalog identities/order changed"
+    assert files_before.keys() == files_after.keys(), "Published file inventory changed"
+    for name in before:
+        if name != module:
+            assert before[name] == after[name], "Unrelated catalog entry changed: " + name
+    for path, value in files_before.items():
+        if path not in {"plugins.json", source.name}:
+            assert files_after[path] == value, "Unrelated published file changed: " + path
+    assert after[module] == row and sha256(folder / source.name) == sha256(source), "Published plugin differs from build"
+    print("PASS selected publication:", module, "version", version, "; unrelated metadata and bytes preserved")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["snapshot", "retain-adi", "prepare", "verify"])
+    parser.add_argument("command", choices=["snapshot", "retain-adi", "prepare", "verify", "publish-plugin"])
     parser.add_argument("distribution", type=Path)
-    parser.add_argument("state", type=Path)
+    parser.add_argument("state", type=Path, nargs="?")
+    parser.add_argument("--module")
     args = parser.parse_args()
-    if args.command == "snapshot":
+    if args.command == "publish-plugin":
+        if not args.module:
+            parser.error("publish-plugin requires --module")
+        publish_plugin(args.distribution, args.module)
+    elif args.state is None:
+        parser.error(args.command + " requires a state file")
+    elif args.command == "snapshot":
         snapshot(args.distribution, args.state)
     else:
         state = json.loads(args.state.read_text())
