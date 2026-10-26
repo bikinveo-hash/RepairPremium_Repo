@@ -3,7 +3,6 @@ package com.Moviebox
 import android.content.Context
 import android.util.Base64
 import android.util.Log
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
@@ -768,13 +767,7 @@ class MovieBoxProvider : MainAPI() {
         val yearInt = subject.releaseDate?.take(4)?.toIntOrNull()
         val ratingStr = subject.imdbRatingValue ?: subject.imdbRate
 
-        val trailerUrl =
-            sequenceOf(
-                    subject.trailer?.videoAddressUpper?.url,
-                    subject.trailer?.videoAddressLower?.url,
-                )
-                .filterNotNull()
-                .firstOrNull { MovieboxPlayback.http(it) && !MovieboxPlayback.notice(it) }
+        val trailerUrl = resolveWebTrailer(cleanId, displayTitle)
 
         val genreTags = subject.genre?.split(",")?.map { it.trim() } ?: emptyList()
 
@@ -845,7 +838,11 @@ class MovieBoxProvider : MainAPI() {
                 this.recommendations = recs
                 if (!trailerUrl.isNullOrBlank()) {
                     this.trailers.add(
-                        TrailerData(extractorUrl = trailerUrl, referer = null, raw = true)
+                        TrailerData(
+                            extractorUrl = trailerUrl,
+                            referer = "https://movie-box.co/",
+                            raw = true,
+                        )
                     )
                 }
             }
@@ -865,7 +862,11 @@ class MovieBoxProvider : MainAPI() {
                 this.recommendations = recs
                 if (!trailerUrl.isNullOrBlank()) {
                     this.trailers.add(
-                        TrailerData(extractorUrl = trailerUrl, referer = null, raw = true)
+                        TrailerData(
+                            extractorUrl = trailerUrl,
+                            referer = "https://movie-box.co/",
+                            raw = true,
+                        )
                     )
                 }
             }
@@ -910,6 +911,28 @@ class MovieBoxProvider : MainAPI() {
                 .build()
         return Interceptor { chain -> mediaClient.newCall(chain.request()).execute() }
     }
+
+    private suspend fun resolveWebTrailer(subject: String, title: String): String? =
+        withTimeoutOrNull(3500) {
+            coroutineScope {
+                val query = URLEncoder.encode(title.trim().take(200), "UTF-8")
+                val pages =
+                    listOf("https://movie-box.co", "https://moviebox.ph").map { host ->
+                        async {
+                            withTimeoutOrNull(3000) {
+                                catalogRequest("$host/web/searchResult?keyword=$query")?.let {
+                                    playbackContext.trailerUrl(it, subject)
+                                }
+                            }
+                        }
+                    }
+                try {
+                    pages[0].await() ?: pages[1].await()
+                } finally {
+                    pages.forEach { it.cancel() }
+                }
+            }
+        }
 
     // Public catalog redirects select a web alias; API and media redirects keep their own rules.
     private suspend fun catalogRequest(url: String): String? {
@@ -1353,7 +1376,6 @@ class MovieBoxProvider : MainAPI() {
         val imdbRate: String?,
         val genre: String?,
         val staffList: List<StaffItem>?,
-        val trailer: TrailerItem?,
     )
 
     data class SubjectItem(
@@ -1366,13 +1388,6 @@ class MovieBoxProvider : MainAPI() {
     data class CoverItem(val url: String?)
 
     data class StaffItem(val name: String?, val character: String?, val avatarUrl: String?)
-
-    data class TrailerItem(
-        @JsonProperty("VideoAddress") val videoAddressUpper: VideoAddressItem? = null,
-        @JsonProperty("videoAddress") val videoAddressLower: VideoAddressItem? = null,
-    )
-
-    data class VideoAddressItem(val url: String?)
 
     data class SeasonInfoResponse(val code: Int?, val data: SeasonInfoData?)
 
@@ -2120,6 +2135,44 @@ internal class MovieboxPlaybackContext(
     private val paths = linkedMapOf<String, Pair<Long, String>>()
     private val allowedHosts =
         MovieboxPlayback.webDomains.mapNotNull { URI(it).host }.toSet() + "moviebox.ph"
+
+    /** Read only the selected subject's trailer from the website's inert Nuxt JSON table. */
+    fun trailerUrl(html: String, subject: String): String? =
+        try {
+            if (html.length > 2_000_000 || !subject.matches(Regex("[0-9]{1,24}"))) null
+            else {
+                val node =
+                    Jsoup.parse(html).selectFirst("script#__NUXT_DATA__[type=application/json]")
+                val table = JSONArray(node?.data() ?: "[]")
+                fun field(row: JSONObject, key: String): Any? {
+                    val index = row.opt(key) as? Number ?: return null
+                    val i = index.toLong()
+                    if (i < 0 || i >= table.length() || i.toDouble() != index.toDouble())
+                        return null
+                    return table.opt(i.toInt())
+                }
+                (0 until minOf(table.length(), 30_000))
+                    .flatMap { i ->
+                        val row = table.optJSONObject(i)
+                        if (row == null || field(row, "subjectId")?.toString() != subject)
+                            emptyList()
+                        else {
+                            val trailer = field(row, "trailer") as? JSONObject
+                            listOf("videoAddress", "VideoAddress").mapNotNull { key ->
+                                val video = trailer?.let { field(it, key) } as? JSONObject
+                                val url = video?.let { field(it, "url") } as? String
+                                url?.trim()?.takeIf {
+                                    MovieboxPlayback.http(it) && !MovieboxPlayback.notice(it)
+                                }
+                            }
+                        }
+                    }
+                    .distinct()
+                    .singleOrNull()
+            }
+        } catch (_: Exception) {
+            null
+        }
 
     fun path(value: String?, subject: String): String? {
         if (value.isNullOrBlank()) return null
