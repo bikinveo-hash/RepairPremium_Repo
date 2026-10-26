@@ -115,9 +115,12 @@ def changed_modules(modules, paths):
     shared = {"build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat"}
     if any(p in shared or p.startswith("gradle/") for p in paths):
         return sorted(modules)
-    return sorted({p.split("/")[0] for p in paths
-                   if p.split("/")[0] in modules and
-                   ("/src/main/" in p or p.endswith("/build.gradle.kts"))})
+    selected = set()
+    for path in paths:
+        module, _, relative = path.partition("/")
+        if module in modules and (relative.startswith("src/main/") or relative == "build.gradle.kts"):
+            selected.add(module)
+    return sorted(selected)
 
 
 def plan(folder, state_file, rebuild_all=False):

@@ -199,6 +199,13 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(release.changed_modules({"AdiDrakor"},
             ["AdiDrakor/tests/Fixture.kt", "AdiDrakor/README.md"]), [])
 
+    def test_nested_fixture_sources_do_not_rebuild_runtime_plugins(self):
+        self.assertEqual(release.changed_modules({"AdiDrakor"}, [
+            "AdiDrakor/tests/upstream/Moviebox/src/main/kotlin/Provider.kt",
+            "AdiDrakor/tests/upstream/Moviebox/build.gradle.kts",
+            "AdiDrakor/tests/run_regression.py",
+        ]), [])
+
     def test_plan_covers_changes_since_last_publication(self):
         def git(where, *args):
             return subprocess.check_output(["git", *args], cwd=where, text=True).strip()
