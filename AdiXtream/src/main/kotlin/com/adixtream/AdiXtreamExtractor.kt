@@ -484,6 +484,53 @@ internal class AdiXtreamMovieboxEngine(
         return Interceptor { chain -> mediaClient.newCall(chain.request()).execute() }
     }
 
+    // Public catalog redirects select a web alias; API and media redirects keep their own rules.
+    private suspend fun catalogRequest(url: String): String? {
+        val hosts =
+            (AdiXtreamMovieboxPlayback.webDomains + "https://moviebox.ph")
+                .mapNotNull { URI(it).host }
+                .toSet()
+        var current = url
+        return try {
+            repeat(4) {
+                val uri = URI(current)
+                val detailRoute =
+                    Regex("/(?:moviedetail|movies|detail)/[A-Za-z0-9_-]{1,220}")
+                        .matches(uri.path.orEmpty())
+                if (
+                    uri.scheme != "https" ||
+                        uri.host !in hosts ||
+                        uri.userInfo != null ||
+                        uri.port !in listOf(-1, 443) ||
+                        (uri.path != "/web/searchResult" && !detailRoute) ||
+                        uri.rawFragment != null
+                )
+                    return null
+                val response =
+                    app.get(
+                        current,
+                        headers =
+                            mapOf(
+                                "User-Agent" to AdiXtreamMovieboxPlayback.WEB_UA,
+                                "Referer" to "https://${uri.host}/",
+                            ),
+                        timeout = 4,
+                        allowRedirects = false,
+                    )
+                Log.d(TAG, "[CATALOG] ${uri.host} HTTP=${response.code}")
+                if (response.code == 200) return response.text.takeIf { it.length <= 2_000_000 }
+                if (response.code !in listOf(301, 302, 303, 307, 308)) return null
+                val location = response.headers["Location"] ?: return null
+                current = uri.resolve(location).toString()
+            }
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Do not log response bodies, full signed URLs, cookies or bearer values. */
     private suspend fun playbackRequest(
         url: String,
@@ -714,7 +761,10 @@ internal class AdiXtreamMovieboxEngine(
                         ?: if (cacheKey in failedUrls) null
                         else
                             try {
-                                AdiXtreamMovieboxPlayback.validateObserved(stream, headers, {}) { url, h, manifest ->
+                                AdiXtreamMovieboxPlayback.validateObserved(stream, headers, {}) {
+                                    url,
+                                    h,
+                                    manifest ->
                                     mediaSession.sample(url, h, stream.url, manifest)
                                 }
                             } catch (e: CancellationException) {
@@ -957,15 +1007,8 @@ internal class AdiXtreamMovieboxEngine(
                         val catalog = "https://moviebox.ph"
                         val catalogRows =
                             java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
-                        val webHeaders =
-                            mapOf(
-                                "User-Agent" to AdiXtreamMovieboxPlayback.WEB_UA,
-                                "Referer" to "$catalog/",
-                            )
                         suspend fun page(url: String): String? =
-                            withTimeoutOrNull(6000) {
-                                playbackRequest(url, webHeaders)?.takeIf { it.first == 200 }?.second
-                            }
+                            withTimeoutOrNull(6000) { catalogRequest(url) }
                         val primaryPublic = async {
                             val title = titles.first()
                             val key = "search:$type:${tmdbId.orEmpty()}:$title"
