@@ -516,7 +516,6 @@ internal class AdiDrakorMovieboxEngine(
         mediaSession: AdiDrakorMovieboxMedia = AdiDrakorMovieboxMedia(),
         onStage: (String) -> Unit = {},
     ): Boolean {
-        if (metadataContext.isEmpty()) AdiDrakorMovieboxDiagnostics.clear()
         val selected = AppUtils.tryParseJson<EpData>(data) ?: return false
         if (!selected.subjectId.matches(Regex("[0-9]+")) || selected.se < 0 || selected.ep < 0)
             return false
@@ -610,48 +609,6 @@ internal class AdiDrakorMovieboxEngine(
 
         val labelCounts = mutableMapOf<String, Int>()
         val completedGroups = mutableSetOf<String>()
-        fun diagnostic(
-            stage: String,
-            reason: String,
-            subject: String,
-            stream: AdiDrakorMovieboxPlayback.Stream? = null,
-            event: AdiDrakorMovieboxMedia.Event? = null,
-            candidates: Int? = null,
-            validated: Int? = null,
-        ) {
-            val fields =
-                mutableMapOf<String, Any?>(
-                    "subjectId" to subject,
-                    "se" to se,
-                    "ep" to ep,
-                    "type" to (stream?.format ?: selected.subjectType.toString()),
-                    "quality" to stream?.quality,
-                    "codec" to
-                        stream?.let {
-                            AdiDrakorMovieboxPlayback.codecName(it.codec).takeIf { c ->
-                                c in setOf("H.264", "H.265", "AV1", "VP9")
-                            } ?: "unknown"
-                        },
-                    "audio" to stream?.category?.name,
-                    "candidates" to candidates,
-                    "validated" to validated,
-                )
-            if (event != null)
-                fields.putAll(
-                    mapOf(
-                        "host" to event.host,
-                        "status" to event.status,
-                        "mime" to event.mime,
-                        "redirect" to event.redirect,
-                        "attempt" to event.attempt,
-                        "elapsedMs" to event.elapsedMs,
-                        "ranged" to event.ranged,
-                        "retryAfterMs" to event.retryAfterMs,
-                        "protocol" to event.protocol,
-                    )
-                )
-            AdiDrakorMovieboxDiagnostics.record(stage, reason, fields)
-        }
         suspend fun emit(choice: PlaybackChoice) {
             val stream = choice.stream
             val label = AdiDrakorMovieboxPlayback.label(stream, choice.format)
@@ -676,7 +633,6 @@ internal class AdiDrakorMovieboxEngine(
                     stream.quality?.let { this.quality = it }
                 }
             )
-            diagnostic("FINAL-PLAYBACK", "PLAYBACK_READY", selected.subjectId, stream)
         }
         suspend fun collectStreams(
             raw: String,
@@ -753,34 +709,13 @@ internal class AdiDrakorMovieboxEngine(
                         AdiDrakorMovieboxPlayback.WEB_UA,
                     )
                 val cacheKey = stream.url + "|" + headers.toSortedMap()
-                diagnostic(
-                    "MEDIA-CANDIDATE",
-                    "H5_STREAM_PARSED",
-                    subject,
-                    stream,
-                    candidates = candidates.size,
-                )
                 val valid =
                     validatedUrls[cacheKey]?.let { AdiDrakorMovieboxPlayback.Validated(stream, it) }
                         ?: if (cacheKey in failedUrls) null
                         else
                             try {
-                                AdiDrakorMovieboxPlayback.validateObserved(
-                                    stream,
-                                    headers,
-                                    { reason ->
-                                        diagnostic("MEDIA-VALIDATION", reason, subject, stream)
-                                    },
-                                ) { url, h, manifest ->
-                                    mediaSession.sample(url, h, stream.url, manifest) { event ->
-                                        diagnostic(
-                                            event.stage,
-                                            event.reason,
-                                            subject,
-                                            stream,
-                                            event,
-                                        )
-                                    }
+                                AdiDrakorMovieboxPlayback.validateObserved(stream, headers, {}) { url, h, manifest ->
+                                    mediaSession.sample(url, h, stream.url, manifest)
                                 }
                             } catch (e: CancellationException) {
                                 throw e
@@ -808,13 +743,6 @@ internal class AdiDrakorMovieboxEngine(
             Log.d(
                 TAG,
                 "[PLAYBACK-H5] subject=$subject parsed=${parsed.size} audioFiltered=${parsed.count { it.category == AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED }} candidates=${candidates.size} validated=$count se=$se ep=$ep",
-            )
-            diagnostic(
-                "H5-PLAY-RESPONSE",
-                if (candidates.isEmpty()) "H5_EMPTY" else "H5_STREAM_PARSED",
-                subject,
-                candidates = candidates.size,
-                validated = count,
             )
             onStage(
                 if (candidates.isEmpty()) "H5_NO_STREAM"
@@ -882,24 +810,10 @@ internal class AdiDrakorMovieboxEngine(
                         "&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1"
                 val referer =
                     "$host/movies/$encodedPath?id=$subject&type=/movie/detail&detailSe=&detailEp=&lang=en"
-                diagnostic("H5-PLAY-REQUEST", "H5_REQUEST", subject)
                 val response = playbackRequest(url, webHeaders(host, referer))
                 if (response == null) {
-                    diagnostic("H5-PLAY-RESPONSE", "H5_REQUEST_FAILED", subject)
                     continue
                 }
-                diagnostic(
-                    "H5-PLAY-RESPONSE",
-                    if (response.first == 200) "H5_RESPONSE" else "H5_REQUEST_FAILED",
-                    subject,
-                    event =
-                        AdiDrakorMovieboxMedia.Event(
-                            "H5-PLAY-RESPONSE",
-                            "",
-                            java.net.URI(host).host,
-                            response.first,
-                        ),
-                )
                 if (
                     response.first == 200 &&
                         collectStreams(
@@ -983,12 +897,6 @@ internal class AdiDrakorMovieboxEngine(
                 TAG,
                 "[PLAYBACK-H5] no validated resource subject=${selected.subjectId} se=$se ep=$ep",
             )
-        diagnostic(
-            "FINAL-PLAYBACK",
-            if (orderedChoices.isEmpty()) "NO_VALID_MEDIA" else "PLAYBACK_READY",
-            selected.subjectId,
-            validated = orderedChoices.size,
-        )
         return orderedChoices.isNotEmpty()
     }
 
@@ -1006,23 +914,11 @@ internal class AdiDrakorMovieboxEngine(
         runtimeMinutes: Int? = null,
         castNames: List<String> = emptyList(),
     ): Boolean {
-        AdiDrakorMovieboxDiagnostics.clear()
         val started = System.nanoTime()
         fun report(stage: String, reason: String, candidates: Int = 0, verified: Int = 0) {
             Log.d(
                 TAG,
                 "[FINDER] stage=$stage reason=$reason candidates=$candidates verified=$verified elapsedMs=${(System.nanoTime()-started)/1_000_000} type=$type se=$season ep=$episode",
-            )
-            AdiDrakorMovieboxDiagnostics.record(
-                "FINDER-$stage",
-                reason,
-                mapOf(
-                    "candidates" to candidates,
-                    "verified" to verified,
-                    "elapsedMs" to (System.nanoTime() - started) / 1_000_000,
-                    "se" to season,
-                    "ep" to episode,
-                ),
             )
         }
         val completed =
@@ -1340,24 +1236,9 @@ internal class AdiDrakorMovieboxEngine(
                                     "SUBJECT_DETAIL_UNAVAILABLE" -> "DETAIL_UNAVAILABLE"
                                     else -> discovery.reason
                                 }
-                            AdiDrakorMovieboxDiagnostics.record(
-                                "SPIDER-IDENTITY",
-                                "IDENTITY_REJECTED",
-                                mapOf("tmdbId" to tmdbId, "candidates" to discovery.candidates),
-                            )
                             report("identity", reason, discovery.candidates, discovery.verified)
                             return@coroutineScope false
                         }
-                        AdiDrakorMovieboxDiagnostics.record(
-                            "SPIDER-IDENTITY",
-                            "IDENTITY_VERIFIED",
-                            mapOf(
-                                "tmdbId" to tmdbId,
-                                "subjectId" to subject.id,
-                                "se" to season,
-                                "ep" to episode,
-                            ),
-                        )
                         report("identity", "VERIFIED", discovery.candidates, discovery.verified)
                         val mediaSession = AdiDrakorMovieboxMedia()
                         var current: AdiDrakorMovieboxMapping.Result = discovery

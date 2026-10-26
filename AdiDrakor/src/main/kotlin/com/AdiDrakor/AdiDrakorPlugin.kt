@@ -12,7 +12,6 @@ class AdiDrakorPlugin : Plugin() {
 
     override fun load(context: Context) {
         AdiDrakorMovieboxEngine.attachContext(context)
-        openSettings = { settingsContext -> AdiDrakorMovieboxDiagnostics.show(settingsContext) }
         registerMainAPI(AdiDrakor())
     }
 }

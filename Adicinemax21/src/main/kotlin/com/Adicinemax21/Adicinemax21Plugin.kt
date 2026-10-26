@@ -12,7 +12,6 @@ class Adicinemax21Plugin : Plugin() {
 
     override fun load(context: Context) {
         Adicinemax21MovieboxEngine.attachContext(context)
-        openSettings = { settingsContext -> Adicinemax21MovieboxDiagnostics.show(settingsContext) }
         registerMainAPI(Adicinemax21())
     }
 }
