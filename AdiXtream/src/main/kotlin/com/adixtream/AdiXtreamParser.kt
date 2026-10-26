@@ -30,6 +30,7 @@ internal object AdiXtreamMovieboxMapping {
         val localizedTitles: List<String> = emptyList(),
         val localizedOverviews: List<String> = emptyList(),
         val originalLanguage: String? = null,
+        val crewNames: List<String> = emptyList(),
     )
 
     data class Subject(val id: String, val title: String, val year: Int?, val type: Int)
@@ -226,6 +227,18 @@ internal object AdiXtreamMovieboxMapping {
                                 meta.optJSONObject("credits")?.optJSONArray("cast")
                             )
                             .take(8)
+                            .map { AdiXtreamMovieboxPlayback.text(it, "name") })
+                    .filter { it.isNotBlank() }
+                    .distinct(),
+            crewNames =
+                (r.crewNames +
+                        AdiXtreamMovieboxPlayback.objects(
+                                meta.optJSONObject("credits")?.optJSONArray("crew")
+                            )
+                            .filter {
+                                AdiXtreamMovieboxPlayback.text(it, "job") in
+                                    setOf("Director", "Writer", "Screenplay", "Story", "Novel")
+                            }
                             .map { AdiXtreamMovieboxPlayback.text(it, "name") })
                     .filter { it.isNotBlank() }
                     .distinct(),
@@ -551,8 +564,14 @@ internal object AdiXtreamMovieboxMapping {
                 works != null &&
                 works.size == 1 &&
                 works.single().id == r.tmdbId
-        )
+        ) {
+            // Moviebox may list directors/writers instead of cast. Accept two distinct
+            // selected-work crew credits only for an exact, unambiguous movie identity.
+            val crew = r.crewNames.map(::normalize).filter { it.isNotBlank() }.toSet()
+            if (r.type == 1 && subject(meta)?.type == r.type && crew.intersect(names).size >= 2)
+                return "CREW_MATCH"
             return "TMDB_UNIQUE_WORK"
+        }
         return if (works == null) "TMDB_IDENTITY_UNVERIFIED" else "AMBIGUOUS_TMDB_WORK"
     }
 
@@ -561,6 +580,7 @@ internal object AdiXtreamMovieboxMapping {
             setOf(
                 "EXTERNAL_ID_MATCH",
                 "CAST_MATCH",
+                "CREW_MATCH",
                 "PLOT_MATCH",
                 "CROSS_LANGUAGE_VERIFIED",
                 "LEGACY_TITLE_YEAR",
@@ -889,7 +909,13 @@ internal object AdiXtreamMovieboxMapping {
                         remaining.all { it.id in ids } && verified.keys.all { it in ids }
                     }
             val strong =
-                setOf("EXTERNAL_ID_MATCH", "CAST_MATCH", "PLOT_MATCH", "CROSS_LANGUAGE_VERIFIED")
+                setOf(
+                    "EXTERNAL_ID_MATCH",
+                    "CAST_MATCH",
+                    "CREW_MATCH",
+                    "PLOT_MATCH",
+                    "CROSS_LANGUAGE_VERIFIED",
+                )
             val chosen: List<Pair<Subject, JSONObject>> =
                 when {
                     families.size == 1 -> listOf(families.single())
