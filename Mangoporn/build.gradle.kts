@@ -1,4 +1,4 @@
-version = 4
+version = 6
 
 cloudstream {
     authors     = listOf("AmanHnB")
@@ -16,3 +16,4 @@ cloudstream {
     tvTypes = listOf("NSFW")
     iconUrl = "http://mangoporn.net/wp-content/uploads/2024/07/mangoporn.net_.png"
 }
+
