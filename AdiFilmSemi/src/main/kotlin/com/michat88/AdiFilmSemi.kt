@@ -381,11 +381,11 @@ open class AdiFilmSemi : TmdbProvider() {
 
     private val movieboxEngine by lazy { AdiFilmSemiMovieboxEngine(name, apiKey) }
 
-    private val multiSource by lazy { com.michat88.sources.MultiSource(apiKey) }
+    private val multiSource by lazy { com.michat88.MultiSource(apiKey) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.michat88.sources.MultiSource.isAdditional(extractorLink))
-            com.michat88.sources.MultiSource.additionalInterceptor()
+        if (com.michat88.MultiSource.isAdditional(extractorLink))
+            com.michat88.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 
     override suspend fun loadLinks(
@@ -405,7 +405,7 @@ open class AdiFilmSemi : TmdbProvider() {
             }
         val titles = listOfNotNull(item.title, item.orgTitle, item.jpTitle) + item.alternativeTitles
         return multiSource.resolve(
-            com.michat88.sources.MediaIdentity.Request(
+            com.michat88.MediaIdentity.Request(
                 titles,
                 item.airedYear ?: item.year,
                 type,

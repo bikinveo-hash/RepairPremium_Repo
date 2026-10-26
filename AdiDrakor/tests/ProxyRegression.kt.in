@@ -1,4 +1,4 @@
-package PACKAGE.sources
+package PACKAGE
 
 import java.net.*
 import java.io.*

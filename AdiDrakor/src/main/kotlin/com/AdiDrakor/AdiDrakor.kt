@@ -364,11 +364,11 @@ open class AdiDrakor : TmdbProvider() {
 
     private val movieboxEngine by lazy { AdiDrakorMovieboxEngine(name, apiKey) }
 
-    private val multiSource by lazy { com.AdiDrakor.sources.MultiSource(apiKey) }
+    private val multiSource by lazy { com.AdiDrakor.MultiSource(apiKey) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.AdiDrakor.sources.MultiSource.isAdditional(extractorLink))
-            com.AdiDrakor.sources.MultiSource.additionalInterceptor()
+        if (com.AdiDrakor.MultiSource.isAdditional(extractorLink))
+            com.AdiDrakor.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 
     override suspend fun loadLinks(
@@ -390,7 +390,7 @@ open class AdiDrakor : TmdbProvider() {
             listOfNotNull(item.title, item.orgTitle, item.jpTitle, item.altTitle) +
                 item.alternativeTitles
         return multiSource.resolve(
-            com.AdiDrakor.sources.MediaIdentity.Request(
+            com.AdiDrakor.MediaIdentity.Request(
                 titles,
                 item.airedYear ?: item.year,
                 type,

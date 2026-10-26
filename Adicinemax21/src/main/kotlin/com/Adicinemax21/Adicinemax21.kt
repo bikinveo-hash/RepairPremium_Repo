@@ -387,11 +387,11 @@ open class Adicinemax21 : TmdbProvider() {
 
     private val movieboxEngine by lazy { Adicinemax21MovieboxEngine(name, apiKey) }
 
-    private val multiSource by lazy { com.Adicinemax21.sources.MultiSource(apiKey) }
+    private val multiSource by lazy { com.Adicinemax21.MultiSource(apiKey) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.Adicinemax21.sources.MultiSource.isAdditional(extractorLink))
-            com.Adicinemax21.sources.MultiSource.additionalInterceptor()
+        if (com.Adicinemax21.MultiSource.isAdditional(extractorLink))
+            com.Adicinemax21.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 
     override suspend fun loadLinks(
@@ -413,7 +413,7 @@ open class Adicinemax21 : TmdbProvider() {
             listOfNotNull(item.title, item.orgTitle, item.jpTitle, item.altTitle) +
                 item.alternativeTitles
         return multiSource.resolve(
-            com.Adicinemax21.sources.MediaIdentity.Request(
+            com.Adicinemax21.MediaIdentity.Request(
                 titles,
                 item.airedYear ?: item.year,
                 type,

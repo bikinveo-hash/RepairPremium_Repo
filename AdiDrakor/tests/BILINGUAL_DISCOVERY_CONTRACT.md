@@ -58,7 +58,7 @@ is media acquisition/validation, not missing bilingual title discovery.
 
 ## Tests
 
-`python3 AdiDrakor/tests/run_migration.py` compiles all five providers against the
+`python3 AdiDrakor/tests/run_regression.py` compiles all five providers against the
 actual CloudStream SDK, checks independent-source parity, and exercises positive,
 negative and registered-MainAPI fixtures. New cases cover official bilingual
 aliases/synopses, wrong metadata owner, ambiguous alias, ID/year/type conflicts,

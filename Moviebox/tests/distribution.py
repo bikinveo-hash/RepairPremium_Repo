@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
-"""Publish standalone Moviebox or one selected plugin, preserving unrelated bytes.
-
-The existing Adi staging/verification scripts remain unchanged. retain-adi supplies
-their publication inputs from the release, after compilation has already succeeded.
-Only ignored build outputs are written; no Adi source/test/configuration is touched.
-"""
+"""Build changed plugins and publish matching packages without replacing other releases."""
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import struct
+import subprocess
 import zipfile
 import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
-ADI = {"AdiDrakor", "AdiFilmSemi", "AdiXtream", "Adicinemax21"}
 REPOSITORY = "bikinveo-hash/RepairPremium_Repo"
-MOVIEBOX_CLASSES = {
-    "Lcom/Moviebox/" + name + ";" for name in (
-        "MovieBoxProvider", "MovieboxPlugin", "MovieboxPlayback",
-        "MovieboxPlaybackContext", "MovieboxEpisodes",
-    )
-}
+ADI = {"AdiDrakor": "com.AdiDrakor", "AdiFilmSemi": "com.michat88",
+       "AdiXtream": "com.adixtream", "Adicinemax21": "com.Adicinemax21"}
+MOVIEBOX_CLASSES = {"Lcom/Moviebox/" + name + ";" for name in (
+    "MovieBoxProvider", "MovieboxPlugin", "MovieboxPlayback",
+    "MovieboxPlaybackContext", "MovieboxEpisodes",
+)}
 
 
 def sha256(path):
@@ -32,7 +28,7 @@ def sha256(path):
 
 def catalog(rows):
     result = {row["internalName"]: row for row in rows}
-    assert len(rows) == len(result), "Duplicate catalog identity"
+    assert len(result) == len(rows), "Duplicate catalog identity"
     assert all(re.fullmatch(r"[A-Za-z0-9_-]+", name) for name in result), "Invalid catalog identity"
     return result
 
@@ -50,9 +46,6 @@ def dex_classes(data):
         while data[start] & 0x80:
             start += 1
         start += 1
-        # DEX strings use modified UTF-8 (including C0 80 for NUL). Class
-        # descriptors compared below are ASCII; unrelated string constants can
-        # contain modified encodings and must not reject an otherwise valid DEX.
         strings.append(data[start:data.index(b"\0", start)].decode("utf-8", errors="replace"))
     count, offset = struct.unpack_from("<II", data, 64)
     types = [strings[struct.unpack_from("<I", data, offset + index * 4)[0]] for index in range(count)]
@@ -62,177 +55,165 @@ def dex_classes(data):
     return classes
 
 
-def verify_package(path, row, moviebox=False):
-    assert path.stat().st_size == row["fileSize"], "Artifact size mismatch: " + path.name
-    assert row["fileHash"] == "sha256-" + sha256(path), "Artifact hash mismatch: " + path.name
-    assert row["url"] == f"https://raw.githubusercontent.com/{REPOSITORY}/builds/{row['internalName']}.cs3", "Incorrect artifact URL"
+def verify_package(path, row, selected=False):
+    name = row["internalName"]
+    assert path.stat().st_size == row["fileSize"], "Artifact size mismatch: " + name
+    assert row["fileHash"] == "sha256-" + sha256(path), "Artifact hash mismatch: " + name
+    assert row["url"] == f"https://raw.githubusercontent.com/{REPOSITORY}/builds/{name}.cs3", "Incorrect artifact URL"
+    if selected:
+        assert row.get("repositoryUrl") == f"https://github.com/{REPOSITORY}", "Incorrect repository identity: " + name
     with zipfile.ZipFile(path) as archive:
-        assert archive.testzip() is None, "Corrupt ZIP"
+        assert archive.testzip() is None, "Corrupt ZIP: " + name
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["name"] == row["internalName"] and manifest["version"] == row["version"], "Manifest mismatch"
-        classes = dex_classes(archive.read("classes.dex"))
-        if moviebox:
-            assert manifest["pluginClassName"] == "com.Moviebox.MovieboxPlugin", "Incorrect Moviebox plugin class"
-            assert MOVIEBOX_CLASSES <= set(classes), "Missing Moviebox production classes"
-            assert [name for name in classes if name.endswith("Plugin;")] == ["Lcom/Moviebox/MovieboxPlugin;"], "Duplicate plugin entry"
-            assert not any(name.startswith(("Lcom/AdiDrakor/", "Lcom/michat88/", "Lcom/adixtream/", "Lcom/Adicinemax21/")) for name in classes), "Adi dependency in standalone Moviebox"
-            assert not any("Regression" in name or "Integration" in name or name.startswith("Landroid/") for name in classes), "Test classes packaged"
-        elif row["internalName"] == "Mangoporn" and row["version"] >= 7:
-            plugin = "com.Mangoporn.MangoPornPlugin"
-            entry = "Lcom/Mangoporn/MangoPornPlugin;"
-            assert manifest["pluginClassName"] == plugin, "Incorrect MangoPorn plugin class"
-            assert {"Lcom/Mangoporn/MangoPorn;", entry} <= set(classes), "Missing MangoPorn production classes"
-            assert [name for name in classes if name.endswith("Plugin;")] == [entry], "Duplicate MangoPorn plugin entry"
-        assert not any(name.startswith("com/Moviebox/tests/") or name.endswith(("Regression.class", "Integration.class")) for name in archive.namelist()), "Test classes packaged"
+        assert manifest["name"] == name and manifest["version"] == row["version"], "Manifest mismatch: " + name
+        classes = set(dex_classes(archive.read("classes.dex")))
+        plugin = manifest["pluginClassName"]
+        entry = "L" + plugin.replace(".", "/") + ";"
+        assert entry in classes, "Missing plugin entry: " + name
+        expected = {m: pkg + "." + m + "Plugin" for m, pkg in ADI.items()}
+        expected.update(Moviebox="com.Moviebox.MovieboxPlugin", Mangoporn="com.Mangoporn.MangoPornPlugin")
+        if name in expected:
+            assert plugin == expected[name], "Incorrect plugin class: " + name
+            assert {c for c in classes if c.endswith("Plugin;")} == {entry}, "Duplicate plugin entry: " + name
+        if name == "Moviebox" and row["version"] >= 20:
+            assert MOVIEBOX_CLASSES <= classes, "Missing Moviebox production classes"
+        if selected and name in ADI:
+            prefix = "L" + ADI[name].replace(".", "/") + "/"
+            required = {"MediaIdentity", "MultiSource", "IdlixSource", "Majorplay", "OppaSource",
+                        "OppaPlayback", "LocalProxy", "HydraxMedia", name,
+                        name + "MovieboxEngine", name + "MovieboxMapping",
+                        name + "MovieboxMedia", name + "MovieboxPlayback"}
+            assert {prefix + c + ";" for c in required} <= classes, "Missing Adi production classes: " + name
+            assert not any(c.startswith(prefix + "sources/") for c in classes), "Old nested package: " + name
+        if name == "Mangoporn" and row["version"] >= 7:
+            assert "Lcom/Mangoporn/MangoPorn;" in classes, "Missing MangoPorn provider"
+        assert not any("Regression" in c or "Integration" in c for c in classes), "Test classes packaged: " + name
         return manifest
 
 
 def inventory(folder):
-    return {
-        str(path.relative_to(folder)): sha256(path)
-        for path in sorted(folder.rglob("*"))
-        if path.is_file() and ".git" not in path.relative_to(folder).parts
-    }
+    return {str(p.relative_to(folder)): sha256(p) for p in sorted(folder.rglob("*"))
+            if p.is_file() and ".git" not in p.relative_to(folder).parts}
 
 
 def verify_catalog(folder):
     rows = catalog(json.loads((folder / "plugins.json").read_text()))
+    identity = json.loads((folder / "repo.json").read_text())
+    assert identity["pluginLists"] == [
+        f"https://raw.githubusercontent.com/{REPOSITORY}/builds/plugins.json"
+    ], "Incorrect repository identity"
     for name, row in rows.items():
-        verify_package(folder / (name + ".cs3"), row, moviebox=name == "Moviebox" and row["version"] >= 20)
+        verify_package(folder / (name + ".cs3"), row)
+        if row.get("jarUrl"):
+            jar = folder / (name + ".jar")
+            assert row["jarUrl"] == f"https://raw.githubusercontent.com/{REPOSITORY}/builds/{name}.jar"
+            assert jar.stat().st_size == row["jarFileSize"] and row["jarHash"] == "sha256-" + sha256(jar), "JAR mismatch: " + name
     return rows
 
 
-def snapshot(folder, state_file):
-    rows = verify_catalog(folder)
-    assert ADI | {"Moviebox"} <= set(rows), "Missing protected catalog entries"
-    state_file.write_text(json.dumps({"catalog": list(rows.values()), "files": inventory(folder)}, indent=2) + "\n")
-    print("PASS publication baseline:", len(rows), "plugins")
+def changed_modules(modules, paths):
+    shared = {"build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat"}
+    if any(p in shared or p.startswith("gradle/") for p in paths):
+        return sorted(modules)
+    return sorted({p.split("/")[0] for p in paths
+                   if p.split("/")[0] in modules and
+                   ("/src/main/" in p or p.endswith("/build.gradle.kts"))})
 
 
-def preserved(folder, state, allow_moviebox):
-    before = catalog(state["catalog"])
-    after = verify_catalog(folder)
-    assert set(before) == set(after), "Catalog identities changed"
-    for name in before:
-        if name != "Moviebox" or not allow_moviebox:
-            assert before[name] == after[name], "Protected catalog entry changed: " + name
-    files = inventory(folder)
-    assert files.keys() == state["files"].keys(), "Published file inventory changed"
-    allowed = {"plugins.json"} | ({"Moviebox.cs3"} if allow_moviebox else set())
-    for path, digest in state["files"].items():
-        if path not in allowed:
-            assert files[path] == digest, "Protected published file changed: " + path
-    return before, after
+def plan(folder, state_file, rebuild_all=False):
+    before = verify_catalog(folder)
+    modules = {p.parent.name for p in ROOT.glob("*/build.gradle.kts")}
+    assert all(re.fullmatch(r"[A-Za-z0-9_-]+", m) for m in modules), "Invalid module name"
+    message = subprocess.check_output(["git", "log", "-1", "--format=%B"], cwd=folder, text=True)
+    match = re.search(r"^Build ([0-9a-f]{40})$", message, re.M)
+    base = match[1] if match else None
+    source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if not rebuild_all and base:
+        subprocess.run(["git", "cat-file", "-e", base + "^{commit}"], cwd=ROOT, check=True)
+        paths = subprocess.check_output(
+            ["git", "diff", "--name-only", "--no-renames", "-z", base, source, "--"],
+            cwd=ROOT,
+        ).decode().strip("\0").split("\0")
+        removed = {p.split("/")[0] for p in paths if p.endswith("/build.gradle.kts")} & (set(before) - modules)
+        assert not removed, "Published module removed; retain its source or remove its release explicitly"
+        selected = changed_modules(modules, paths)
+    else:
+        selected = sorted(modules)
+    state = {"source": source, "base": base, "modules": selected,
+             "catalog": list(before.values()), "files": inventory(folder)}
+    state_file.write_text(json.dumps(state, indent=2) + "\n")
+    print("Selected plugins:", ", ".join(selected) or "none")
+    return state
 
 
-def retain_adi(folder, state):
-    before, _ = preserved(folder, state, allow_moviebox=False)
-    generated_file = ROOT / "build/plugins.json"
-    generated = json.loads(generated_file.read_text())
-    compiled = catalog(generated)
-    assert ADI <= set(compiled), "Missing compiled Adi metadata"
-    for name in sorted(ADI):
-        output = ROOT / name / "build" / (name + ".cs3")
-        assert output.is_file(), "Adi compilation output missing: " + name
-        verify_package(output, compiled[name])
-        # Compilation is a control only. Reuse the released bytes for the unchanged
-        # Adi publication stage, regardless of compiler/archive nondeterminism.
-        shutil.copyfile(folder / output.name, output)
-    generated_file.write_text(json.dumps([
-        before[row["internalName"]] if row["internalName"] in ADI else row for row in generated
-    ], indent=2) + "\n")
-    print("PASS Adi publication inputs retained from released artifacts; source untouched")
+def build(folder, state_file, rebuild_all=False):
+    state = plan(folder, state_file, rebuild_all)
+    if state["modules"]:
+        (ROOT / "local.properties").touch(exist_ok=True)
+        subprocess.run(["bash", "./gradlew", *[
+            ":" + module + ":writeCacheEntry" for module in state["modules"]
+        ]], cwd=ROOT, check=True)
 
 
 def prepare(folder, state):
-    before, _ = preserved(folder, state, allow_moviebox=False)
-    generated = catalog(json.loads((ROOT / "build/plugins.json").read_text()))
-    row = generated["Moviebox"]
-    source = ROOT / "Moviebox/build/Moviebox.cs3"
-    verify_package(source, row, moviebox=True)
-    version = int(re.search(r"^version\s*=\s*(\d+)", (ROOT / "Moviebox/build.gradle.kts").read_text(), re.M)[1])
-    assert row["version"] == version, "Generated version differs from source"
-    assert row["version"] >= before["Moviebox"]["version"], "Moviebox version downgrade"
-    if row["version"] == before["Moviebox"]["version"]:
-        assert row["fileHash"] == before["Moviebox"]["fileHash"], "Changed Moviebox needs a version increase"
-    # All checks happen before changing the disposable distribution checkout.
-    temporary = folder / "Moviebox.cs3.pending"
-    shutil.copyfile(source, temporary)
-    temporary.replace(folder / "Moviebox.cs3")
-    rows = [row if old["internalName"] == "Moviebox" else old for old in state["catalog"]]
-    temporary = folder / "plugins.json.pending"
-    temporary.write_text(json.dumps(rows, indent=2) + "\n")
-    temporary.replace(folder / "plugins.json")
-    verify(folder, state)
-
-
-def verify(folder, state):
-    before, after = preserved(folder, state, allow_moviebox=True)
-    row = after["Moviebox"]
-    assert row["version"] >= before["Moviebox"]["version"], "Moviebox version downgrade"
-    if row["version"] == before["Moviebox"]["version"]:
-        assert row["fileHash"] == before["Moviebox"]["fileHash"], "Changed Moviebox needs a version increase"
-    version = int(re.search(r"^version\s*=\s*(\d+)", (ROOT / "Moviebox/build.gradle.kts").read_text(), re.M)[1])
-    assert row["version"] == version, "Published version differs from source"
-    verify_package(folder / "Moviebox.cs3", row, moviebox=True)
-    generated = catalog(json.loads((ROOT / "build/plugins.json").read_text()))["Moviebox"]
-    assert row == generated, "Moviebox publication differs from generated metadata"
-    assert sha256(folder / "Moviebox.cs3") == sha256(ROOT / "Moviebox/build/Moviebox.cs3"), "Published Moviebox differs from build"
-    print("PASS final catalog:", len(after), "plugins; Moviebox version", row["version"])
-    print("PASS Adi artifact hash parity; all non-Moviebox entries and published bytes unchanged")
-
-
-def publish_plugin(folder, module):
-    """Run after Moviebox verification; allow exactly this module's package/entry."""
-    assert re.fullmatch(r"[A-Za-z0-9_-]+", module), "Invalid plugin identity"
-    before = verify_catalog(folder)
-    files_before = inventory(folder)
-    generated = catalog(json.loads((ROOT / "build/plugins.json").read_text()))
-    row = generated[module]
-    old = before[module]
-    source = ROOT / module / "build" / (module + ".cs3")
-    verify_package(source, row)
-    version = int(re.search(r"^version\s*=\s*(\d+)", (ROOT / module / "build.gradle.kts").read_text(), re.M)[1])
-    assert row["version"] == version, "Generated version differs from source"
-    assert version >= old["version"], "Plugin version downgrade"
-    if version == old["version"]:
-        assert row["fileHash"] == old["fileHash"], "Changed plugin needs a version increase"
-    # All inputs have been validated before changing the distribution checkout.
-    shutil.copyfile(source, folder / source.name)
-    rows = [row if item["internalName"] == module else item for item in before.values()]
-    (folder / "plugins.json").write_text(json.dumps(rows, indent=2) + "\n")
+    assert inventory(folder) == state["files"], "Distribution changed after planning"
+    before = catalog(state["catalog"])
+    updates = {}
+    artifacts = {}
+    for module in state["modules"]:
+        output = ROOT / module / "build"
+        row = json.loads((output / "plugin-entry.json").read_text())
+        assert row["internalName"] == module, "Generated plugin identity mismatch"
+        verify_package(output / (module + ".cs3"), row, selected=True)
+        version = int(re.search(r"^version\s*=\s*(\d+)", (ROOT / module / "build.gradle.kts").read_text(), re.M)[1])
+        assert row["version"] == version, "Generated version differs from source: " + module
+        if module in before:
+            assert version >= before[module]["version"], "Version downgrade: " + module
+            if version == before[module]["version"]:
+                assert (row["fileHash"], row.get("jarHash")) == (
+                    before[module]["fileHash"], before[module].get("jarHash")
+                ), "Changed package needs a version increase: " + module
+        artifacts[module + ".cs3"] = output / (module + ".cs3")
+        if row.get("jarUrl"):
+            jar = output / (module + ".jar")
+            assert row["jarUrl"] == f"https://raw.githubusercontent.com/{REPOSITORY}/builds/{module}.jar"
+            assert jar.stat().st_size == row["jarFileSize"] and row["jarHash"] == "sha256-" + sha256(jar), "JAR mismatch: " + module
+            artifacts[jar.name] = jar
+        updates[module] = row
+    # Every selected input is checked before the distribution checkout is changed.
+    for name, source in artifacts.items():
+        shutil.copyfile(source, folder / name)
+    rows = [updates.get(name, row) for name, row in before.items()]
+    rows.extend(row for name, row in updates.items() if name not in before)
+    if updates:
+        (folder / "plugins.json").write_text(json.dumps(rows, indent=2) + "\n")
     after = verify_catalog(folder)
-    files_after = inventory(folder)
-    assert list(before) == list(after), "Catalog identities/order changed"
-    assert files_before.keys() == files_after.keys(), "Published file inventory changed"
-    for name in before:
-        if name != module:
-            assert before[name] == after[name], "Unrelated catalog entry changed: " + name
-    for path, value in files_before.items():
-        if path not in {"plugins.json", source.name}:
-            assert files_after[path] == value, "Unrelated published file changed: " + path
-    assert after[module] == row and sha256(folder / source.name) == sha256(source), "Published plugin differs from build"
-    print("PASS selected publication:", module, "version", version, "; unrelated metadata and bytes preserved")
+    files = inventory(folder)
+    allowed = {"plugins.json", *artifacts}
+    assert set(files) == set(state["files"]) | set(artifacts), "Unexpected published file inventory"
+    for name, row in before.items():
+        if name not in updates:
+            assert after[name] == row, "Unrelated catalog entry changed: " + name
+    for path, digest in state["files"].items():
+        if path not in allowed:
+            assert files[path] == digest, "Unrelated published file changed: " + path
+    for name, row in updates.items():
+        assert after[name] == row, "Published catalog differs from build: " + name
+    for name, source in artifacts.items():
+        assert files[name] == sha256(source), "Published artifact differs from build: " + name
+    print("PASS publication:", len(updates), "updated plugins;", len(after), "catalog entries; unrelated releases preserved")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["snapshot", "retain-adi", "prepare", "verify", "publish-plugin"])
+    parser.add_argument("command", choices=["build", "prepare"])
     parser.add_argument("distribution", type=Path)
-    parser.add_argument("state", type=Path, nargs="?")
-    parser.add_argument("--module")
+    parser.add_argument("state", type=Path)
     args = parser.parse_args()
-    if args.command == "publish-plugin":
-        if not args.module:
-            parser.error("publish-plugin requires --module")
-        publish_plugin(args.distribution, args.module)
-    elif args.state is None:
-        parser.error(args.command + " requires a state file")
-    elif args.command == "snapshot":
-        snapshot(args.distribution, args.state)
+    if args.command == "build":
+        build(args.distribution, args.state, os.environ.get("REBUILD_ALL", "false").lower() == "true")
     else:
-        state = json.loads(args.state.read_text())
-        {"retain-adi": retain_adi, "prepare": prepare, "verify": verify}[args.command](args.distribution, state)
+        prepare(args.distribution, json.loads(args.state.read_text()))
 
 
 if __name__ == "__main__":

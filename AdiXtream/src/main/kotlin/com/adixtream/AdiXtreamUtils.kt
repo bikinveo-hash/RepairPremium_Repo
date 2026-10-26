@@ -1,5 +1,6 @@
-package com.adixtream.sources
+package com.adixtream
 
+import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -11,29 +12,431 @@ import java.net.SocketException
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.MessageDigest
+import java.text.Normalizer
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import org.json.JSONArray
+import org.json.JSONObject
+import org.jsoup.nodes.Document
+
+/** Catalog IDs are never treated as TMDB IDs. Missing identity evidence fails closed. */
+internal object MediaIdentity {
+    data class Request(
+        val titles: List<String>,
+        val year: Int?,
+        val type: Int,
+        val season: Int?,
+        val episode: Int?,
+        val tmdbId: String?,
+        val imdbId: String? = null,
+        val seasonYear: Int? = null,
+    )
+
+    data class Candidate(
+        val key: String,
+        val titles: List<String>,
+        val year: Int?,
+        val type: Int,
+        val tmdbId: String? = null,
+        val imdbId: String? = null,
+        val season: Int? = null,
+    )
+
+    data class Episode(val url: String, val season: Int?, val number: Int?)
+
+    fun normalize(s: String): String =
+        Normalizer.normalize(s, Normalizer.Form.NFKD)
+            .replace(Regex("\\p{M}+"), "")
+            .lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+
+    fun valid(r: Request): Boolean =
+        r.type in 1..2 &&
+            r.titles.any { normalize(it).isNotEmpty() } &&
+            (r.type == 1 ||
+                (r.season != null && r.season >= 0 && r.episode != null && r.episode > 0))
+
+    fun matches(r: Request, c: Candidate): Boolean {
+        if (!valid(r) || c.type != r.type) return false
+        if (r.tmdbId != null && c.tmdbId != null && r.tmdbId != c.tmdbId) return false
+        if (r.imdbId != null && c.imdbId != null && r.imdbId != c.imdbId) return false
+        if (r.type == 2 && c.season != null && c.season != r.season) return false
+        val id =
+            (r.tmdbId != null && r.tmdbId == c.tmdbId) || (r.imdbId != null && r.imdbId == c.imdbId)
+        val sameYear =
+            r.year != null && r.year == c.year ||
+                (r.type == 2 &&
+                    c.season == r.season &&
+                    r.seasonYear != null &&
+                    r.seasonYear == c.year)
+        if (r.year != null && c.year != null && !sameYear) return false
+        if (id) return true
+        // No fuzzy/token-overlap fallback: aliases must come from selected TMDB metadata.
+        return sameYear &&
+            c.titles.any { title ->
+                val n = normalize(title)
+                n.isNotEmpty() && r.titles.any { normalize(it) == n }
+            }
+    }
+
+    fun select(r: Request, rows: List<Candidate>): Candidate? =
+        rows.distinctBy { it.key }.filter { matches(r, it) }.singleOrNull()
+
+    fun episode(r: Request, rows: List<Episode>): Episode? =
+        rows
+            .distinctBy { it.url }
+            .filter { it.season == r.season && it.number == r.episode }
+            .singleOrNull()
+
+    fun text(o: JSONObject, vararg keys: String): String? =
+        keys.firstNotNullOfOrNull { k -> o.optString(k).takeIf { it.isNotBlank() && it != "null" } }
+
+    fun objects(a: JSONArray?): List<JSONObject> =
+        (0 until (a?.length() ?: 0)).mapNotNull { a?.optJSONObject(it) }
+
+    private fun year(s: String?): Int? =
+        s?.let { Regex("(?:19|20)\\d{2}").find(it)?.value?.toIntOrNull() }
+
+    fun idlix(key: String, o: JSONObject, type: Int): Candidate =
+        Candidate(
+            key,
+            listOfNotNull(
+                text(o, "title", "name"),
+                text(o, "originalTitle", "original_title", "originalName"),
+            ),
+            year(text(o, "releaseDate", "firstAirDate", "release_date", "first_air_date", "year")),
+            type,
+            text(o, "tmdbId", "tmdb_id"),
+            text(o, "imdbId", "imdb_id"),
+        )
+
+    fun catalogTitle(raw: String): String =
+        raw.replace(Regex("(?i)^(nonton|streaming|download)\\s+"), "")
+            .replace(Regex("(?i)\\s*(subtitle\\s+indonesia|sub\\s+indo)\\s*$"), "")
+            .replace(Regex("\\s*\\((?:19|20)\\d{2}\\)\\s*$"), "")
+            .trim()
+
+    fun oppa(key: String, doc: Document): Candidate? {
+        val rawTitle =
+            doc.selectFirst(".infolimit h2, h1.entry-title, h1[itemprop=name], h1.title")?.text()
+                ?: return null
+        val title = catalogTitle(rawTitle)
+        val facts = doc.select(".spe span, .info-content .info, .infox .info").map { it.text() }
+        val type =
+            facts.firstOrNull { Regex("(?i)^(tipe|type)\\s*:").containsMatchIn(it) } ?: return null
+        val kind =
+            when {
+                type.contains("Movie", true) -> 1
+                Regex("(?i)drama|series|tv show|anime").containsMatchIn(type) -> 2
+                else -> return null
+            }
+        val release =
+            facts.firstOrNull {
+                Regex("(?i)^(rilis|released|release|tahun|aired|tayang)\\s*:").containsMatchIn(it)
+            }
+        val seasonMatch = Regex("(?i)\\s+(?:season|s)\\s*(\\d+)\\s*$").find(title)
+        val season = seasonMatch?.groupValues?.get(1)?.toIntOrNull()
+        val plain = seasonMatch?.let { title.substring(0, it.range.first).trim() } ?: title
+        val aliases =
+            facts
+                .filter {
+                    Regex("(?i)^(judul lain|other name|native title|alternative titles?)\\s*:")
+                        .containsMatchIn(it)
+                }
+                .flatMap { it.substringAfter(':').split(',', ';') }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+        val links =
+            doc.select(".spe a[href], .info-content a[href], .single-info .infox a[href]").map {
+                it.attr("href")
+            }
+        val tmdb =
+            links.firstNotNullOfOrNull {
+                Regex("themoviedb\\.org/${if(kind==1) "movie" else "tv"}/(\\d+)")
+                    .find(it)
+                    ?.groupValues
+                    ?.get(1)
+            }
+        val imdb =
+            links.firstNotNullOfOrNull {
+                Regex("imdb\\.com/title/(tt\\d+)").find(it)?.groupValues?.get(1)
+            }
+        return Candidate(
+            key,
+            listOf(plain) + aliases.map(::catalogTitle),
+            year(release) ?: Regex("\\((?:19|20)\\d{2}\\)").find(rawTitle)?.value?.let(::year),
+            kind,
+            tmdb,
+            imdb,
+            season,
+        )
+    }
+
+    fun oppaEpisodes(doc: Document, c: Candidate): List<Episode> =
+        doc.select(".eplister ul li, .bxcl ul li, #chapterlist ul li, .episodelist ul li")
+            .mapNotNull { li ->
+                val a = li.selectFirst("a[href]") ?: return@mapNotNull null
+                val title =
+                    li.selectFirst(".epl-title, .playinfo h4, .lchx")?.text()
+                        ?: a.attr("title").ifBlank { a.text() }
+                val number =
+                    Regex("(?i)(?:episode|eps|ep)\\s*(\\d+)\\b")
+                        .find(title)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.toIntOrNull() ?: return@mapNotNull null
+                val season =
+                    Regex("(?i)(?:season|s)\\s*(\\d+)\\b")
+                        .find(title)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.toIntOrNull()
+                        ?: c.season
+                        ?: 1 // unnumbered catalog is season one only; never assume requested
+                // season.
+                a.absUrl("href").takeIf { it.isNotBlank() }?.let { Episode(it, season, number) }
+            }
+}
 
 /**
- * M3 + M4 — proxy lokal dengan pemindaian sync dinamis dan pemotongan prefix. MENGGANTIKAN
- * LocalServer.kt dan versi M2 LocalProxy. Hapus keduanya.
- *
- * TIGA HAL YANG DIKERJAKAN:
- * 1. PENULISAN ULANG PLAYLIST. Ini yang tidak ada di rencana milestone dan tanpanya seluruh desain
- *    tidak mungkin bekerja. URI segmen di playlist adalah URL absolut ke lh3.googleusercontent.com;
- *    kalau tidak ditulis ulang, ExoPlayer mengambilnya LANGSUNG dan proxy dilewati sepenuhnya.
- *    Setiap URI diganti menjadi http://127.0.0.1:PORT/p?u=<encoded>. Master -> variant -> segmen
- *    bekerja rekursif dengan sendirinya.
- * 2. SCANNER SYNC DINAMIS. Mencari 0x47 ber-alignment 188 byte, sama seperti yang divalidasi di
- *    Python pada 74 segmen lintas 2 judul / 4 varian. Angka 941 TIDAK di-hardcode di mana pun: ia
- *    properti satu aset gambar (806 PNG + 135 padding), bukan bagian spesifikasi MPEG-TS/HLS. Kalau
- *    TurboVIP mengganti wrapper, scanner tetap benar.
- * 3. PEMOTONGAN STREAMING. Memori konstan. Hanya jendela pemindaian yang ditampung; sisanya dipompa
- *    langsung.
- *
- * FAIL-SAFE: kalau sync tidak ditemukan, byte diteruskan APA ADANYA tanpa dipotong. Lebih baik
- * gagal seperti sebelumnya daripada merusak stream yang sebetulnya sehat.
+ * Hydrax R2 transport, matching player-v2/sw.bundle.v3.js. Part zero has no suffix; subsequent
+ * parts append their index to the filename. Only the first 64 KiB is AES-CTR encrypted, keyed by
+ * MD5 of that filename. Keep this separate from the existing TurboVIP/FileLions HLS transport.
+ */
+internal object HydraxMedia {
+    private const val PREFIX_SIZE = 65536
+    private const val UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+
+    private class Media(val url: String, val size: Long, val part: Long) {
+        @Volatile var prefix: ByteArray? = null
+    }
+
+    // Bound retained metadata and decrypted prefixes across repeated searches.
+    private val media =
+        object : LinkedHashMap<String, Media>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Media>?) =
+                size > 128
+        }
+
+    @Synchronized
+    fun clear() {
+        media.clear()
+    }
+
+    private fun allowed(raw: String): Boolean =
+        runCatching {
+                val u = URL(raw)
+                u.protocol == "https" &&
+                    (u.port == -1 || u.port == 443) &&
+                    u.userInfo == null &&
+                    u.host.lowercase().endsWith(".sssrr.org")
+            }
+            .getOrDefault(false)
+
+    @Synchronized
+    fun register(url: String, size: Long, partSize: Long): String? {
+        if (!allowed(url) || size < PREFIX_SIZE || partSize < 0 || partSize > size) return null
+        val part = partSize.takeIf { it > 0 } ?: size
+        if (part < PREFIX_SIZE) return null
+        val id = hex(MessageDigest.getInstance("SHA-256").digest("$url|$size|$part".toByteArray()))
+        if (!media.containsKey(id)) media[id] = Media(url, size, part)
+        return id
+    }
+
+    private fun open(url: String, start: Long, end: Long): HttpURLConnection {
+        var current = url
+        repeat(6) {
+            if (!allowed(current)) throw IOException("Hydrax storage host rejected")
+            val c =
+                (URL(current).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    connectTimeout = 20_000
+                    readTimeout = 30_000
+                    setRequestProperty("User-Agent", UA)
+                    setRequestProperty("Referer", "https://abyssplayer.com/")
+                    setRequestProperty("Origin", "https://abyssplayer.com")
+                    setRequestProperty("Accept-Encoding", "identity")
+                    setRequestProperty("Range", "bytes=$start-$end")
+                }
+            try {
+                val code = c.responseCode
+                if (code in listOf(301, 302, 303, 307, 308)) {
+                    val location =
+                        c.getHeaderField("Location") ?: throw IOException("Missing redirect")
+                    current = URL(URL(current), location).toString()
+                    c.disconnect()
+                } else {
+                    val cr =
+                        Regex("bytes (\\d+)-(\\d+)/(\\d+|\\*)", RegexOption.IGNORE_CASE)
+                            .matchEntire(c.getHeaderField("Content-Range") ?: "")
+                    if (
+                        code != 206 ||
+                            cr == null ||
+                            cr.groupValues[1].toLong() != start ||
+                            cr.groupValues[2].toLong() != end
+                    )
+                        throw IOException("Invalid Hydrax range: HTTP $code")
+                    return c
+                }
+            } catch (e: Exception) {
+                c.disconnect()
+                throw e
+            }
+        }
+        throw IOException("Too many Hydrax redirects")
+    }
+
+    private fun copy(c: HttpURLConnection, out: OutputStream, length: Long) {
+        try {
+            c.inputStream.use { input ->
+                val buffer = ByteArray(PREFIX_SIZE)
+                var remaining = length
+                while (remaining > 0) {
+                    val n = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                    if (n < 0) throw EOFException("Truncated Hydrax storage")
+                    out.write(buffer, 0, n)
+                    remaining -= n
+                }
+            }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    private fun prefix(m: Media): ByteArray =
+        synchronized(m) {
+            m.prefix?.let {
+                return@synchronized it
+            }
+            val out = java.io.ByteArrayOutputStream(PREFIX_SIZE)
+            copy(open(m.url, 0, PREFIX_SIZE - 1L), out, PREFIX_SIZE.toLong())
+            val original = out.toByteArray()
+            val filename = URL(m.url).path.substringAfterLast('/')
+            val key =
+                hex(MessageDigest.getInstance("MD5").digest(filename.toByteArray(Charsets.UTF_8)))
+                    .toByteArray(Charsets.US_ASCII)
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(key, "AES"),
+                IvParameterSpec(key.copyOfRange(0, 16)),
+            )
+            val decoded = cipher.doFinal(original)
+            val result =
+                when {
+                    isMp4(original) -> original
+                    isMp4(decoded) -> decoded
+                    else -> throw IOException("Hydrax MP4 header invalid")
+                }
+            m.prefix = result
+            result
+        }
+
+    private fun isMp4(bytes: ByteArray) = String(bytes, 4, 4, Charsets.US_ASCII) == "ftyp"
+
+    private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+    private fun head(out: OutputStream, code: Int, length: Long, range: String? = null) {
+        val reason =
+            when (code) {
+                200 -> "OK"
+                206 -> "Partial Content"
+                404 -> "Not Found"
+                416 -> "Range Not Satisfiable"
+                else -> "Bad Gateway"
+            }
+        out.write(
+            ("HTTP/1.1 $code $reason\r\nContent-Type: video/mp4\r\n" +
+                    "Content-Length: $length\r\nAccept-Ranges: bytes\r\n" +
+                    (range?.let { "Content-Range: $it\r\n" } ?: "") +
+                    "Cache-Control: no-store\r\nConnection: close\r\n\r\n")
+                .toByteArray()
+        )
+    }
+
+    fun serve(id: String, range: String?, headOnly: Boolean, out: OutputStream): Long {
+        val m =
+            synchronized(this) { media[id] }
+                ?: run {
+                    head(out, 404, 0)
+                    return 0
+                }
+        var start = 0L
+        var end = m.size - 1
+        if (range != null) {
+            val match =
+                Regex("bytes=(\\d*)-(\\d*)", RegexOption.IGNORE_CASE).matchEntire(range.trim())
+            val a = match?.groupValues?.get(1)?.toLongOrNull()
+            val b = match?.groupValues?.get(2)?.toLongOrNull()
+            if (
+                match == null ||
+                    (match.groupValues[1].isNotEmpty() && a == null) ||
+                    (match.groupValues[2].isNotEmpty() && b == null) ||
+                    (a == null && b == null) ||
+                    (a == null && b == 0L)
+            ) {
+                head(out, 416, 0, "bytes */${m.size}")
+                return 0
+            }
+            if (a == null) start = (m.size - b!!).coerceAtLeast(0)
+            else {
+                start = a
+                if (b != null) end = minOf(end, b)
+            }
+            if (start >= m.size || start > end) {
+                head(out, 416, 0, "bytes */${m.size}")
+                return 0
+            }
+        }
+        val length = end - start + 1
+        // Validate/decrypt before sending a success response, including seeks.
+        val first =
+            if (headOnly) null
+            else
+                try {
+                    prefix(m)
+                } catch (e: Exception) {
+                    LocalProxy.obs("HX-MEDIA-FAIL", e.javaClass.simpleName + ": " + e.message)
+                    head(out, 502, 0)
+                    return 0
+                }
+        head(
+            out,
+            if (range == null) 200 else 206,
+            length,
+            if (range == null) null else "bytes $start-$end/${m.size}",
+        )
+        if (headOnly) return 0
+        var pos = start
+        if (pos < PREFIX_SIZE) {
+            val count = (minOf(end + 1, PREFIX_SIZE.toLong()) - pos).toInt()
+            out.write(first!!, pos.toInt(), count)
+            pos += count
+        }
+        while (pos <= end) {
+            val index = pos / m.part
+            val local = pos % m.part
+            val last = minOf(end, (index + 1) * m.part - 1)
+            val url = m.url + if (index == 0L) "" else index.toString()
+            copy(open(url, local, local + last - pos), out, last - pos + 1)
+            pos = last + 1
+        }
+        out.flush()
+        return length
+    }
+}
+
+/** Loopback proxy for recursive HLS rewriting, dynamic MPEG-TS sync detection,
+ * streaming prefix removal and range requests. Unrecognized streams pass through unchanged.
  */
 internal object LocalProxy {
 

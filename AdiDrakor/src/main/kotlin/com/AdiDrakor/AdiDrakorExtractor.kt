@@ -1,4 +1,4 @@
-package com.michat88
+package com.AdiDrakor
 
 import android.content.Context
 import android.util.Base64
@@ -6,18 +6,22 @@ import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
+import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.UUID
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.*
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -26,15 +30,15 @@ import org.json.JSONObject
 /**
  * Local port of Moviebox H5 at 4a4d272. No catalog UI, plugin registration or cross-module state.
  */
-internal class AdiFilmSemiMovieboxEngine(
+internal class AdiDrakorMovieboxEngine(
     private val name: String,
     private val tmdbApiKey: String? = null,
 ) {
-    private val catalogCache = AdiFilmSemiMovieboxMapping.CatalogCache()
+    private val catalogCache = AdiDrakorMovieboxMapping.CatalogCache()
     private val mainUrl = "https://api3.aoneroom.com"
 
     companion object {
-        private const val TAG = "AdiFilmSemiMovieboxEngine"
+        private const val TAG = "AdiDrakorMovieboxEngine"
         private const val CS_USER_AGENT =
             "com.community.oneroom/50020088 (Linux; U; Android 13; en_US; Samsung; Build/TQ3A.230901.001)"
         private const val PLAYBACK_TOKEN_URL =
@@ -51,7 +55,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 "\"system_language\":\"en\",\"net\":\"NETWORK_WIFI\",\"region\":\"US\"," +
                 "\"timezone\":\"Asia/Calcutta\",\"sp_code\":\"\"}"
 
-        private const val ID_PREFS = "adifilmsemi_moviebox_identity"
+        private const val ID_PREFS = "adidrakor_moviebox_identity"
         private const val ID_KEY = "apkdeviceid"
         private val ID_FORMAT = Regex("^[0-9a-f]{32}$")
 
@@ -445,7 +449,7 @@ internal class AdiFilmSemiMovieboxEngine(
     fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
         val scope = extractorLink.url
         val mediaClient =
-            AdiFilmSemiMovieboxPlayback.client
+            AdiDrakorMovieboxPlayback.client
                 .newBuilder()
                 .followRedirects(true)
                 .followSslRedirects(false)
@@ -454,7 +458,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 .addNetworkInterceptor { chain ->
                     val request = chain.request()
                     val permitted =
-                        AdiFilmSemiMovieboxPlayback.scopeHeaders(
+                        AdiDrakorMovieboxPlayback.scopeHeaders(
                             extractorLink.headers,
                             scope,
                             request.url.toString(),
@@ -466,7 +470,7 @@ internal class AdiFilmSemiMovieboxEngine(
                     // No API bearer ever belongs on a media request.
                     builder.removeHeader("Authorization")
                     if (
-                        AdiFilmSemiMovieboxPlayback.scopeHeaders(
+                        AdiDrakorMovieboxPlayback.scopeHeaders(
                                 mapOf("Cookie" to "scope-check"),
                                 scope,
                                 request.url.toString(),
@@ -497,10 +501,10 @@ internal class AdiFilmSemiMovieboxEngine(
         }
 
     private data class PlaybackChoice(
-        val stream: AdiFilmSemiMovieboxPlayback.Stream,
+        val stream: AdiDrakorMovieboxPlayback.Stream,
         val headers: Map<String, String>,
         val referer: String,
-        val format: AdiFilmSemiMovieboxPlayback.Format,
+        val format: AdiDrakorMovieboxPlayback.Format,
     )
 
     suspend fun loadLinks(
@@ -509,10 +513,10 @@ internal class AdiFilmSemiMovieboxEngine(
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
         metadataContext: Map<String, JSONObject> = emptyMap(),
-        mediaSession: AdiFilmSemiMovieboxMedia = AdiFilmSemiMovieboxMedia(),
+        mediaSession: AdiDrakorMovieboxMedia = AdiDrakorMovieboxMedia(),
         onStage: (String) -> Unit = {},
     ): Boolean {
-        if (metadataContext.isEmpty()) AdiFilmSemiMovieboxDiagnostics.clear()
+        if (metadataContext.isEmpty()) AdiDrakorMovieboxDiagnostics.clear()
         val selected = AppUtils.tryParseJson<EpData>(data) ?: return false
         if (!selected.subjectId.matches(Regex("[0-9]+")) || selected.se < 0 || selected.ep < 0)
             return false
@@ -527,7 +531,7 @@ internal class AdiFilmSemiMovieboxEngine(
         val choices = linkedMapOf<String, PlaybackChoice>()
         val captionIds = linkedMapOf<Pair<String, String>, String>()
         val subtitleUrls = linkedSetOf<String>()
-        val validatedUrls = mutableMapOf<String, AdiFilmSemiMovieboxPlayback.Format>()
+        val validatedUrls = mutableMapOf<String, AdiDrakorMovieboxPlayback.Format>()
         val failedUrls = mutableSetOf<String>()
 
         suspend fun legacyBearer(): String? {
@@ -546,7 +550,7 @@ internal class AdiFilmSemiMovieboxEngine(
         }
         fun webHeaders(host: String, referer: String): Map<String, String> =
             mutableMapOf(
-                    "User-Agent" to AdiFilmSemiMovieboxPlayback.WEB_UA,
+                    "User-Agent" to AdiDrakorMovieboxPlayback.WEB_UA,
                     "Referer" to referer,
                     "Accept" to "application/json",
                     "x-client-info" to "{\"timezone\":\"Asia/Calcutta\"}",
@@ -560,7 +564,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 }
         suspend fun metadata(subject: String): JSONObject? {
             metadataContext[subject]
-                ?.takeIf { AdiFilmSemiMovieboxPlayback.text(it, "subjectId") == subject }
+                ?.takeIf { AdiDrakorMovieboxPlayback.text(it, "subjectId") == subject }
                 ?.let {
                     return it
                 }
@@ -570,7 +574,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 modernBearer = fetchModernPlaybackBearer()
                 response = playbackRequest(url, modernPlaybackHeaders(url, modernBearer))
             }
-            AdiFilmSemiMovieboxPlayback.metadata(
+            AdiDrakorMovieboxPlayback.metadata(
                     response?.takeIf { it.first == 200 }?.second,
                     subject,
                 )
@@ -585,7 +589,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 val path = URI(url).let { it.rawPath + "?" + it.rawQuery }
                 response =
                     playbackRequest(url, headersFor(ts, generateSignature("GET", path, ts), bearer))
-                AdiFilmSemiMovieboxPlayback.metadata(
+                AdiDrakorMovieboxPlayback.metadata(
                         response?.takeIf { it.first == 200 }?.second,
                         subject,
                     )
@@ -595,10 +599,10 @@ internal class AdiFilmSemiMovieboxEngine(
             }
             // Public H5 detail uses the same exact subject identity; never search/fuzzy-match
             // another title.
-            val host = AdiFilmSemiMovieboxPlayback.webDomains.first()
+            val host = AdiDrakorMovieboxPlayback.webDomains.first()
             val webUrl = "$host/wefeed-h5api-bff/detail?subjectId=$subject"
             val web = playbackRequest(webUrl, webHeaders(host, "$host/"))
-            return AdiFilmSemiMovieboxPlayback.metadata(
+            return AdiDrakorMovieboxPlayback.metadata(
                 web?.takeIf { it.first == 200 }?.second,
                 subject,
             )
@@ -610,8 +614,8 @@ internal class AdiFilmSemiMovieboxEngine(
             stage: String,
             reason: String,
             subject: String,
-            stream: AdiFilmSemiMovieboxPlayback.Stream? = null,
-            event: AdiFilmSemiMovieboxMedia.Event? = null,
+            stream: AdiDrakorMovieboxPlayback.Stream? = null,
+            event: AdiDrakorMovieboxMedia.Event? = null,
             candidates: Int? = null,
             validated: Int? = null,
         ) {
@@ -624,7 +628,7 @@ internal class AdiFilmSemiMovieboxEngine(
                     "quality" to stream?.quality,
                     "codec" to
                         stream?.let {
-                            AdiFilmSemiMovieboxPlayback.codecName(it.codec).takeIf { c ->
+                            AdiDrakorMovieboxPlayback.codecName(it.codec).takeIf { c ->
                                 c in setOf("H.264", "H.265", "AV1", "VP9")
                             } ?: "unknown"
                         },
@@ -646,19 +650,19 @@ internal class AdiFilmSemiMovieboxEngine(
                         "protocol" to event.protocol,
                     )
                 )
-            AdiFilmSemiMovieboxDiagnostics.record(stage, reason, fields)
+            AdiDrakorMovieboxDiagnostics.record(stage, reason, fields)
         }
         suspend fun emit(choice: PlaybackChoice) {
             val stream = choice.stream
-            val label = AdiFilmSemiMovieboxPlayback.label(stream, choice.format)
+            val label = AdiDrakorMovieboxPlayback.label(stream, choice.format)
             val group = "$label|${stream.quality}"
             val number = (labelCounts[group] ?: 0) + 1
             labelCounts[group] = number
             val type =
                 when (choice.format) {
-                    AdiFilmSemiMovieboxPlayback.Format.DASH -> ExtractorLinkType.DASH
-                    AdiFilmSemiMovieboxPlayback.Format.HLS -> ExtractorLinkType.M3U8
-                    AdiFilmSemiMovieboxPlayback.Format.VIDEO -> ExtractorLinkType.VIDEO
+                    AdiDrakorMovieboxPlayback.Format.DASH -> ExtractorLinkType.DASH
+                    AdiDrakorMovieboxPlayback.Format.HLS -> ExtractorLinkType.M3U8
+                    AdiDrakorMovieboxPlayback.Format.VIDEO -> ExtractorLinkType.VIDEO
                 }
             callback(
                 newExtractorLink(
@@ -684,7 +688,7 @@ internal class AdiFilmSemiMovieboxEngine(
         ): Int {
             val parsed =
                 try {
-                    AdiFilmSemiMovieboxPlayback.parse(
+                    AdiDrakorMovieboxPlayback.parse(
                         raw,
                         "H5",
                         subject,
@@ -700,12 +704,12 @@ internal class AdiFilmSemiMovieboxEngine(
             // parameters.
             val candidates =
                 parsed
-                    .filter { it.category != AdiFilmSemiMovieboxPlayback.AudioCategory.UNSUPPORTED }
+                    .filter { it.category != AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED }
                     .flatMap { stream ->
                         val policy = extractPlaybackPolicyResource(stream.cookie)
                         if (
                             policy != null &&
-                                AdiFilmSemiMovieboxPlayback.http(policy) &&
+                                AdiDrakorMovieboxPlayback.http(policy) &&
                                 policy != stream.url
                         ) {
                             listOf(
@@ -713,7 +717,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                 stream.copy(
                                     cookie =
                                         if (
-                                            AdiFilmSemiMovieboxPlayback.scopeHeaders(
+                                            AdiDrakorMovieboxPlayback.scopeHeaders(
                                                     mapOf("Cookie" to "scope-check"),
                                                     policy,
                                                     stream.url,
@@ -725,10 +729,10 @@ internal class AdiFilmSemiMovieboxEngine(
                             )
                         } else listOf(stream)
                     }
-                    .filterNot { AdiFilmSemiMovieboxPlayback.notice(it.url) }
-                    .distinctBy { AdiFilmSemiMovieboxPlayback.requestKey(it) }
+                    .filterNot { AdiDrakorMovieboxPlayback.notice(it.url) }
+                    .distinctBy { AdiDrakorMovieboxPlayback.requestKey(it) }
                     .sortedWith(
-                        compareBy<AdiFilmSemiMovieboxPlayback.Stream> {
+                        compareBy<AdiDrakorMovieboxPlayback.Stream> {
                                 it.codec.contains("hevc", true)
                             }
                             .thenBy { it.format.equals("DASH", true) }
@@ -739,14 +743,14 @@ internal class AdiFilmSemiMovieboxEngine(
             // requests across qualities; skip redundant servers only after that group validates.
             for (stream in candidates) {
                 val group =
-                    "${stream.category}|${stream.quality}|${AdiFilmSemiMovieboxPlayback.codecName(stream.codec)}|${stream.format}"
+                    "${stream.category}|${stream.quality}|${AdiDrakorMovieboxPlayback.codecName(stream.codec)}|${stream.format}"
                 if (group in completedGroups) continue
                 val headers =
-                    AdiFilmSemiMovieboxPlayback.mediaHeaders(
+                    AdiDrakorMovieboxPlayback.mediaHeaders(
                         stream,
                         origin,
                         referer,
-                        AdiFilmSemiMovieboxPlayback.WEB_UA,
+                        AdiDrakorMovieboxPlayback.WEB_UA,
                     )
                 val cacheKey = stream.url + "|" + headers.toSortedMap()
                 diagnostic(
@@ -757,13 +761,11 @@ internal class AdiFilmSemiMovieboxEngine(
                     candidates = candidates.size,
                 )
                 val valid =
-                    validatedUrls[cacheKey]?.let {
-                        AdiFilmSemiMovieboxPlayback.Validated(stream, it)
-                    }
+                    validatedUrls[cacheKey]?.let { AdiDrakorMovieboxPlayback.Validated(stream, it) }
                         ?: if (cacheKey in failedUrls) null
                         else
                             try {
-                                AdiFilmSemiMovieboxPlayback.validateObserved(
+                                AdiDrakorMovieboxPlayback.validateObserved(
                                     stream,
                                     headers,
                                     { reason ->
@@ -794,7 +796,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 val captionKey = subject to stream.id
                 if (stream.id.isNotBlank() && captionKey !in captionIds)
                     captionIds[captionKey] = stream.audio
-                val key = AdiFilmSemiMovieboxPlayback.key(stream)
+                val key = AdiDrakorMovieboxPlayback.key(stream)
                 if (key in choices) continue
                 val choice = PlaybackChoice(stream, headers, referer, valid.format)
                 choices[key] = choice
@@ -805,7 +807,7 @@ internal class AdiFilmSemiMovieboxEngine(
             }
             Log.d(
                 TAG,
-                "[PLAYBACK-H5] subject=$subject parsed=${parsed.size} audioFiltered=${parsed.count { it.category == AdiFilmSemiMovieboxPlayback.AudioCategory.UNSUPPORTED }} candidates=${candidates.size} validated=$count se=$se ep=$ep",
+                "[PLAYBACK-H5] subject=$subject parsed=${parsed.size} audioFiltered=${parsed.count { it.category == AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED }} candidates=${candidates.size} validated=$count se=$se ep=$ep",
             )
             diagnostic(
                 "H5-PLAY-RESPONSE",
@@ -826,52 +828,51 @@ internal class AdiFilmSemiMovieboxEngine(
         val subjects = mutableListOf(Triple(selected.subjectId, "", detail))
         // Same-ID server metadata can identify the selected subject's original language.
         val originalLanguage =
-            AdiFilmSemiMovieboxPlayback.audioLanguages(detail ?: JSONObject()).firstOrNull()
-                ?: AdiFilmSemiMovieboxPlayback.objects(detail?.optJSONArray("dubs"))
+            AdiDrakorMovieboxPlayback.audioLanguages(detail ?: JSONObject()).firstOrNull()
+                ?: AdiDrakorMovieboxPlayback.objects(detail?.optJSONArray("dubs"))
                     .firstOrNull {
-                        AdiFilmSemiMovieboxPlayback.text(it, "subjectId") == selected.subjectId
+                        AdiDrakorMovieboxPlayback.text(it, "subjectId") == selected.subjectId
                     }
-                    ?.let { AdiFilmSemiMovieboxPlayback.audioLanguages(it).firstOrNull() }
+                    ?.let { AdiDrakorMovieboxPlayback.audioLanguages(it).firstOrNull() }
                     .orEmpty()
-        AdiFilmSemiMovieboxPlayback.objects(detail?.optJSONArray("dubs")).forEach { dub ->
-            val sid = AdiFilmSemiMovieboxPlayback.text(dub, "subjectId")
-            val category = AdiFilmSemiMovieboxPlayback.dubCategory(dub)
+        AdiDrakorMovieboxPlayback.objects(detail?.optJSONArray("dubs")).forEach { dub ->
+            val sid = AdiDrakorMovieboxPlayback.text(dub, "subjectId")
+            val category = AdiDrakorMovieboxPlayback.dubCategory(dub)
             if (
-                category != AdiFilmSemiMovieboxPlayback.AudioCategory.UNSUPPORTED &&
+                category != AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED &&
                     sid.matches(Regex("[0-9]+")) &&
                     subjects.none { it.first == sid }
             )
-                subjects +=
-                    Triple(sid, AdiFilmSemiMovieboxPlayback.audioLanguages(dub).first(), dub)
+                subjects += Triple(sid, AdiDrakorMovieboxPlayback.audioLanguages(dub).first(), dub)
         }
         val orderedSubjects =
             subjects.sortedWith(
                 compareBy<Triple<String, String, JSONObject?>> {
                         if (it.first == selected.subjectId) -1
-                        else AdiFilmSemiMovieboxPlayback.audioOrder(it.second)
+                        else AdiDrakorMovieboxPlayback.audioOrder(it.second)
                     }
-                    .thenBy { AdiFilmSemiMovieboxPlayback.audioName(it.second) }
+                    .thenBy { AdiDrakorMovieboxPlayback.audioName(it.second) }
             )
         var preferredHost: String? = null
         for ((subject, audio, initialDetail) in orderedSubjects) {
             val meta = if (subject == selected.subjectId) initialDetail else metadata(subject)
             val detail = meta ?: initialDetail ?: JSONObject()
-            val path = AdiFilmSemiMovieboxPlayback.detailPath(detail, subject)
+            val path = AdiDrakorMovieboxPlayback.detailPath(detail, subject)
             Log.d(
                 TAG,
                 "[PLAYBACK-H5] subject=$subject metadata=${meta != null} detailPathAvailable=${path.isNotBlank()} se=$se ep=$ep",
             )
             val encodedPath = URLEncoder.encode(path, "UTF-8")
-            val webDetail = AdiFilmSemiMovieboxPlayback.text(detail, "detailUrl")
+            val webDetail = AdiDrakorMovieboxPlayback.text(detail, "detailUrl")
             val fromDetail =
-                if (AdiFilmSemiMovieboxPlayback.http(webDetail))
+                if (AdiDrakorMovieboxPlayback.http(webDetail))
                     URI(webDetail).let { "${it.scheme}://${it.host}" }
                 else null
             val hosts =
                 (listOfNotNull(
                         preferredHost,
-                        fromDetail?.takeIf { it in AdiFilmSemiMovieboxPlayback.webDomains },
-                    ) + AdiFilmSemiMovieboxPlayback.webDomains)
+                        fromDetail?.takeIf { it in AdiDrakorMovieboxPlayback.webDomains },
+                    ) + AdiDrakorMovieboxPlayback.webDomains)
                     .distinct()
             // A failed/empty alias must not hide H5 sources on later aliases, including dubbed
             // subjects.
@@ -892,7 +893,7 @@ internal class AdiFilmSemiMovieboxEngine(
                     if (response.first == 200) "H5_RESPONSE" else "H5_REQUEST_FAILED",
                     subject,
                     event =
-                        AdiFilmSemiMovieboxMedia.Event(
+                        AdiDrakorMovieboxMedia.Event(
                             "H5-PLAY-RESPONSE",
                             "",
                             java.net.URI(host).host,
@@ -920,12 +921,12 @@ internal class AdiFilmSemiMovieboxEngine(
         val orderedChoices =
             choices.values
                 .filter {
-                    it.stream.category != AdiFilmSemiMovieboxPlayback.AudioCategory.UNSUPPORTED
+                    it.stream.category != AdiDrakorMovieboxPlayback.AudioCategory.UNSUPPORTED
                 }
                 .sortedWith(
                     compareBy<PlaybackChoice> { it.stream.category.ordinal }
                         .thenByDescending { it.stream.quality ?: 0 }
-                        .thenBy { AdiFilmSemiMovieboxPlayback.codecOrder(it.stream.codec) }
+                        .thenBy { AdiDrakorMovieboxPlayback.codecOrder(it.stream.codec) }
                         .thenBy { it.format.ordinal }
                 )
         // Each validated stream/resource ID owns its captions; the selected serial index is
@@ -956,7 +957,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 }
                 if (response == null || response.first != 200) continue
                 try {
-                    AdiFilmSemiMovieboxPlayback.captionEntries(response.second).forEach {
+                    AdiDrakorMovieboxPlayback.captionEntries(response.second).forEach {
                         (language, url) ->
                         if (subtitleUrls.add(url))
                             subtitleCallback(
@@ -965,7 +966,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                         audio
                                             .takeIf { it.isNotBlank() }
                                             ?.let {
-                                                " (${AdiFilmSemiMovieboxPlayback.audioName(it)})"
+                                                " (${AdiDrakorMovieboxPlayback.audioName(it)})"
                                             }
                                             .orEmpty(),
                                     url,
@@ -1005,14 +1006,14 @@ internal class AdiFilmSemiMovieboxEngine(
         runtimeMinutes: Int? = null,
         castNames: List<String> = emptyList(),
     ): Boolean {
-        AdiFilmSemiMovieboxDiagnostics.clear()
+        AdiDrakorMovieboxDiagnostics.clear()
         val started = System.nanoTime()
         fun report(stage: String, reason: String, candidates: Int = 0, verified: Int = 0) {
             Log.d(
                 TAG,
                 "[FINDER] stage=$stage reason=$reason candidates=$candidates verified=$verified elapsedMs=${(System.nanoTime()-started)/1_000_000} type=$type se=$season ep=$episode",
             )
-            AdiFilmSemiMovieboxDiagnostics.record(
+            AdiDrakorMovieboxDiagnostics.record(
                 "FINDER-$stage",
                 reason,
                 mapOf(
@@ -1029,7 +1030,7 @@ internal class AdiFilmSemiMovieboxEngine(
                 try {
                     coroutineScope {
                         var request =
-                            AdiFilmSemiMovieboxMapping.Request(
+                            AdiDrakorMovieboxMapping.Request(
                                 titles,
                                 year,
                                 type,
@@ -1041,7 +1042,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                 runtimeMinutes,
                                 castNames,
                             )
-                        if (!AdiFilmSemiMovieboxMapping.valid(request)) {
+                        if (!AdiDrakorMovieboxMapping.valid(request)) {
                             report("identity", "NO_CANDIDATE")
                             return@coroutineScope false
                         }
@@ -1062,7 +1063,7 @@ internal class AdiFilmSemiMovieboxEngine(
                             java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
                         val webHeaders =
                             mapOf(
-                                "User-Agent" to AdiFilmSemiMovieboxPlayback.WEB_UA,
+                                "User-Agent" to AdiDrakorMovieboxPlayback.WEB_UA,
                                 "Referer" to "$catalog/",
                             )
                         suspend fun page(url: String): String? =
@@ -1076,7 +1077,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                 ?: page(
                                         "$catalog/web/searchResult?keyword=${URLEncoder.encode(title,"UTF-8")}"
                                     )
-                                    ?.let { AdiFilmSemiMovieboxMapping.catalogSearch(it) }
+                                    ?.let { AdiDrakorMovieboxMapping.catalogSearch(it) }
                                     ?.also { catalogCache.put(key, it) }
                         }
                         suspend fun native(id: String, endpoint: String): String? {
@@ -1094,8 +1095,8 @@ internal class AdiFilmSemiMovieboxEngine(
                         }
                         var discoveryBudget = 35_000L
                         suspend fun discover(
-                            block: suspend () -> AdiFilmSemiMovieboxMapping.Result
-                        ): AdiFilmSemiMovieboxMapping.Result? {
+                            block: suspend () -> AdiDrakorMovieboxMapping.Result
+                        ): AdiDrakorMovieboxMapping.Result? {
                             if (discoveryBudget <= 0) return null
                             val before = System.nanoTime()
                             return try {
@@ -1105,7 +1106,7 @@ internal class AdiFilmSemiMovieboxEngine(
                             }
                         }
                         var rediscover:
-                            (suspend (Set<String>) -> AdiFilmSemiMovieboxMapping.Result)? =
+                            (suspend (Set<String>) -> AdiDrakorMovieboxMapping.Result)? =
                             null
                         val discovery = discover {
                             // Old saved playback payloads may lack synopsis/cast. Hydrate only the
@@ -1137,7 +1138,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                         } catch (_: Exception) {
                                             JSONObject()
                                         }
-                                    request = AdiFilmSemiMovieboxMapping.hydrate(request, meta)
+                                    request = AdiDrakorMovieboxMapping.hydrate(request, meta)
                                 }
                                 val q = URLEncoder.encode(request.titles.first(), "UTF-8")
                                 val yearKey = if (type == 1) "year" else "first_air_date_year"
@@ -1159,7 +1160,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                     }
                                 request =
                                     request.copy(
-                                        works = AdiFilmSemiMovieboxMapping.tmdbWorks(raw, request)
+                                        works = AdiDrakorMovieboxMapping.tmdbWorks(raw, request)
                                     )
                             }
                             val details = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -1177,7 +1178,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                     val mobile = async { native(id, "get") }
                                     val row = catalogRows[id]
                                     val path =
-                                        row?.let { AdiFilmSemiMovieboxPlayback.detailPath(it, id) }
+                                        row?.let { AdiDrakorMovieboxPlayback.detailPath(it, id) }
                                             .orEmpty()
                                     // Native and public detail are alternatives for the SAME
                                     // subject.
@@ -1193,9 +1194,9 @@ internal class AdiFilmSemiMovieboxEngine(
                                                     )
                                                 html
                                                     ?.let {
-                                                        AdiFilmSemiMovieboxMapping.catalogPage(it)
+                                                        AdiDrakorMovieboxMapping.catalogPage(it)
                                                             .firstOrNull { item ->
-                                                                AdiFilmSemiMovieboxPlayback.text(
+                                                                AdiDrakorMovieboxPlayback.text(
                                                                     item,
                                                                     "subjectId",
                                                                 ) == id
@@ -1205,21 +1206,16 @@ internal class AdiFilmSemiMovieboxEngine(
                                             }
                                         } else null
                                     val native =
-                                        AdiFilmSemiMovieboxPlayback.metadata(mobile.await(), id)
+                                        AdiDrakorMovieboxPlayback.metadata(mobile.await(), id)
                                     val combined =
                                         if (web != null)
-                                            AdiFilmSemiMovieboxMapping.mergeMetadata(native, web)
+                                            AdiDrakorMovieboxMapping.mergeMetadata(native, web)
                                         else native
                                     combined?.let { meta ->
-                                        AdiFilmSemiMovieboxPlayback.objects(
-                                                meta.optJSONArray("dubs")
-                                            )
+                                        AdiDrakorMovieboxPlayback.objects(meta.optJSONArray("dubs"))
                                             .forEach { dub ->
                                                 val did =
-                                                    AdiFilmSemiMovieboxPlayback.text(
-                                                        dub,
-                                                        "subjectId",
-                                                    )
+                                                    AdiDrakorMovieboxPlayback.text(dub, "subjectId")
                                                 if (did.matches(Regex("[0-9]+")))
                                                     catalogRows.putIfAbsent(did, dub)
                                             }
@@ -1264,26 +1260,27 @@ internal class AdiFilmSemiMovieboxEngine(
                                                             "$catalog/web/searchResult?keyword=${URLEncoder.encode(title,"UTF-8")}"
                                                         )
                                                         ?.let {
-                                                            AdiFilmSemiMovieboxMapping
-                                                                .catalogSearch(it)
+                                                            AdiDrakorMovieboxMapping.catalogSearch(
+                                                                it
+                                                            )
                                                         }
                                                         ?.also { catalogCache.put(key, it) }
                                         } else null
-                                    val web = AdiFilmSemiMovieboxMapping.searchObjects(public)
+                                    val web = AdiDrakorMovieboxMapping.searchObjects(public)
                                     web.forEach {
                                         catalogRows[
-                                            AdiFilmSemiMovieboxPlayback.text(it, "subjectId")] = it
+                                            AdiDrakorMovieboxPlayback.text(it, "subjectId")] = it
                                     }
                                     val raw = native.await()
                                     val rows =
-                                        (AdiFilmSemiMovieboxMapping.searchObjects(raw) + web)
+                                        (AdiDrakorMovieboxMapping.searchObjects(raw) + web)
                                             .groupBy {
-                                                AdiFilmSemiMovieboxPlayback.text(it, "subjectId")
+                                                AdiDrakorMovieboxPlayback.text(it, "subjectId")
                                             }
                                             .values
                                             .map { group ->
                                                 group.reduce { a, b ->
-                                                    AdiFilmSemiMovieboxMapping.mergeMetadata(a, b)
+                                                    AdiDrakorMovieboxMapping.mergeMetadata(a, b)
                                                 }
                                             }
                                     val result =
@@ -1300,7 +1297,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                                             JSONObject()
                                                                 .put(
                                                                     "hasMore",
-                                                                    AdiFilmSemiMovieboxMapping
+                                                                    AdiDrakorMovieboxMapping
                                                                         .hasMore(raw),
                                                                 ),
                                                         ),
@@ -1311,7 +1308,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                 }
                             }
                             rediscover = { excluded ->
-                                AdiFilmSemiMovieboxMapping.resolve(
+                                AdiDrakorMovieboxMapping.resolve(
                                     request.copy(excludedSubjects = excluded),
                                     { search(it, 1) },
                                     { read(it) },
@@ -1343,7 +1340,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                     "SUBJECT_DETAIL_UNAVAILABLE" -> "DETAIL_UNAVAILABLE"
                                     else -> discovery.reason
                                 }
-                            AdiFilmSemiMovieboxDiagnostics.record(
+                            AdiDrakorMovieboxDiagnostics.record(
                                 "SPIDER-IDENTITY",
                                 "IDENTITY_REJECTED",
                                 mapOf("tmdbId" to tmdbId, "candidates" to discovery.candidates),
@@ -1351,7 +1348,7 @@ internal class AdiFilmSemiMovieboxEngine(
                             report("identity", reason, discovery.candidates, discovery.verified)
                             return@coroutineScope false
                         }
-                        AdiFilmSemiMovieboxDiagnostics.record(
+                        AdiDrakorMovieboxDiagnostics.record(
                             "SPIDER-IDENTITY",
                             "IDENTITY_VERIFIED",
                             mapOf(
@@ -1362,8 +1359,8 @@ internal class AdiFilmSemiMovieboxEngine(
                             ),
                         )
                         report("identity", "VERIFIED", discovery.candidates, discovery.verified)
-                        val mediaSession = AdiFilmSemiMovieboxMedia()
-                        var current: AdiFilmSemiMovieboxMapping.Result = discovery
+                        val mediaSession = AdiDrakorMovieboxMedia()
+                        var current: AdiDrakorMovieboxMapping.Result = discovery
                         val attempted = mutableSetOf<String>()
                         while (attempted.size < 3) {
                             val editions =
@@ -1371,7 +1368,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                     .ifEmpty {
                                         listOfNotNull(
                                             current.metadata?.let {
-                                                AdiFilmSemiMovieboxMapping.Edition(
+                                                AdiDrakorMovieboxMapping.Edition(
                                                     current.subject ?: subject,
                                                     it,
                                                 )
@@ -1393,7 +1390,7 @@ internal class AdiFilmSemiMovieboxEngine(
                                 val context =
                                     mapOf(
                                         edition.subject.id to
-                                            AdiFilmSemiMovieboxMapping.playbackMetadata(
+                                            AdiDrakorMovieboxMapping.playbackMetadata(
                                                 edition.metadata
                                             )
                                     )
@@ -1440,5 +1437,327 @@ internal class AdiFilmSemiMovieboxEngine(
             }
         if (completed == null) report("h5", "SEARCH_TIMEOUT")
         return completed ?: false
+    }
+}
+
+/** Request-local pacing/cache. Never shared with another provider or retained after resolution. */
+internal class AdiDrakorMovieboxMedia(
+    private val client: OkHttpClient = AdiDrakorMovieboxPlayback.client,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val wall: () -> Long = { System.currentTimeMillis() },
+) {
+    data class Event(
+        val stage: String,
+        val reason: String,
+        val host: String = "",
+        val status: Int? = null,
+        val mime: String = "",
+        val redirect: Boolean = false,
+        val attempt: Int = 0,
+        val elapsedMs: Long = 0,
+        val ranged: Boolean = false,
+        val retryAfterMs: Long? = null,
+        val protocol: String = "",
+    )
+
+    private data class Raw(
+        val code: Int,
+        val mime: String,
+        val bytes: ByteArray,
+        val truncated: Boolean,
+        val location: String?,
+        val retryAfter: String?,
+        val protocol: String,
+    )
+
+    private val gate = Mutex()
+    private val cooldown = mutableMapOf<String, Long>()
+    private val cache = linkedMapOf<String, Pair<Long, AdiDrakorMovieboxPlayback.Sample>>()
+
+    fun retryMillis(value: String?): Long? {
+        if (value == null) return null
+        value
+            .trim()
+            .toLongOrNull()
+            ?.takeIf { it >= 0 }
+            ?.let {
+                return it.coerceAtMost(Long.MAX_VALUE / 1000) * 1000
+            }
+        return try {
+            (java.text
+                    .SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
+                    .apply { isLenient = false }
+                    .parse(value)!!
+                    .time - wall())
+                .coerceAtLeast(0)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun host(url: String): String =
+        try {
+            URI(url).host.orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+
+    private fun origin(url: String): String =
+        try {
+            URI(url).let { "${it.scheme}://${it.host}:${it.port}" }
+        } catch (_: Exception) {
+            ""
+        }
+
+    private fun reason(code: Int): String =
+        when (code) {
+            429 -> "MEDIA_HTTP_429"
+            426 -> "MEDIA_HTTP_426"
+            401,
+            403 -> "MEDIA_AUTH_FAILED"
+            else -> if (code in 200..299) "MEDIA_RESPONSE" else "MEDIA_HTTP_ERROR"
+        }
+
+    suspend fun sample(
+        url: String,
+        headers: Map<String, String>,
+        scope: String,
+        manifest: Boolean,
+        observe: (Event) -> Unit = {},
+    ): AdiDrakorMovieboxPlayback.Sample? =
+        gate.withLock {
+            val expiry =
+                try {
+                    URI(url)
+                        .rawQuery
+                        .orEmpty()
+                        .split('&')
+                        .firstOrNull {
+                            it.substringBefore('=').lowercase() in
+                                setOf("expires", "cloudfront-expires")
+                        }
+                        ?.substringAfter('=')
+                        ?.toLongOrNull()
+                } catch (_: Exception) {
+                    null
+                }
+            if (expiry != null && expiry <= wall() / 1000) {
+                observe(Event("MEDIA-PREFLIGHT", "MEDIA_AUTH_FAILED", host(url), 403))
+                return@withLock null
+            }
+            // Full signed identity and scoped headers are used only as an in-memory key.
+            val key = url + "|" + manifest + "|" + headers.toSortedMap()
+            cache[key]
+                ?.takeIf { clock() - it.first in 0 until 5000 }
+                ?.let {
+                    observe(Event("MEDIA-PREFLIGHT", "MEDIA_CACHE_HIT", host(url)))
+                    return@withLock it.second
+                }
+            var target = url
+            var ranged = !manifest
+            var rangeFallback = false
+            var redirects = 0
+            var attempts = 0
+            while (attempts < 5) {
+                if (
+                    !AdiDrakorMovieboxPlayback.http(target) ||
+                        AdiDrakorMovieboxPlayback.notice(target)
+                ) {
+                    observe(Event("MEDIA-REDIRECT", "MEDIA_REDIRECT_REJECTED", host(target)))
+                    return@withLock null
+                }
+                val until = cooldown[origin(target)] ?: 0
+                if (until > clock()) {
+                    observe(
+                        Event(
+                            "MEDIA-PREFLIGHT",
+                            "MEDIA_HTTP_429",
+                            host(target),
+                            429,
+                            attempt = 0,
+                            retryAfterMs = until - clock(),
+                        )
+                    )
+                    return@withLock null
+                }
+                val h =
+                    AdiDrakorMovieboxPlayback.scopeHeaders(headers, scope, target)
+                        .filterKeys {
+                            !it.equals("Authorization", true) &&
+                                !it.equals("Proxy-Authorization", true) &&
+                                !it.equals("Range", true)
+                        }
+                        .toMutableMap()
+                h["Accept-Encoding"] = "identity"
+                if (ranged) h["Range"] = "bytes=0-4095"
+                val started = clock()
+                attempts++
+                val raw =
+                    read(target, h, if (manifest) 262144 else 4096) { error ->
+                        observe(
+                            Event(
+                                "MEDIA-PREFLIGHT",
+                                if (error is java.io.InterruptedIOException) "MEDIA_TIMEOUT"
+                                else "MEDIA_TRANSPORT_FAILED",
+                                host(target),
+                                attempt = attempts,
+                                elapsedMs = clock() - started,
+                                ranged = ranged,
+                            )
+                        )
+                    } ?: return@withLock null
+                val retry = retryMillis(raw.retryAfter)
+                observe(
+                    Event(
+                        "MEDIA-PREFLIGHT",
+                        reason(raw.code),
+                        host(target),
+                        raw.code,
+                        raw.mime,
+                        raw.code in listOf(301, 302, 303, 307, 308),
+                        attempts,
+                        clock() - started,
+                        ranged,
+                        retry,
+                        raw.protocol,
+                    )
+                )
+                if (raw.code == 429) {
+                    val wait = (retry ?: 5000L).coerceAtLeast(1000)
+                    cooldown[origin(target)] = clock() + wait.coerceAtMost(Long.MAX_VALUE - clock())
+                    return@withLock AdiDrakorMovieboxPlayback.Sample(
+                        target,
+                        raw.code,
+                        raw.mime,
+                        raw.bytes,
+                        raw.truncated,
+                    )
+                }
+                // Only a range-specific rejection authorizes one bounded normal GET.
+                // Never use this to retry authentication, rate limiting or protocol rejection.
+                if (raw.code == 416 && ranged && !rangeFallback) {
+                    ranged = false
+                    rangeFallback = true
+                    continue
+                }
+                if (raw.code in listOf(301, 302, 303, 307, 308)) {
+                    val next = raw.location?.let { AdiDrakorMovieboxPlayback.resolve(target, it) }
+                    if (
+                        ++redirects > 3 ||
+                            next == null ||
+                            (URI(url).scheme == "https" && URI(next).scheme != "https")
+                    ) {
+                        observe(
+                            Event(
+                                "MEDIA-REDIRECT",
+                                "MEDIA_REDIRECT_REJECTED",
+                                host(target),
+                                raw.code,
+                                redirect = true,
+                                attempt = attempts,
+                            )
+                        )
+                        return@withLock null
+                    }
+                    observe(
+                        Event(
+                            "MEDIA-REDIRECT",
+                            "MEDIA_REDIRECT_SCOPED",
+                            host(next),
+                            raw.code,
+                            redirect = true,
+                            attempt = attempts,
+                        )
+                    )
+                    target = next
+                    continue
+                }
+                val result =
+                    AdiDrakorMovieboxPlayback.Sample(
+                        target,
+                        raw.code,
+                        raw.mime,
+                        raw.bytes,
+                        raw.truncated,
+                    )
+                if (raw.code in 200..299) {
+                    if (cache.size >= 16) cache.remove(cache.keys.first())
+                    cache[key] = clock() to result
+                }
+                return@withLock result
+            }
+            null
+        }
+
+    private suspend fun read(
+        url: String,
+        headers: Map<String, String>,
+        limit: Int,
+        failure: (IOException) -> Unit,
+    ): Raw? = suspendCancellableCoroutine { cont ->
+        val request =
+            Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+        val call = client.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) {
+                        failure(e)
+                        cont.resume(null)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        val raw =
+                            response.use { r ->
+                                val redirected = r.code in listOf(301, 302, 303, 307, 308)
+                                val out = java.io.ByteArrayOutputStream()
+                                if (!redirected)
+                                    r.body.byteStream().use { input ->
+                                        val buffer = ByteArray(4096)
+                                        while (cont.isActive && out.size() <= limit) {
+                                            val n =
+                                                input.read(
+                                                    buffer,
+                                                    0,
+                                                    minOf(buffer.size, limit + 1 - out.size()),
+                                                )
+                                            if (n < 0) break
+                                            out.write(buffer, 0, n)
+                                        }
+                                    }
+                                val total =
+                                    r.header("Content-Range")
+                                        ?.substringAfterLast('/')
+                                        ?.toLongOrNull()
+                                val partial = r.code == 206 && (total == null || total > out.size())
+                                Raw(
+                                    r.code,
+                                    r.header("Content-Type")
+                                        .orEmpty()
+                                        .substringBefore(';')
+                                        .takeIf {
+                                            it.matches(Regex("[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+"))
+                                        }
+                                        .orEmpty(),
+                                    out.toByteArray().take(limit).toByteArray(),
+                                    out.size() > limit || partial,
+                                    r.header("Location"),
+                                    r.header("Retry-After"),
+                                    r.protocol.toString(),
+                                )
+                            }
+                        if (cont.isActive) cont.resume(raw)
+                    } catch (e: IOException) {
+                        if (cont.isActive) {
+                            failure(e)
+                            cont.resume(null)
+                        }
+                    }
+                }
+            }
+        )
     }
 }

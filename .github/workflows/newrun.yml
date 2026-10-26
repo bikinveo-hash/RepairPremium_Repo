@@ -1,21 +1,26 @@
 name: Build
 
+on:
+  push:
+    branches: [master, main]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+    inputs:
+      full_check:
+        description: Run full playback regression tests
+        type: boolean
+        default: false
+      rebuild_all:
+        description: Rebuild all plugins instead of changed plugins
+        type: boolean
+        default: false
+
 concurrency:
   group: build
   cancel-in-progress: true
 
-on:
-  push:
-    branches: [master, main]
-    paths-ignore: ['*.md']
-  workflow_dispatch:
-
 permissions:
   contents: write
-
-env:
-  REPO_NAME: Freemium_Repo
-  REPO_DESC: Repository Plugin Michat88
 
 jobs:
   build:
@@ -25,107 +30,52 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: src
+          fetch-depth: 0
 
-      - name: Checkout distribution
+      - name: Checkout published plugins
         uses: actions/checkout@v4
         with:
+          ref: builds
           path: builds
 
-      - name: Use existing builds history
-        run: |
-          cd "$GITHUB_WORKSPACE/builds"
-          git ls-remote --exit-code --heads origin builds >/dev/null
-          git fetch origin builds
-          git checkout --detach FETCH_HEAD
-          cp plugins.json "$RUNNER_TEMP/plugins-before.json"
-
-      - name: Set up JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: false
 
-      - name: Create local.properties
-        run: touch "$GITHUB_WORKSPACE/src/local.properties"
+      - name: Build changed plugins
+        working-directory: src
+        env:
+          REBUILD_ALL: ${{ inputs.rebuild_all || false }}
+        run: python3 Moviebox/tests/distribution.py build "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
 
-      - name: Verify source parity and isolated playback regressions
+      - name: Full regression checks
+        if: ${{ inputs.full_check == true }}
+        working-directory: src
         run: |
-          cd "$GITHUB_WORKSPACE/src"
-          python3 AdiDrakor/tests/run_migration.py
-
-      - name: Verify standalone Moviebox and protected Adi bytes
-        run: |
-          cd "$GITHUB_WORKSPACE/src"
+          python3 AdiDrakor/tests/run_regression.py
           python3 Moviebox/tests/verify_migration.py
           python3 Moviebox/tests/run_regression.py
           python3 -m unittest discover -s Moviebox/tests/diagnostics -p 'test_*.py'
+
+      - name: Check and stage packages
+        working-directory: src
+        run: |
           python3 -m unittest discover -s Moviebox/tests -p 'test_distribution.py'
-          python3 Moviebox/tests/distribution.py snapshot "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
+          python3 Moviebox/tests/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
 
-      - name: Compile Adi controls, standalone Moviebox and MangoPorn
+      - name: Publish plugins
+        working-directory: builds
         run: |
-          cd "$GITHUB_WORKSPACE/src"
-          chmod +x gradlew
-          ./gradlew :AdiDrakor:assembleRelease :AdiFilmSemi:assembleRelease :AdiXtream:assembleRelease :Adicinemax21:assembleRelease
-          ./gradlew :Moviebox:assembleRelease
-          ./gradlew :Mangoporn:assembleRelease
-          ./gradlew makePluginsJson
-
-      - name: Retain released Adi publication inputs
-        run: |
-          cd "$GITHUB_WORKSPACE/src"
-          python3 Moviebox/tests/distribution.py retain-adi "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
-
-      - name: Stage Adi only and verify every catalog artifact
-        run: |
-          cd "$GITHUB_WORKSPACE/src"
-          python3 AdiDrakor/tests/prepare_distribution.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
-          python3 AdiDrakor/tests/verify_artifacts.py "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/plugins-before.json"
-
-      - name: Stage only Moviebox and verify the complete release
-        run: |
-          cd "$GITHUB_WORKSPACE/src"
-          python3 Moviebox/tests/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
-          python3 Moviebox/tests/verify_migration.py
-
-      - name: Preserve repository identity
-        run: |
-          cd "$GITHUB_WORKSPACE/builds"
-          if [ ! -f repo.json ]; then
-            cat > repo.json << EOF_REPO
-          {
-            "name": "$REPO_NAME",
-            "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/main/Icons/Adi.png",
-            "description": "$REPO_DESC",
-            "manifestVersion": 1,
-            "pluginLists": ["https://raw.githubusercontent.com/$GITHUB_REPOSITORY/builds/plugins.json"]
-          }
-          EOF_REPO
-          fi
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('repo.json').read_text())
-          expected = 'https://raw.githubusercontent.com/' + os.environ['GITHUB_REPOSITORY'] + '/builds/plugins.json'
-          assert data['pluginLists'] == [expected], 'Incorrect distribution repository URL'
-          PY
-
-      - name: Publish without rewriting history
-        run: |
-          cd "$GITHUB_WORKSPACE/src"
-          python3 Moviebox/tests/distribution.py verify "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/distribution-before.json"
-          python3 Moviebox/tests/distribution.py publish-plugin "$GITHUB_WORKSPACE/builds" --module Mangoporn
-          cd "$GITHUB_WORKSPACE/builds"
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
           git add -A
           if git diff --cached --quiet; then
-            echo "No distribution changes."
+            echo "No plugin updates."
             exit 0
           fi
           git commit -m "Build $GITHUB_SHA"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional real Kotlin transport probe. First run run_migration.py for SDK/test jars.
+"""Optional real Kotlin transport probe. First run run_regression.py for SDK/test jars.
 Output is sanitized JSON lines; successful H5 JSON is never a device playback PASS.
 """
 import os
@@ -12,7 +12,7 @@ import urllib.parse
 ROOT=Path(__file__).resolve().parents[2]
 CACHE=Path(os.environ.get('MOVIEBOX_TEST_CACHE',Path(tempfile.gettempdir())/'moviebox-playback-tests'))
 compiler_names=['compiler.jar','stdlib.jar','reflect.jar','script.jar','coroutines.jar','annotations.jar']
-assert all((CACHE/n).exists()for n in compiler_names),'Run python3 AdiDrakor/tests/run_migration.py first'
+assert all((CACHE/n).exists()for n in compiler_names),'Run python3 AdiDrakor/tests/run_regression.py first'
 compiler=os.pathsep.join(str(CACHE/n)for n in compiler_names)
 classpath=os.pathsep.join(str(p)for p in sorted(CACHE.glob('*.jar'))if p.name not in ['compiler.jar','script.jar','production.jar','tests.jar'])
 with tempfile.TemporaryDirectory(prefix='adi-live-media-')as tmp:

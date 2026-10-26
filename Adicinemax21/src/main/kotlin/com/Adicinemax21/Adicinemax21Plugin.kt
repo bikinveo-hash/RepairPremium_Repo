@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class Adicinemax21Plugin : Plugin() {
     override fun beforeUnload() {
-        com.Adicinemax21.sources.LocalProxy.stop()
+        com.Adicinemax21.LocalProxy.stop()
     }
 
     override fun load(context: Context) {

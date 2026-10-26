@@ -3,7 +3,7 @@ fun main() {
     val packages=linkedMapOf("AdiDrakor" to "com.AdiDrakor", "AdiFilmSemi" to "com.michat88",
         "AdiXtream" to "com.adixtream", "Adicinemax21" to "com.Adicinemax21")
     val proxies=packages.map { (module,pkg) ->
-        val cls=Class.forName("$pkg.sources.LocalProxy")
+        val cls=Class.forName("$pkg.LocalProxy")
         Triple(module,cls,cls.getField("INSTANCE").get(null))
     }
     try {

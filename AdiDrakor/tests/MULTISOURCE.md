@@ -39,7 +39,7 @@ their resolver headers and range requests. Timeout jobs cannot emit late results
 
 ## Validation
 
-Run `python3 AdiDrakor/tests/run_migration.py`. It compiles every plugin separately
+Run `python3 AdiDrakor/tests/run_regression.py`. It compiles every plugin separately
 against the actual SDK, runs the untouched original Moviebox fixtures, replays H5
 and mapping/media recovery fixtures against each local engine, and runs adapter
 and loopback proxy fixtures for all four packages. Adapter equality and single
@@ -53,8 +53,8 @@ server with deterministic synthetic upstream bytes: HLS master/variant/segment,
 TS prefix removal, seek ranges, preview filtering, denied redirects, decrypted
 Hydrax MP4 ranges, and listener restart.
 
-Build the four `assembleRelease` tasks and `makePluginsJson`, then run
-`verify_artifacts.py` against the distribution and the previous plugins.json.
+The Build workflow runs `writeCacheEntry` only for changed modules and checks
+the generated packages with `Moviebox/tests/distribution.py` before publication.
 The artifact verifier also checks the new adapters are present in each DEX and no
 original source-plugin package is referenced.
 
@@ -65,5 +65,3 @@ Live catalog requests to Idlix and OppaDrama from the implementation environment
 returned HTTP 403. No live title playback, device seek/resume, or user-region
 availability is claimed. Catalog entries without enough identity/season evidence
 are intentionally omitted, even if a potentially related stream exists.
-
-Repair repository adaptation and formatting proof: see `MIGRATION_REPAIR.md`.

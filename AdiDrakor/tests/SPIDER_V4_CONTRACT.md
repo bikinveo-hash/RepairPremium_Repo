@@ -60,7 +60,7 @@ resources. Stored APKs were inspected separately as recorded below. Recording pl
 ## Reproduce
 
 ```sh
-python3 AdiDrakor/tests/run_migration.py
+python3 AdiDrakor/tests/run_regression.py
 # Optional live network, separate from fixtures; never logs credentials/media URLs:
 python3 AdiDrakor/tests/run_live_media.py 6026412232966389904 spider-man-brand-new-day-Aea8ARY1bb7
 ```
