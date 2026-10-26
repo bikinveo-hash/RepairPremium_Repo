@@ -298,13 +298,13 @@
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Moviebox.cs3",
     "status": 1,
-    "version": 23,
+    "version": 24,
     "name": "Moviebox",
     "internalName": "Moviebox",
     "authors": [
       "aldry84"
     ],
-    "fileSize": 120633,
+    "fileSize": 122372,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
     "tvTypes": [
@@ -314,7 +314,7 @@
     ],
     "iconUrl": "https://moviebox.ph/favicon.ico",
     "apiVersion": 1,
-    "fileHash": "sha256-beb00eaa7ba8ca810e6f2388d9bb6322405ca4857797a724dd4db4013ce72936"
+    "fileHash": "sha256-80a2329b6224aebafae628b1fca257277c52d5795c87ae38a842aec536eb3998"
   },
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/NgeFilm.cs3",
