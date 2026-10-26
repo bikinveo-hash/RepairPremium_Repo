@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       full_check:
-        description: Run full playback regression tests
+        description: Run full Moviebox regression tests
         type: boolean
         default: false
       rebuild_all:
@@ -57,7 +57,6 @@ jobs:
         if: ${{ inputs.full_check == true }}
         working-directory: src
         run: |
-          python3 AdiDrakor/tests/run_regression.py
           python3 Moviebox/tests/verify_migration.py
           python3 Moviebox/tests/run_regression.py
           python3 -m unittest discover -s Moviebox/tests/diagnostics -p 'test_*.py'
