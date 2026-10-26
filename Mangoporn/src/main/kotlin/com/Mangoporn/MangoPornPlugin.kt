@@ -8,6 +8,6 @@ import android.content.Context
 class MangoPornPlugin : Plugin() {
     override fun load(context: Context) {
         // Mendaftarkan class provider utama kita
-        registerMainAPI(MangoPorn(context.applicationContext))
+        registerMainAPI(MangoPorn())
     }
 }
