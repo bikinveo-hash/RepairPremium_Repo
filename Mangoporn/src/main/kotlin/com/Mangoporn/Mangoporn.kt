@@ -7,6 +7,7 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 import android.util.Log
 import org.json.JSONArray
 import kotlinx.coroutines.*
@@ -28,7 +29,7 @@ class MangoPorn : MainAPI() {
     )
 
     // ==============================
-    // 1. MAIN PAGE CONFIGURATION (UPDATED)
+    // 1. MAIN PAGE CONFIGURATION
     // ==============================
     override val mainPage = mainPageOf(
         // Kategori Utama
@@ -56,37 +57,86 @@ class MangoPorn : MainAPI() {
         "$mainUrl/movies/genre/facials/" to "Facials"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val url = if (page == 1) {
-            request.data
-        } else {
-            val uri = URI(request.data)
-            val base = request.data.substringBefore('?').substringBefore('#').trimEnd('/')
-            "$base/page/$page/" + (uri.rawQuery?.let { "?$it" } ?: "")
-        }
+    // Preserve a working archive path for pagination and learn exact links from the site.
+    private val resolvedCategories = ConcurrentHashMap<String, String>()
+    private val discoveredGenres = ConcurrentHashMap<String, String>()
+    private val genrePath = Regex("""^/(?:movies/genre|genre|genres)/([^/]+)/?$""")
+    private val listingSelector = "article.card, article.item, div.result-item"
 
-        val document = try {
-            getDocument(url)
-        } catch (error: ErrorLoadingException) {
-            // Keep unavailable source categories in the configuration, but isolate
-            // their 404 from the other rows. Never invent a replacement category.
-            if (error.message?.startsWith("MangoPorn: HTTP 404 (") == true) {
-                Log.w("MangoPorn", "Category unavailable: ${request.name}; ${error.message}")
-                return null
+    private fun categoryCandidates(data: String): List<String> {
+        val uri = URI(data)
+        val slug = genrePath.matchEntire(uri.path.orEmpty())?.groupValues?.get(1)
+        return buildList {
+            resolvedCategories[data]?.let { add(it) }
+            if (slug != null) discoveredGenres[slug]?.let { add(it) }
+            add(data)
+            // Only retry the same slug. Never substitute the homepage or another genre.
+            if (slug != null) {
+                val origin = "${uri.scheme}://${uri.rawAuthority}"
+                val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+                listOf("movies/genre", "genre", "genres").forEach { prefix ->
+                    add("$origin/$prefix/$slug/$query")
+                }
             }
-            throw error
-        }
-        
-        val items = document.select("article.card, article.item").mapNotNull {
-            toSearchResult(it)
-        }
+        }.distinct()
+    }
 
-        val hasNext = if (document.selectFirst("nav.pg") != null) {
-            document.selectFirst("nav.pg a.next.page-numbers") != null
-        } else {
-            items.isNotEmpty()
+    private fun pageUrl(data: String, page: Int): String {
+        val uri = URI(data)
+        val path = uri.rawPath.orEmpty().replace(Regex("""/page/\d+/?$"""), "")
+            .trimEnd('/')
+        val pagePath = if (page <= 1) "$path/" else "$path/page/$page/"
+        return "${uri.scheme}://${uri.rawAuthority}$pagePath" +
+            (uri.rawQuery?.let { "?$it" } ?: "")
+    }
+
+    private fun listingItems(document: Document): List<SearchResponse> {
+        return document.select(listingSelector).mapNotNull { toSearchResult(it) }
+            .distinctBy { it.url }
+    }
+
+    private fun hasNextPage(document: Document, page: Int, hasItems: Boolean): Boolean {
+        if (!hasItems) return false
+        if (document.selectFirst(
+                "a[rel=next], link[rel=next], a.next.page-numbers, " +
+                    "nav.pg a.next, .pagination a.next, .nav-links a.next"
+            ) != null) return true
+        val navigation = document.select("nav.pg, .pagination, .nav-links")
+        if (navigation.isEmpty()) return true
+        return navigation.select("a[href]").any { link ->
+            val path = runCatching { URI(link.absUrl("href")).path }.getOrNull().orEmpty()
+            val number = Regex("""/page/(\d+)(?:/|$)""").find(path)
+                ?.groupValues?.get(1)?.toIntOrNull()
+            number != null && number > page
         }
-        return newHomePageResponse(request.name, items, hasNext = hasNext)
+    }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        for (candidate in categoryCandidates(request.data)) {
+            val document = try {
+                getDocument(pageUrl(candidate, page))
+            } catch (error: ErrorLoadingException) {
+                if (error.message?.startsWith("MangoPorn: HTTP 404 (") == true) {
+                    continue
+                }
+                throw error
+            }
+            val requestedSlug = genrePath.matchEntire(URI(candidate).path.orEmpty())
+                ?.groupValues?.get(1)
+            val actualPath = URI(document.baseUri()).path.orEmpty()
+                .replace(Regex("""/page/\d+/?$"""), "")
+            val actualSlug = genrePath.matchEntire(actualPath)?.groupValues?.get(1)
+            if (requestedSlug != null && requestedSlug != actualSlug) continue
+            val items = listingItems(document)
+            if (items.isEmpty()) continue
+            resolvedCategories[request.data] = candidate
+            return newHomePageResponse(
+                request.name, items, hasNext = hasNextPage(document, page, true)
+            )
+        }
+        Log.w("MangoPorn", "No listing available for category: ${request.name}, page: $page")
+        // A missing archive must not abort loading the other homepage rows.
+        return newHomePageResponse(request.name, emptyList(), hasNext = false)
     }
 
     private suspend fun getDocument(url: String): Document {
@@ -102,6 +152,15 @@ class MangoPorn : MainAPI() {
             document.selectFirst("h1")?.text()?.trim().equals("Site Unavailable", ignoreCase = true)
         ) {
             throw ErrorLoadingException("MangoPorn: source returned Site Unavailable")
+        }
+        document.select("a[href]").forEach { link ->
+            val target = httpUrl(link.attr("href"), document.baseUri()) ?: return@forEach
+            val targetUri = URI(target)
+            val sourceUri = URI(document.baseUri())
+            if (!targetUri.host.equals(sourceUri.host, ignoreCase = true)) return@forEach
+            val slug = genrePath.matchEntire(targetUri.path.orEmpty())?.groupValues?.get(1)
+                ?: return@forEach
+            if (targetUri.rawQuery == null) discoveredGenres[slug] = target
         }
         return document
     }
@@ -122,6 +181,8 @@ class MangoPorn : MainAPI() {
         image ?: return null
         val base = image.baseUri().ifBlank { mainUrl }
         return httpUrl(image.attr("data-wpfc-original-src"), base)
+            ?: httpUrl(image.attr("data-src"), base)
+            ?: httpUrl(image.attr("data-lazy-src"), base)
             ?: httpUrl(image.attr("src"), base)
     }
 
@@ -129,12 +190,15 @@ class MangoPorn : MainAPI() {
         val titleElement = element.selectFirst(".card__t a")
             ?: element.selectFirst("h3 > a")
             ?: element.selectFirst("div.title > a")
+            ?: element.selectFirst("h2 > a, .entry-title a")
             ?: element.selectFirst("a.card__th")
             ?: element.selectFirst("div.image > a")
             ?: return null
 
         val image = element.selectFirst("img.card__img") ?: element.selectFirst("img")
-        val title = titleElement.text().trim().ifBlank { image?.attr("alt")?.trim().orEmpty() }
+        val title = titleElement.text().trim()
+            .ifBlank { titleElement.attr("title").trim() }
+            .ifBlank { image?.attr("alt")?.trim().orEmpty() }
             .takeIf { it.isNotBlank() } ?: return null
         val url = httpUrl(titleElement.attr("href"), element.baseUri().ifBlank { mainUrl })
             ?: return null
@@ -153,9 +217,7 @@ class MangoPorn : MainAPI() {
         
         val document = getDocument(url)
         
-        return document.select("article.card, div.result-item, article.item").mapNotNull {
-            toSearchResult(it)
-        }
+        return listingItems(document)
     }
 
     // ==============================
