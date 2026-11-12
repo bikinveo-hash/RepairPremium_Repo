@@ -245,7 +245,7 @@ internal class IdlixSource(
                 val type =
                     when (MediaIdentity.text(row, "contentType", "type")) {
                         "movie" -> 1
-                        "series" -> 2
+                        "series", "tv_series" -> 2
                         else -> continue
                     }
                 if (type != r.type) continue
