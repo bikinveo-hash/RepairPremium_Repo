@@ -1269,7 +1269,7 @@ internal class Adicinemax21MovieboxEngine(
                                     { title, number -> search(title, number) },
                                 )
                             }
-                            rediscover!!(emptySet())
+                            rediscover(emptySet())
                         }
                         if (discovery == null) {
                             report("discovery", "SEARCH_TIMEOUT")

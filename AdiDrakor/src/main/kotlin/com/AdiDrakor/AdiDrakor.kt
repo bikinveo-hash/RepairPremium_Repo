@@ -252,9 +252,9 @@ open class AdiDrakor : TmdbProvider() {
                                                 runtimeMinutes = res.runtime,
                                                 castNames =
                                                     res.credits
-                                                        ?.cast
-                                                        ?.take(8)
-                                                        ?.mapNotNull { it.name ?: it.originalName }
+                                                        .cast
+                                                        .take(8)
+                                                        .mapNotNull { it.name ?: it.originalName }
                                                         .orEmpty(),
                                                 alternativeTitles =
                                                     (res.alternativeTitles?.results.orEmpty() +
@@ -326,9 +326,9 @@ open class AdiDrakor : TmdbProvider() {
                         runtimeMinutes = res.runtime,
                         castNames =
                             res.credits
-                                ?.cast
-                                ?.take(8)
-                                ?.mapNotNull { it.name ?: it.originalName }
+                                .cast
+                                .take(8)
+                                .mapNotNull { it.name ?: it.originalName }
                                 .orEmpty(),
                         alternativeTitles =
                             (res.alternativeTitles?.results.orEmpty() +
@@ -364,10 +364,12 @@ open class AdiDrakor : TmdbProvider() {
 
     private val movieboxEngine by lazy { AdiDrakorMovieboxEngine(name, apiKey) }
 
-    private val multiSource by lazy { com.AdiDrakor.MultiSource(apiKey) }
+    private val multiSource by lazy { com.AdiDrakor.MultiSource(apiKey, providerName = name) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.AdiDrakor.MultiSource.isAdditional(extractorLink))
+        if (extractorLink.source == name && extractorLink.name.startsWith("Idlix • "))
+            IdlixPlayback.interceptor(extractorLink.url)
+        else if (com.AdiDrakor.MultiSource.isAdditional(extractorLink))
             com.AdiDrakor.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 

@@ -263,9 +263,9 @@ open class AdiFilmSemi : TmdbProvider() {
                                                     runtimeMinutes = res.runtime,
                                                     castNames =
                                                         res.credits
-                                                            ?.cast
-                                                            ?.take(8)
-                                                            ?.mapNotNull {
+                                                            .cast
+                                                            .take(8)
+                                                            .mapNotNull {
                                                                 it.name ?: it.originalName
                                                             }
                                                             .orEmpty(),
@@ -343,9 +343,9 @@ open class AdiFilmSemi : TmdbProvider() {
                         runtimeMinutes = res.runtime,
                         castNames =
                             res.credits
-                                ?.cast
-                                ?.take(8)
-                                ?.mapNotNull { it.name ?: it.originalName }
+                                .cast
+                                .take(8)
+                                .mapNotNull { it.name ?: it.originalName }
                                 .orEmpty(),
                         alternativeTitles =
                             (res.alternativeTitles?.results.orEmpty() +
@@ -381,10 +381,12 @@ open class AdiFilmSemi : TmdbProvider() {
 
     private val movieboxEngine by lazy { AdiFilmSemiMovieboxEngine(name, apiKey) }
 
-    private val multiSource by lazy { com.michat88.MultiSource(apiKey) }
+    private val multiSource by lazy { com.michat88.MultiSource(apiKey, providerName = name) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.michat88.MultiSource.isAdditional(extractorLink))
+        if (extractorLink.source == name && extractorLink.name.startsWith("Idlix • "))
+            IdlixPlayback.interceptor(extractorLink.url)
+        else if (com.michat88.MultiSource.isAdditional(extractorLink))
             com.michat88.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 

@@ -289,10 +289,12 @@ open class AdiXtream : MainAPI() {
 
     private val movieboxEngine by lazy { AdiXtreamMovieboxEngine(name, tmdbApiKey) }
 
-    private val multiSource by lazy { com.adixtream.MultiSource(tmdbApiKey) }
+    private val multiSource by lazy { com.adixtream.MultiSource(tmdbApiKey, providerName = name) }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor =
-        if (com.adixtream.MultiSource.isAdditional(extractorLink))
+        if (extractorLink.source == name && extractorLink.name.startsWith("Idlix • "))
+            IdlixPlayback.interceptor(extractorLink.url)
+        else if (com.adixtream.MultiSource.isAdditional(extractorLink))
             com.adixtream.MultiSource.additionalInterceptor()
         else movieboxEngine.getVideoInterceptor(extractorLink)
 
