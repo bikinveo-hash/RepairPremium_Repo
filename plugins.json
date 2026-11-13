@@ -440,5 +440,24 @@
     "iconUrl": "https://static.xhpingcdn.com/xh-mobile/images/favicon/favicon-v2-512x512.png?v=1",
     "apiVersion": 1,
     "fileHash": "sha256-2d807a7654d5704fe56b246c7dbbc0f19301d41f2fcaff1bb5f8f4284db7b448"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/KuraKura21.cs3",
+    "status": 3,
+    "version": 11,
+    "name": "KuraKura21",
+    "internalName": "KuraKura21",
+    "authors": [
+      "trinityzanetamanu"
+    ],
+    "description": "KURAKURA21 - provider katalog dewasa (21+).",
+    "fileSize": 75735,
+    "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
+    "language": "id",
+    "tvTypes": [
+      "NSFW"
+    ],
+    "apiVersion": 1,
+    "fileHash": "sha256-28c5d75e2dd991bb1dcc0077b7152287a510b8eddbaaa2f24da176ea19e8049e"
   }
 ]
