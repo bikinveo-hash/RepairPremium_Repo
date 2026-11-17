@@ -142,10 +142,7 @@ def plan(folder, state_file, rebuild_all=False):
             cwd=ROOT,
         ).decode().strip("\0").split("\0")
         removed = {p.split("/")[0] for p in paths if p.endswith("/build.gradle.kts")} & (set(before) - modules)
-        if removed:
-            # Source removal must not delete an already published plugin or block other updates.
-            # prepare() preserves and verifies every package outside the selected modules.
-            print("Keeping published packages without source:", ", ".join(sorted(removed)))
+        assert not removed, "Published module removed; retain its source or remove its release explicitly"
         selected = changed_modules(modules, paths)
     else:
         selected = sorted(modules)
