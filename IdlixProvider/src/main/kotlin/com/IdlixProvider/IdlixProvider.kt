@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 
@@ -318,6 +319,15 @@ class IdlixProvider : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
+    ): Boolean = withTimeoutOrNull(90_000L) {
+        resolveLinks(data, isCasting, subtitleCallback, callback)
+    } ?: IdlixPlayback.reject("IDLIX_TIMEOUT", "playback_budget")
+
+    private suspend fun resolveLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         var stage = "input"
         var mediaCallbacks = 0
@@ -373,35 +383,63 @@ class IdlixProvider : MainAPI() {
             val playInfoHttp = app.get(targetPlayInfoUrl, headers = headers, allowRedirects = false, timeout = 15)
             IdlixPlayback.trace(stage, "http=${playInfoHttp.code}")
             if (playInfoHttp.code != 200) {
+                playInfoHttp.okhttpResponse.close()
                 return IdlixPlayback.reject(stage, "http_${playInfoHttp.code}")
             }
-            val playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoHttp.text)
+            val playInfoText = IdlixPlayback.readText(playInfoHttp) ?: return IdlixPlayback.reject(stage, "response_too_large")
+            val playInfoRes = AppUtils.parseJson<PlayInfoResponse>(playInfoText)
             // play-info sets the device/session cookie used to bind the gate and claim.
             // Carry the server-issued values locally, even if the app has no CookieJar.
-            val sessionCookies = playInfoHttp.cookies
-            val gateToken = playInfoRes.gateToken?.takeIf { it.isNotBlank() } ?: return IdlixPlayback.reject(stage, "missing_gate")
-            val finalWaitMs = IdlixPlayback.waitMillis(playInfoRes.serverNow, playInfoRes.unlockAt,
-                playInfoRes.preroll?.countdownSec) ?: return IdlixPlayback.reject(stage, "wait_outside_budget")
-            stage = "gate.wait"
-            IdlixPlayback.trace(stage, "waitMs=$finalWaitMs")
-            delay(finalWaitMs)
+            var sessionCookies = playInfoHttp.cookies
+            if (playInfoRes.verification != null) return IdlixPlayback.reject(stage, "verification_required")
+            val claimParsed = if (playInfoRes.kind == "pentos") {
+                AppUtils.parseJson<SessionClaimResponse>(playInfoText)
+            } else {
+                if (playInfoRes.kind != null && playInfoRes.kind != "gate") return IdlixPlayback.reject(stage, "unsupported_player")
+                val gateToken = playInfoRes.gateToken?.takeIf { it.isNotBlank() } ?: return IdlixPlayback.reject(stage, "missing_gate")
+                val finalWaitMs = IdlixPlayback.waitMillis(playInfoRes.serverNow, playInfoRes.unlockAt,
+                    playInfoRes.preroll?.countdownSec) ?: return IdlixPlayback.reject(stage, "wait_outside_budget")
+                stage = "gate.wait"
+                IdlixPlayback.trace(stage, "waitMs=$finalWaitMs")
+                delay(finalWaitMs)
 
-            // 4. Klaim token streaming
-            val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
-            val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
+                // 4. Klaim token streaming
+                val jsonMediaType = RequestBodyTypes.JSON.toMediaTypeOrNull()
+                val requestBodyData = mapOf("gateToken" to gateToken).toJson().toRequestBody(jsonMediaType)
 
-            stage = "claim"
-            val claimHttp = app.post(
-                url = "$mainUrl/api/watch/session/claim",
-                headers = headers,
-                cookies = sessionCookies,
-                requestBody = requestBodyData,
-                allowRedirects = false,
-                timeout = 15
-            )
-            IdlixPlayback.trace(stage, "http=${claimHttp.code}")
-            if (claimHttp.code != 200) return IdlixPlayback.reject(stage, "http_${claimHttp.code}")
-            val claimParsed = AppUtils.parseJson<SessionClaimResponse>(claimHttp.text)
+                stage = "claim"
+                var ready: SessionClaimResponse? = null
+                // The served player permits a pending gate response. Never replay a redeemed claim.
+                for (attempt in 0 until 3) {
+                    val claimHttp = app.post(
+                        url = "$mainUrl/api/watch/session/claim",
+                        headers = headers,
+                        cookies = sessionCookies,
+                        requestBody = requestBodyData,
+                        allowRedirects = false,
+                        timeout = 15
+                    )
+                    IdlixPlayback.trace(stage, "http=${claimHttp.code}")
+                    if (claimHttp.code != 200) {
+                        claimHttp.okhttpResponse.close()
+                        return IdlixPlayback.reject(stage, "http_${claimHttp.code}")
+                    }
+                    sessionCookies = sessionCookies + claimHttp.cookies
+                    val claimText = IdlixPlayback.readText(claimHttp) ?: return IdlixPlayback.reject(stage, "response_too_large")
+                    val pending = AppUtils.parseJson<PlayInfoResponse>(claimText)
+                    if (pending.verification != null) return IdlixPlayback.reject(stage, "verification_required")
+                    val candidate = AppUtils.parseJson<SessionClaimResponse>(claimText)
+                    if (candidate.kind == "pentos" || (candidate.kind == null && !candidate.claim.isNullOrBlank())) {
+                        ready = candidate
+                        break
+                    }
+                    if (pending.kind != "gate" || attempt == 2) return IdlixPlayback.reject(stage, "session_not_ready")
+                    val wait = IdlixPlayback.waitMillis(pending.serverNow, pending.unlockAt, 0L)
+                        ?: return IdlixPlayback.reject(stage, "wait_outside_budget")
+                    delay(wait)
+                }
+                ready ?: return IdlixPlayback.reject(stage, "session_not_ready")
+            }
             if (claimParsed.videoId.isNullOrBlank()) return IdlixPlayback.reject(stage, "missing_video_id")
             IdlixPlayback.trace("claim.identity", "videoId=${claimParsed.videoId} durationSec=${claimParsed.durationSec}")
             stage = "redeem_or_manifest"
@@ -410,7 +448,7 @@ class IdlixProvider : MainAPI() {
                 mediaCallbacks++
                 IdlixPlayback.trace("callback.media", "count=$mediaCallbacks source=${link.source} type=${link.type}")
             },
-                sessionCookies + claimHttp.cookies, providerName = name)
+                sessionCookies, providerName = name, allowWebView = !isCasting)
         } catch (e: CancellationException) {
             IdlixPlayback.trace("loadLinks.cancelled", "stage=$stage callbacks=$mediaCallbacks")
             throw e
@@ -539,6 +577,8 @@ data class Cast(
 )
 
 data class PlayInfoResponse(
+    @JsonProperty("kind") val kind: String? = null,
+    @JsonProperty("verification") val verification: Any? = null,
     @JsonProperty("gateToken") val gateToken: String? = null,
     @JsonProperty("serverNow") val serverNow: Long? = null,
     @JsonProperty("unlockAt") val unlockAt: Long? = null,
@@ -550,6 +590,7 @@ data class PrerollData(
 )
 
 data class SessionClaimResponse(
+    @JsonProperty("kind") val kind: String? = null,
     @JsonProperty("claim") val claim: String? = null,
     @JsonProperty("redeemUrl") val redeemUrl: String? = null,
     @JsonProperty("videoId") val videoId: String? = null,

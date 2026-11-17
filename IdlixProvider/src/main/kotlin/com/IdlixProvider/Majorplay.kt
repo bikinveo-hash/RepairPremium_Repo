@@ -17,6 +17,21 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import android.annotation.SuppressLint
+import android.content.Context
+import android.net.http.SslError
+import android.webkit.SslErrorHandler
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class Majorplay : ExtractorApi() {
     override var name = "Majorplay"
@@ -30,6 +45,8 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val parsed = url.toHttpUrlOrNull() ?: return
+        if (!parsed.isHttps || parsed.port != 443 || parsed.username.isNotEmpty() || parsed.password.isNotEmpty() ||
+            !(parsed.host == "majorplay.net" || parsed.host.endsWith(".majorplay.net"))) return
         val claim = parsed.queryParameter("claim")?.takeIf { it.isNotBlank() } ?: return
         resolveClaim(SessionClaimResponse(claim = claim,
             redeemUrl = parsed.queryParameter("redeemUrl") ?: "/watch/session/redeem"),
@@ -42,7 +59,8 @@ class Majorplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
         sessionCookies: Map<String, String> = emptyMap(),
-        providerName: String = "Idlix"
+        providerName: String = "Idlix",
+        allowWebView: Boolean = true
     ): Boolean {
         val claimToken = session.claim?.takeIf { it.isNotBlank() } ?: return IdlixPlayback.reject("redeem", "missing_claim")
         val page = effectiveReferer.toHttpUrlOrNull() ?: return IdlixPlayback.reject("redeem", "invalid_referer")
@@ -60,8 +78,12 @@ class Majorplay : ExtractorApi() {
         val redeem = app.post(target, headers = safeHeaders, cookies = redeemCookies, requestBody = requestBodyData,
             allowRedirects = false, timeout = 15)
         IdlixPlayback.trace("redeem.response", "http=${redeem.code}")
-        if (redeem.code != 200) return IdlixPlayback.reject("redeem", "http_${redeem.code}")
-        val response = AppUtils.parseJson<NewMajorplayResponse>(redeem.text)
+        if (redeem.code != 200) {
+            redeem.okhttpResponse.close()
+            return IdlixPlayback.reject("redeem", "http_${redeem.code}")
+        }
+        val responseText = IdlixPlayback.readText(redeem) ?: return IdlixPlayback.reject("redeem", "response_too_large")
+        val response = AppUtils.parseJson<NewMajorplayResponse>(responseText)
         if (response.code != "ok" || response.mode != "browser") return IdlixPlayback.reject("redeem", "invalid_response_contract")
         val master = response.url?.toHttpUrlOrNull() ?: return IdlixPlayback.reject("master", "invalid_url")
         val videoId = IdlixPlayback.videoId(master) ?: return IdlixPlayback.reject("master", "invalid_host_or_path_layout")
@@ -75,19 +97,19 @@ class Majorplay : ExtractorApi() {
         if (expiresAt <= serverTime / 1000L + 30L || expiresAt > serverTime / 1000L + 86_400L) return IdlixPlayback.reject("master", "expiry_outside_window")
         IdlixPlayback.trace("master.identity", "videoId=$videoId layout=${if (master.pathSegments[1] == videoId) "legacy" else "sharded"} durationSec=${session.durationSec}")
 
-        val masterConfigUrl = IdlixPlayback.authorize(master, master).toString()
-        val manifest = app.get(masterConfigUrl, headers = safeHeaders, allowRedirects = false, timeout = 15)
-        IdlixPlayback.trace("master.response", "http=${manifest.code}")
-        if (manifest.code != 200) return IdlixPlayback.reject("master", "http_${manifest.code}")
-        val manifestText = manifest.text.trimStart('\uFEFF', ' ', '\r', '\n')
-        if (manifestText.length > 262_144 || !manifestText.startsWith("#EXTM3U") ||
-            !(manifestText.contains("#EXT-X-STREAM-INF:") || manifestText.contains("#EXTINF:"))) return IdlixPlayback.reject("master", "not_hls")
-        IdlixPlayback.trace("master.valid", "videoId=$videoId hls=true bytes=${manifestText.length}")
+        val authorized = IdlixPlayback.authorize(master, master)
+        // Only transport failures permit rendering. Access/identity/manifest rejection is terminal.
+        val direct = IdlixPlayback.validateMedia(authorized, videoId, safeHeaders)
+        val resolved = direct.url ?: if (allowWebView && direct.transientFailure) {
+            IdlixPlayback.browserMedia(page, videoId, safeHeaders, target.toHttpUrlOrNull())
+        } else null
+        if (resolved == null) return IdlixPlayback.reject("master", "no_valid_media")
+        val masterConfigUrl = resolved.toString()
 
-        response.subtitles?.forEach { sub ->
-            val subUrl = sub.path?.toHttpUrlOrNull()?.takeIf {
-                it.isHttps && it.port == 443 && it.username.isEmpty() && it.password.isEmpty() && IdlixPlayback.mediaHost(it.host)
-            }?.newBuilder()?.host(master.host)?.build()?.toString() ?: return@forEach
+        val seenSubtitles = hashSetOf<String>()
+        response.subtitles?.take(64)?.forEach { sub ->
+            val subUrl = IdlixPlayback.subtitleUrl(sub.path, resolved) ?: return@forEach
+            if (!seenSubtitles.add(subUrl)) return@forEach
             subtitleCallback.invoke(newSubtitleFile(sub.label ?: sub.lang ?: "Indo", subUrl))
         }
         // CS3IPlayer resolves getVideoInterceptor via APIHolder.getApiFromNameNull(link.source).
@@ -123,11 +145,13 @@ data class NewMajorSubtitle(
 
 /** Idlix's served browser player rewrites t/pm on every request for the selected video. */
 internal object IdlixPlayback {
-    const val BUILD_MARKER = "IDLIX_PLAYBACK_V3_PROVIDER_ROUTE"
+    const val BUILD_MARKER = "IDLIX_PLAYBACK_HTTP_BROWSER_V4"
     const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
+    // Application context only; never retain an Activity through the plugin lifecycle.
+    var applicationContext: Context? = null
 
     // Callers supply IDs, statuses and fixed reason codes, never credentials/full URLs.
-    fun trace(stage: String, detail: String) = Log.i("IdlixProvider", "[IDLIX-V3] $stage $detail")
+    fun trace(stage: String, detail: String) = Log.i("IdlixProvider", "[IDLIX] $stage $detail")
 
     fun reject(stage: String, reason: String): Boolean {
         trace("$stage.reject", "reason=$reason callbacks=0")
@@ -201,6 +225,191 @@ internal object IdlixPlayback {
         return maxOf(countdown * 1000L, remaining) + 1000L
     }
 
+    internal data class MediaResult(val url: HttpUrl? = null, val transientFailure: Boolean = false)
+
+    suspend fun readText(response: com.lagradost.nicehttp.NiceResponse): String? {
+        return try {
+            withContext(Dispatchers.IO) {
+                val bytes = response.okhttpResponse.peekBody(262_145L).bytes()
+                if (bytes.size > 262_144) null else bytes.toString(Charsets.UTF_8)
+            }
+        } finally {
+            response.okhttpResponse.close()
+        }
+    }
+
+    /** URL extensions are only hints; require an HLS body and content-scoped child references. */
+    fun validManifest(text: String, master: HttpUrl, expectedId: String): Boolean {
+        if (text.length > 262_144 || videoId(master) != expectedId) return false
+        val lines = text.trimStart('\uFEFF', ' ', '\r', '\n').lineSequence().map(String::trim).toList()
+        if (lines.firstOrNull() != "#EXTM3U") return false
+        if (lines.none { it.startsWith("#EXT-X-STREAM-INF:") || it.startsWith("#EXTINF:") }) return false
+        // SAMPLE-AES/KEYFORMAT mark protected streams, unsupported by this clear-HLS resolver.
+        if (lines.any { (it.startsWith("#EXT-X-KEY:") || it.startsWith("#EXT-X-SESSION-KEY:")) &&
+                (Regex("""(?:[:,])METHOD=([^,]+)""").find(it)?.groupValues?.get(1) !in setOf("AES-128", "NONE") ||
+                    it.contains("KEYFORMAT=")) }) return false
+        var mediaReferences = 0
+        for (line in lines) {
+            val values = if (line.startsWith('#')) {
+                Regex("""(?:^|[:,])URI="([^"]+)""", RegexOption.IGNORE_CASE)
+                    .findAll(line).map { it.groupValues[1] }.toList()
+            } else if (line.isNotEmpty()) listOf(line) else emptyList()
+            for (value in values) {
+                val child = master.resolve(value) ?: return false
+                if (videoId(child) != expectedId) return false
+                if (!line.startsWith('#')) mediaReferences++
+            }
+        }
+        return mediaReferences > 0
+    }
+
+    suspend fun validateMedia(candidate: HttpUrl, expectedId: String, headers: Map<String, String>): MediaResult {
+        if (videoId(candidate) != expectedId || candidate.queryParameter("t").isNullOrBlank()) return MediaResult()
+        return try {
+            withTimeoutOrNull(12_000L) {
+                var target = candidate
+                val visited = hashSetOf<String>()
+                repeat(4) {
+                    if (!visited.add(target.toString())) return@withTimeoutOrNull MediaResult()
+                    val response = app.get(target.toString(), headers = headers, allowRedirects = false, timeout = 8)
+                    try {
+                        if (response.code in setOf(301, 302, 303, 307, 308)) {
+                            val next = response.headers["Location"]?.let(target::resolve)
+                                ?: return@withTimeoutOrNull MediaResult()
+                            if (videoId(next) != expectedId) return@withTimeoutOrNull MediaResult()
+                            target = authorize(next, candidate)
+                        } else {
+                            if (response.code != 200) return@withTimeoutOrNull MediaResult(
+                                transientFailure = response.code in setOf(408, 500, 502, 503, 504))
+                            val mime = response.headers["Content-Type"].orEmpty().substringBefore(';').trim().lowercase()
+                            val size = response.headers["Content-Length"]?.toLongOrNull()
+                            if (size != null && size > 262_144) return@withTimeoutOrNull MediaResult()
+                            if (mime.isNotEmpty() && mime !in setOf("application/vnd.apple.mpegurl", "application/x-mpegurl",
+                                    "audio/mpegurl", "audio/x-mpegurl", "application/octet-stream", "text/plain")) return@withTimeoutOrNull MediaResult()
+                            val text = readText(response) ?: return@withTimeoutOrNull MediaResult()
+                            if (!validManifest(text, target, expectedId)) {
+                                trace("IDLIX_MEDIA_REJECTED", "reason=manifest_contract")
+                                return@withTimeoutOrNull MediaResult()
+                            }
+                            trace("IDLIX_MEDIA_VALIDATED", "type=HLS")
+                            return@withTimeoutOrNull MediaResult(target)
+                        }
+                    } finally {
+                        response.okhttpResponse.close()
+                    }
+                }
+                MediaResult()
+            } ?: MediaResult(transientFailure = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: java.io.IOException) {
+            MediaResult(transientFailure = true)
+        }
+    }
+
+    fun subtitleUrl(value: String?, master: HttpUrl): String? {
+        if (value.isNullOrBlank() || value.length > 4096) return null
+        val url = master.resolve(value)?.takeIf { secure(it) && mediaHost(it.host) } ?: return null
+        val id = videoId(url)
+        if (id != null && id != videoId(master)) return null
+        if (url.pathSegments.lastOrNull()?.substringAfterLast('.')?.lowercase() in
+            setOf("html", "js", "m3u8", "mp4", "mpd", "png", "jpg", "jpeg", "webp")) return null
+        return url.newBuilder().host(master.host).build().toString()
+    }
+
+    private val browserSlot = Semaphore(1)
+
+    /** Own the WebView lifecycle: SDK resolver lacks cancellation cleanup and logs signed URLs.
+     * The site's movie component explicitly supports ?play=1. Series overview pages are excluded.
+     * No injected JS, CAPTCHA solving, cookie export, or speculative player endpoints.
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    suspend fun browserMedia(page: HttpUrl, expectedId: String, headers: Map<String, String>, redeem: HttpUrl?): HttpUrl? {
+        val path = page.pathSegments
+        if (!secure(page) || page.host != "z2.idlixku.com" || path.size != 2 || path[0] != "movie" ||
+            path[1].isBlank() || !browserSlot.tryAcquire()) return null
+        val requests = Channel<HttpUrl>(8)
+        var view: WebView? = null
+        try {
+            trace("IDLIX_WEBVIEW_START", "player=idlix_movie")
+            return withTimeoutOrNull(30_000L) {
+                withContext(Dispatchers.Main.immediate) {
+                    val context = applicationContext ?: return@withContext
+                    view = WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.blockNetworkImage = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.userAgentString = USER_AGENT
+                        webViewClient = object : WebViewClient() {
+                            private fun blocked() = WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(byteArrayOf()))
+
+                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                val url = request.url.toString().toHttpUrlOrNull()
+                                return url == null || !secure(url) || url.host != page.host || url.encodedPath != page.encodedPath
+                            }
+
+                            @Suppress("OVERRIDE_DEPRECATION")
+                            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                                val target = url.toHttpUrlOrNull()
+                                return target == null || !secure(target) || target.host != page.host || target.encodedPath != page.encodedPath
+                            }
+
+                            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                                val url = request.url.toString().toHttpUrlOrNull() ?: return blocked()
+                                if (!secure(url)) return blocked()
+                                if (videoId(url) == expectedId && url.encodedPath.endsWith(".m3u8", true) &&
+                                    !url.queryParameter("t").isNullOrBlank()) {
+                                    requests.trySend(authorize(url, url))
+                                    return blocked()
+                                }
+                                // Allow site code/API only. Media downloads and foreign ad/tracking hosts are blocked.
+                                return if (url.host == page.host ||
+                                    (redeem != null && url.host == redeem.host && url.encodedPath == redeem.encodedPath)) null else blocked()
+                            }
+
+                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                handler?.cancel()
+                                requests.close()
+                            }
+                        }
+                        loadUrl(page.newBuilder().setQueryParameter("play", "1").build().toString(),
+                            mapOf("Referer" to page.toString()))
+                    }
+                }
+                if (view == null) return@withTimeoutOrNull null
+                val seen = hashSetOf<String>()
+                for (candidate in requests) {
+                    if (!seen.add(candidate.toString())) continue
+                    validateMedia(candidate, expectedId, headers).url?.let {
+                        trace("IDLIX_WEBVIEW_SUCCESS", "type=HLS")
+                        return@withTimeoutOrNull it
+                    }
+                    if (seen.size >= 8) break
+                }
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            trace("IDLIX_WEBVIEW_FAILED", "exception=${e.javaClass.simpleName}")
+            return null
+        } finally {
+            requests.close()
+            try {
+                withContext(NonCancellable + Dispatchers.Main.immediate) {
+                    view?.apply { stopLoading(); webViewClient = WebViewClient(); destroy() }
+                    view = null
+                }
+            } finally {
+                browserSlot.release()
+                trace("IDLIX_CLEANUP", "player=webview")
+            }
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .followRedirects(false).followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
@@ -224,7 +433,7 @@ internal object IdlixPlayback {
                         contentType.contains("vtt", true) -> "subtitle"
                         else -> "media_or_child"
                     }
-                    trace("media.request", "kind=$kind host=${request.url.host} path=${request.url.encodedPath} scoped=${master != null && videoId(request.url) == videoId(master)} rewritten=${authorized != request.url} http=${response.code}")
+                    trace("media.request", "kind=$kind scoped=${master != null && videoId(request.url) == videoId(master)} rewritten=${authorized != request.url} http=${response.code}")
                 }
                 response
             } catch (e: java.io.IOException) {
