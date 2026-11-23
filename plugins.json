@@ -2,13 +2,13 @@
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Adicinemax21.cs3",
     "status": 1,
-    "version": 37,
+    "version": 38,
     "name": "Adicinemax21",
     "internalName": "Adicinemax21",
     "authors": [
       "aldry84"
     ],
-    "fileSize": 327842,
+    "fileSize": 354316,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
     "tvTypes": [
@@ -18,18 +18,18 @@
     ],
     "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
     "apiVersion": 1,
-    "fileHash": "sha256-a1b2cf2f5fc61e17ce0c8430b512468887a2d833dca21b01624fb49de16f1e4f"
+    "fileHash": "sha256-9821e474761e1e58524b0aefe983714ab409fe5a10d8a9edd055e0327cc62d55"
   },
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiDrakor.cs3",
     "status": 1,
-    "version": 32,
+    "version": 33,
     "name": "AdiDrakor",
     "internalName": "AdiDrakor",
     "authors": [
       "aldry84"
     ],
-    "fileSize": 327018,
+    "fileSize": 353636,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
     "tvTypes": [
@@ -39,18 +39,18 @@
     ],
     "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
     "apiVersion": 1,
-    "fileHash": "sha256-51e0ea60726b23233814e34c32a74ba671b9e7e866a5e8109dfeba98a180ea78"
+    "fileHash": "sha256-9dedda95b13ea33f4e91e3e0c2edb20f5253ff82b5cc15b1a5b2727abc8e7bfc"
   },
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiFilmSemi.cs3",
     "status": 1,
-    "version": 30,
+    "version": 31,
     "name": "AdiFilmSemi",
     "internalName": "AdiFilmSemi",
     "authors": [
       "aldry84"
     ],
-    "fileSize": 326939,
+    "fileSize": 353517,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
     "tvTypes": [
@@ -60,18 +60,18 @@
     ],
     "iconUrl": "https://klikxxi.me/wp-content/uploads/2024/02/cropped-site-icon.png",
     "apiVersion": 1,
-    "fileHash": "sha256-c541bfc752bfca56c1d349a322fe6f2f370660dd4dcc5df25356da181003b830"
+    "fileHash": "sha256-a5f57e588e762a571b3fff5661e06f5a8ede52af036d1ed7848ab2ffe461b1d7"
   },
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/AdiXtream.cs3",
     "status": 1,
-    "version": 36,
+    "version": 37,
     "name": "AdiXtream",
     "internalName": "AdiXtream",
     "authors": [
       "aldry84"
     ],
-    "fileSize": 313474,
+    "fileSize": 340224,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
     "tvTypes": [
@@ -81,7 +81,7 @@
     ],
     "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/aa97004f4d1d74ed69245e56da2c6ad3293b6106/Icons/Adi.png",
     "apiVersion": 1,
-    "fileHash": "sha256-cdb76767101ffd5e16167e02ec4768feb7fa445d1e008483a39e4a179f291d94"
+    "fileHash": "sha256-ba35e38a744db4dac79d9238160d5b87be66bb5e7cf9582008e5c862a67673d7"
   },
   {
     "url": "https://raw.githubusercontent.com/bikinveo-hash/RepairPremium_Repo/builds/Eporner.cs3",
@@ -346,7 +346,7 @@
     "authors": [
       "Aldry84"
     ],
-    "description": "OppaDrama \u2014 Streaming Drama Korea, Movie and TV Series",
+    "description": "OppaDrama — Streaming Drama Korea, Movie and TV Series",
     "fileSize": 92241,
     "repositoryUrl": "https://github.com/bikinveo-hash/RepairPremium_Repo",
     "language": "id",
