@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class AdiDrakorPlugin : Plugin() {
     override fun beforeUnload() {
-        com.AdiDrakor.LocalProxy.stop()
+        LocalProxy.stop()
     }
 
     override fun load(context: Context) {

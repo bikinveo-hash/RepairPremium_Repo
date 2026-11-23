@@ -1,66 +1,140 @@
 name: Build
 
+concurrency:
+  group: "build"
+  cancel-in-progress: true
+
 on:
   push:
-    branches: [master, main]
-    paths-ignore: ['**/*.md']
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
   workflow_dispatch:
-    inputs:
-      rebuild_all:
-        description: Rebuild all plugins instead of changed plugins
-        type: boolean
-        default: false
-
-concurrency:
-  group: build
-  cancel-in-progress: true
 
 permissions:
   contents: write
+
+env:
+  REPO_NAME: "Freemium_Repo"
+  REPO_DESC: "Repository Plugin Michat88"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           path: src
-          fetch-depth: 0
 
-      - name: Checkout published plugins
-        uses: actions/checkout@v7.0.1
-        with:
-          ref: builds
-          path: builds
-
-      - name: Set up Java
-        uses: actions/setup-java@v6.2.0
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.4.1
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: false
 
-      - name: Build changed plugins
+      - name: Build Plugins
         working-directory: src
-        env:
-          REBUILD_ALL: ${{ inputs.rebuild_all || false }}
-        run: python3 .github/distribution.py build "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
-
-      - name: Check and stage packages
-        working-directory: src
-        run: python3 .github/distribution.py prepare "$GITHUB_WORKSPACE/builds" "$RUNNER_TEMP/release.json"
-
-      - name: Publish plugins
-        working-directory: builds
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
+          touch local.properties
+          chmod +x gradlew
+          ./gradlew makePluginsJson
+
+      - name: Checkout builds branch
+        uses: actions/checkout@v7
+        with:
+          ref: builds
+          path: builds
+
+      - name: Sync plugin artifacts and catalog
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from shutil import copyfile
+
+          source = Path("src")
+          destination = Path("builds")
+          catalog = source / "build" / "plugins.json"
+          plugins = json.loads(catalog.read_text(encoding="utf-8"))
+
+          published_catalog = destination / "plugins.json"
+          published = {
+              entry["internalName"]: entry
+              for entry in json.loads(published_catalog.read_text(encoding="utf-8"))
+          } if published_catalog.is_file() else {}
+          active_artifacts = set()
+
+          for index, plugin in enumerate(plugins):
+              name = plugin["internalName"]
+              package = f"{name}.cs3"
+              jar = f"{name}.jar"
+              previous = published.get(name)
+
+              # Keep an existing release until the plugin version changes.
+              if (
+                  previous is not None
+                  and previous["version"] == plugin["version"]
+                  and (destination / package).is_file()
+                  and (not previous.get("jarUrl") or (destination / jar).is_file())
+              ):
+                  plugins[index] = previous
+              else:
+                  module_build = source / name / "build"
+                  copyfile(module_build / package, destination / package)
+                  if plugin.get("jarUrl"):
+                      copyfile(module_build / jar, destination / jar)
+
+              active_artifacts.add(package)
+              if plugins[index].get("jarUrl"):
+                  active_artifacts.add(jar)
+
+          for pattern in ("*.cs3", "*.jar"):
+              for artifact in destination.glob(pattern):
+                  if artifact.name not in active_artifacts:
+                      artifact.unlink()
+
+          published_catalog.write_text(json.dumps(plugins, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          print(f"Prepared {len(plugins)} plugins for publication")
+          PY
+
+      - name: Buat ulang repo.json kalau hilang
+        run: |
+          cd "$GITHUB_WORKSPACE/builds"
+          if [ -f "repo.json" ]; then
+            echo ">> repo.json sudah ada, tidak diubah."
+            exit 0
+          fi
+
+          echo ">> repo.json hilang, membuat ulang..."
+          cat > repo.json << EOF
+          {
+            "name": "$REPO_NAME",
+            "description": "$REPO_DESC",
+            "manifestVersion": 1,
+            "pluginLists": [
+              "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/builds/plugins.json"
+            ]
+          }
+          EOF
+          cat repo.json
+
+      - name: Push builds
+        run: |
+          cd "$GITHUB_WORKSPACE/builds"
+
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
           git add -A
+
           if git diff --cached --quiet; then
-            echo "No plugin updates."
+            echo ">> Tidak ada perubahan, skip push."
             exit 0
           fi
           git commit -m "Build $GITHUB_SHA"

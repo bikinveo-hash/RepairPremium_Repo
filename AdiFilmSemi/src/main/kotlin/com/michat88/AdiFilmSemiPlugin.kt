@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class AdiFilmSemiPlugin : Plugin() {
     override fun beforeUnload() {
-        com.michat88.LocalProxy.stop()
+        LocalProxy.stop()
     }
 
     override fun load(context: Context) {
